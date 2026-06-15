@@ -2,64 +2,150 @@
 
 一个**端到端的轻量级大语言模型训练-推理-对齐全栈框架**，基于 Andrej Karpathy 的 [nanoGPT](https://github.com/karpathy/nanoGPT) 思想构建，在 **~50M 参数** 规模下完整验证现代 Transformer 组件的架构增益与效率 trade-off。
 
+> :clipboard: 完整的系统改进清单见 [IMPROVEMENT_CHECKLIST.md](IMPROVEMENT_CHECKLIST.md)  
+> :bar_chart: 深度诊断与优化报告见 [IMPROVEMENT_REPORT.md](IMPROVEMENT_REPORT.md)  
+> :white_check_mark: 关键阻塞 Bug 已修复，新增回归测试 `tests/test_bugfixes.py`
+
 ---
 
-## 系统设计理念
+## 为什么做这个项目？
 
-本项目的设计哲学是 **"对照实验的可信度优先于演示性的炫技"**。每一处架构改造都配有严格的控制变量对比（Baseline vs Modern），每一处推理优化都有独立的消融测量（cache vs no-cache），每一个训练特性都有可配置开关。代码组织以模块化为原则——模型、训练、推理、数据、工具各自独立，通过统一的 Config 对象串接。
+### 动机
 
-### 三大核心阶段
+当前大模型研究被封锁在“黑盒 API + 闭源权重”的范式中，研究者很难回答一个基础问题：
+
+> **每一个现代 Transformer 组件（RMSNorm、SwiGLU、RoPE、GQA、KV Cache…）到底带来了多少真实收益？**
+
+nanoGPT-Modern 的设计目标是在**可完整复现的轻量级规模**（~50M 参数）下，构建一条从预训练、SFT 到 RL 对齐的完整流水线，并对现代架构进行**受控对比实验**：
+
+- **单一变量原则**：BaselineGPT 与 ModernGPT 共享相同的数据顺序、随机种子、训练超参，确保对比结果仅反映架构差异。
+- **全栈可观测**：训练 loss、推理吞吐、KV Cache 显存、对齐准确率等指标可在同一套代码中横向对比。
+- **可复现基座**：固定种子、CUDA Events 精确计时、完整 checkpoint 状态保存、回归测试覆盖核心路径。
+
+### 核心创新点
+
+1. **双轨制架构对比**：在同一仓库中实现 GPT-2 经典架构与 LLaMA/Gemma 风格现代架构，可直接切换、公平对比。
+2. **现代组件全集成**：RMSNorm、SwiGLU、RoPE、GQA、KV Cache、MoE（实验性）、EMA 全部可配置。
+3. **三阶段对齐流水线**：预训练 → 监督微调（SFT）→ GRPO 强化学习对齐，覆盖大模型后训练完整链路。
+4. **工程化训练设施**：AMP、GradScaler、梯度累积、多模式 LR Scheduler、Early Stopping、DDP/FSDP、完整 checkpoint 状态恢复。
+5. **严谨的性能测量**：CUDA Events 分离 prefill/decode 阶段，cache/no-cache 双路径消融，KV Cache 显存精确量化。
+
+---
+
+## 快速开始 (Quick Start)
+
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
+
+# 2. 准备数据（流式处理，不写 Python list 到内存）
+python data/prepare.py --split train
+python data/prepare.py --split val
+python data/validate.py data/openwebtext/train.bin
+
+# 3. 快速验证预训练 (1000步, ~5分钟)
+python training/train_pretrain.py --config config/pretrain.yaml --max_iters 1000 --n_kv_head 2
+
+# 4. 推理
+python inference/generate.py --config config/generate.yaml --checkpoint out/pretrain/best_ckpt.pt --max_new_tokens 200
+
+# 5. 完整三阶段流水线（YAML 配置 + 命令行覆盖）
+python training/train_pretrain.py --config config/pretrain.yaml --use_ema
+python training/train_sft.py --config config/sft.yaml --init_from out/pretrain/best_ckpt.pt
+python training/train_grpo.py --config config/grpo.yaml --init_from out/sft/best_sft-only.pt --ref_from out/sft/best_sft-only.pt
+python evaluation/eval_alignment.py --checkpoint out/grpo/best_ckpt.pt --ref_checkpoint out/sft/best_sft-only.pt
+
+# 6. 运行回归测试
+python tests/test_bugfixes.py
+```
+
+---
+
+## 系统全景：各组件职能与协作关系
+
+本项目围绕 "预训练 → 监督微调 → RL 对齐" 三阶段流水线组织，每层由独立模块构成，通过配置对象串接。
+
+### 1. 数据管道层 --- 生产训练数据
+
+| 模块                  | 职能                                                         |
+| --------------------- | ------------------------------------------------------------ |
+| `data/prepare.py`     | 流式下载 OpenWebText → 批量 BPE tokenize → 写入固定大小 binary shards + 全局 `.bin` + `.idx` 元数据 |
+| `data/openwebtext.py` | `MemmapDataset` 从二进制文件流式读取；`DocBoundaryDataset` 按文档边界切分，支持断点续训 offset |
+| `data/arithmetic.py`  | 合成算术数据集生成器：`easy` (单步四则)、`medium` (2-3步混合+括号)、`hard` (5种多样化模板) |
+| `data/validate.py`    | 数据质检：token 范围检查、词表覆盖率、EOT 频率统计、随机 decode 采样 |
+
+### 2. 模型层 --- 双轨制架构对比
+
+| 模块                      | 职能                                                         |
+| ------------------------- | ------------------------------------------------------------ |
+| `model/baseline_gpt.py`   | GPT-2 经典架构：LayerNorm + GELU FFN + 绝对位置编码。支持 SDPA/manual 双后端切换、Pre/Post-Norm |
+| `model/modern_gpt.py`     | ModernGPT：RMSNorm + SwiGLU + RoPE + GQA + MoE(可选) + EMA。支持 KV Cache 原生推理 |
+| `model/kv_cache_utils.py` | `KVCacheManager`：管理逐层 past KV 张量，支持滑动窗口截断、批量重置、GQA 适配 |
+
+**两模型的关系**：共享相同的训练超参、数据顺序、随机种子，确保对比实验中 **唯一变量是架构差异**。
+
+### 3. 训练系统层 --- 三阶段流水线
+
+| 模块                         | 职能                         | 核心特性                                                     |
+| ---------------------------- | ---------------------------- | ------------------------------------------------------------ |
+| `training/train_pretrain.py` | 语言建模预训练 (OpenWebText) | AMP + GradScaler + 梯度累积 + LR Scheduler (cosine/linear/wsd/constant) + EMA + EarlyStopping + DDP/FSDP + 完整训练状态 checkpoint |
+| `training/train_sft.py`      | 监督微调 (算术数据)          | LR Scheduler + 数据混叠 (easy+medium+hard)                   |
+| `training/train_grpo.py`     | GRPO 对齐 (算术任务)         | PPO Clip + KL Penalty + Old/New Policy 分离 + Dropout Guard  |
+| `training/iterative_grpo.py` | 迭代 RLHF                    | 周期性更新参考模型 + Rejection Sampling SFT                  |
+
+**三阶段关系**：预训练 → SFT → GRPO 是串行依赖链。预训练产出基座模型，SFT 在算术数据上注入任务格式，GRPO 通过规则奖励进一步优化正确率。
+
+### 4. 推理系统层 --- 生成与性能测量
+
+| 模块                    | 职能                                                         |
+| ----------------------- | ------------------------------------------------------------ |
+| `inference/generate.py` | CUDA Events 精确计时 + prefill/decode 阶段分离 + cache/no-cache 消融对比 |
+
+**推理管线**：`ModernGPT.generate()` 支持两种路径：
+
+- **No-cache 路径**：每次生成一个 token 都完整 forward 全序列 (O(T^2) 复杂度)
+- **Cache 路径**：prefill 阶段一次编码全 prompt → decode 阶段逐 token forward 仅新 token，复用 cached KV (O(T) 复杂度)
+
+### 5. 评估与奖励系统层
+
+| 模块                           | 职能                                                         |
+| ------------------------------ | ------------------------------------------------------------ |
+| `evaluation/eval_alignment.py` | 全维度评估：accuracy / format_pass_rate / invalid_rate / reward / KL_divergence |
+| `rewards/rule_reward.py`       | 规则奖励函数：格式分 (是否包含 `<answer>...</answer>` + 数值) + 正确性分 (数值误差 < 1e-4) |
+
+### 6. 工具与基础设施层
+
+| 模块                    | 职能                                                         |
+| ----------------------- | ------------------------------------------------------------ |
+| `config/`               | YAML 配置文件 (pretrain.yaml, sft.yaml, grpo.yaml, generate.yaml)，统一管理超参 |
+| `utils/lr_scheduler.py` | 统一 LR Scheduler：cosine / linear / wsd / constant 四种模式 |
+| `utils/logging.py`      | 日志系统：wandb + TensorBoard + console 三后端，支持 auto-degrade fallback |
+| `utils/checkpoint.py`   | Checkpoint 持久化：模型 + 优化器 + iter + config + RNG + scaler + scheduler + EMA + resume_offset，支持 FSDP Full State Dict |
+
+### 数据流全景图
 
 ```
-预训练（架构改造）        推理加速               RL 对齐
-─────────────────      ────────────          ─────────
-BaselineGPT   ModernGPT   No-Cache  KV Cache    SFT-only   GRPO-G4
-   │             │           │         │           │          │
-   └──loss对比──┘           └─吞吐消融─┘           └──acc对比──┘
-```
-
-### 系统架构图
-
-```mermaid
-graph TB
-    subgraph 数据管道
-        OWT["OpenWebText<br/>~1.13B tokens"]
-        ARITH["算术数据集<br/>easy/medium/hard"]
-    end
-
-    subgraph 模型层
-        BASE["BaselineGPT<br/>LayerNorm+GELU+AbsPos"]
-        MODERN["ModernGPT<br/>RMSNorm+SwiGLU+RoPE+GQA+MoE"]
-    end
-
-    subgraph 训练系统
-        PT["train_pretrain.py<br/>AdamW+AMP+GradScaler<br/>梯度累积+LR Scheduler+EMA+EarlyStop"]
-        SFT["train_sft.py<br/>监督微调+LR Scheduler"]
-        GRPO["train_grpo.py<br/>PPO Clip+KL Penalty+Old/New Policy"]
-    end
-
-    subgraph 推理系统
-        GEN["generate.py<br/>CUDA Events+prefill/decode分离"]
-        KVCACHE["KV Cache<br/>RoPE绝对位置追踪+滑动窗口+KVCacheManager"]
-    end
-
-    subgraph 评估系统
-        EVAL["eval_alignment.py<br/>accuracy/reward/format/KL"]
-        BENCH["benchmark 输出<br/>prefill_ms+decode_tok/s+peak_mem"]
-    end
-
-    OWT --> PT
-    ARITH --> SFT
-    ARITH --> GRPO
-    BASE --> PT
-    MODERN --> PT
-    SFT --> MODERN
-    GRPO --> MODERN
-    MODERN --> GEN
-    GEN --> KVCACHE
-    GEN --> BENCH
-    SFT --> EVAL
-    GRPO --> EVAL
+OpenWebText (~1.13B tokens)
+    |
+    v
+prepare.py ---> train.bin / val.bin
+    |
+    v
+train_pretrain.py (BaselineGPT / ModernGPT) ---> 基座模型 checkpoints
+    |
+    |  算术数据集 (easy/medium/hard)
+    |      |
+    |      v
+    |  train_sft.py ---> SFT checkpoints
+    |      |
+    |      v
+    |  train_grpo.py ---> GRPO aligned checkpoints
+    |      |
+    |      v
+    |  eval_alignment.py ---> 评估报告
+    |
+    v
+generate.py ---> 推理消融 (cache vs no-cache)
 ```
 
 ---
@@ -68,323 +154,163 @@ graph TB
 
 ### 双轨制对比
 
-项目同时提供两个模型，共享相同的训练超参、数据顺序、随机种子，确保对比的单一变量原则：
+| 维度          | BaselineGPT                      | ModernGPT                            |
+| ------------- | -------------------------------- | ------------------------------------ |
+| 归一化        | LayerNorm (含 bias)              | **RMSNorm** (无 bias)                |
+| 前馈网络      | GELU (4x 扩展, 8d^2 参数)        | **SwiGLU** (gate/up/down, 3d*hidden) |
+| 位置编码      | 可学习绝对位置 Embedding         | **RoPE** 旋转位置编码                |
+| Attention     | SDPA (默认) / manual causal mask | SDPA (FlashAttention 自动分发)       |
+| KV Cache      | ---                              | 原生支持 + KVCacheManager + 滑动窗口 |
+| GQA           | ---                              | n_kv_head {2,4,8}                    |
+| MoE FFN       | ---                              | num_experts >= 1, top-1 gating       |
+| Pre/Post-Norm | 支持                             | 支持                                 |
+| Weight Tying  | wte <-> lm_head                  | wte <-> lm_head                      |
+| EMA           | ---                              | 内置 shadow weights                  |
 
-| 维度           | BaselineGPT                             | ModernGPT                                   |
-| -------------- | --------------------------------------- | ------------------------------------------- |
-| 归一化         | LayerNorm (含 bias，减均值+除标准差)    | **RMSNorm** (无 bias，仅除 RMS)             |
-| 前馈网络       | GELU FFN (4× 扩展，`8d²` 参数)          | **SwiGLU** (gate/up/down，`3d×hidden` 参数) |
-| 位置编码       | 可学习绝对位置 Embedding                | **RoPE** 旋转位置编码                       |
-| Attention 实现 | SDPA (默认) / 手动 causal mask (可切换) | SDPA (FlashAttention 自动分发)              |
-| KV Cache       | —                                       | **原生支持** + KVCacheManager + 滑动窗口    |
-| GQA            | —                                       | **支持** (`n_kv_head` ≤ `n_head`)           |
-| MoE FFN        | —                                       | **支持** (`num_experts` ≥ 1, top-1 gating)  |
-| Pre/Post-Norm  | `norm_position="pre"` / `"post"`        | `norm_position="pre"` / `"post"`            |
-| Weight Tying   | wte ↔ lm_head                           | wte ↔ lm_head                               |
+### GQA (Grouped Query Attention) 详解
 
-### 参数量精确对齐
+GQA 的核心思想：多个 Query head 共享同一组 Key/Value head，减少 KV Cache 的显存占用。
 
-| 配置 (9L/512D)         | 总参数量 | 非嵌入参数 | KV Cache (B/tok) |
-| ---------------------- | -------- | ---------- | ---------------- |
-| BaselineGPT            | 54.6M    | 28.4M      | N/A              |
-| ModernGPT MHA (n_kv=8) | 54.0M    | 28.3M      | 18,432           |
-| ModernGPT GQA-4KV      | 51.7M    | 26.0M      | **9,216** (↓50%) |
-| ModernGPT GQA-2KV      | 50.5M    | 24.8M      | **4,608** (↓75%) |
+```
+MHA (n_kv_head=8):           GQA-4KV (n_kv_head=4):        GQA-2KV (n_kv_head=2):
+Q: [8 heads]                 Q: [8 heads]                  Q: [8 heads]
+K: [8 heads]                 K: [4 heads] x repeat 2       K: [2 heads] x repeat 4
+V: [8 heads]                 V: [4 heads] x repeat 2       V: [2 heads] x repeat 4
+KV Cache: 18,432 B/tok       KV Cache: 9,216 B/tok (-50%)   KV Cache: 4,608 B/tok (-75%)
+参数: 54.0M                  参数: 51.7M                    参数: 50.5M
+```
 
-### ModernGPTConfig 完整参数
+实现方式：`CausalSelfAttention` 中 K/V 投影到 `n_kv_head * head_dim` (窄投影)，reshape 后通过 `repeat_interleave(self.n_rep, dim=1)` 扩展到与 Q 相同头数，再进入 `F.scaled_dot_product_attention`。
+
+---
+
+## KV Cache 原理与项目实现
+
+### 什么是 KV Cache？
+
+自回归生成时，每次预测新 token 都需要对全部历史 token 做 self-attention。不缓存时，第 t 步计算量为 O(t^2)。KV Cache 将每层已计算的 Key/Value 向量缓存下来，第 t+1 步只需计算新 token 的 Q/K/V，再做 O(t) 的 attention。
+
+```
+无缓存 (no-cache):              有缓存 (cache):
+Step 1: [tok1] -> Q1K1V1          Step 1 (prefill): [tok1...tokN] -> cache K1...KN, V1...VN
+Step 2: [tok1,tok2] -> Q12K12     Step 2 (decode):  [tokN+1] -> Q_ + cached K/V -> 只算1次attention
+Step 3: [tok1,tok2,tok3] -> ...   Step 3 (decode):  [tokN+2] -> 同上
+...                               每个 decode step: O(1) 新计算 + O(t) attention
+```
+
+### 本项目中的 KV Cache 实现
+
+1. **`KVCacheManager`** (`kv_cache_utils.py`)：管理逐层 `(past_key, past_value)` 张量对，支持 `init_cache` / `update` / `reset_cache` 操作，内建滑动窗口 (`max_cache_len` 超限自动截断)
+
+2. **`CausalSelfAttention.forward()`** (`modern_gpt.py`)：接收 `past_kv` 和 `use_cache` 参数
+   - 若 `past_kv` 非空：将新 K/V concat 到缓存 K/V 上，RoPE 使用 `start_pos + past_len` 计算绝对位置角度
+   - 若 `use_cache=True`：返回此行新产生的 K/V 供外部更新缓存
+
+3. **`ModernGPT.generate()`**：cache 路径分 prefill + decode 两阶段
+   - **Prefill**：一次性 forward 全部 prompt tokens，缓存全序列 K/V
+   - **Decode**：逐 token 循环，只传 `idx[:, -1:]`，复用缓存
+
+4. **RoPE 的绝对位置追踪**：`start_pos` 记录缓存中第一个 token 的绝对位置。当滑动窗口截断时 `start_pos += trim`，后续 RoPE 角度基于 `start_pos + past_len` 计算，保证截断后位置信息不丢失。
+
+### Cache vs No-Cache 何时有收益？
+
+- **短序列 (< 100 tokens)**：no-cache 可能更快 (Python 循环 + kernel launch overhead 超出节省的 FLOPs)
+- **长序列 (> 400 tokens)**：cache 显著胜出，因为避免了重复计算全序列 attention
+- 完整 54M 模型上的推理消融见 `FULL_EXPERIMENT_LOG.md`
+
+---
+
+## 已实现的完整功能清单
+
+以下列出从 [IMPROVEMENT_CHECKLIST.md](IMPROVEMENT_CHECKLIST.md) 中已落地的主要改进：
+
+### 模型架构层
+
+- [x] **[P0] GQA 完整实现**：`n_kv_head=2` 已配置，`repeat_interleave` 正确执行，KV Cache 节省 75%
+- [x] **[P1] BaselineGPT SDPA 后端**：`attention_backend="sdpa"|"manual"` 可切换
+- [x] **[P1] Pre/Post-Norm 消融开关**：`norm_position="pre"|"post"`
+- [x] **[P2] SwiGLU multiple-of 对齐**：`intermediate_size` 向上取整至 128 的倍数 (1408)
+- [x] **[P3] MoE FFN 支持**：`num_experts` >= 1, top-1 gating
+
+### 训练系统层
+
+- [x] **[P0] 梯度累积**：`--gradient_accumulation_steps` 参数
+- [x] **[P1] LR Scheduler 统一**：cosine / linear / wsd / constant 四种模式
+- [x] **[P1] EMA**：`--use_ema` + `init_ema` / `update_ema` / `apply_ema_weights`
+- [x] **[P1] SFT LR Scheduler**：已集成
+- [x] **[P2] GradScaler**：float16 模式下自动启用
+- [x] **[P2] Early Stopping**：`--early_stopping_patience`
+- [x] **[P3] FSDP**：`--fsdp` + `--fsdp_sharding_strategy`
+- [x] **[P0] 完整训练状态 checkpoint**：RNG + scaler + scheduler + EMA + resume_offset，支持断点精确续训
+
+### 推理系统层
+
+- [x] **[P1] CUDA Events 计时**：prefill/decode 阶段分离
+- [x] **[P1] RoPE 缓存**：`_cos_cached` / `_sin_cached` 惰性计算 + 复用
+- [x] **[P2] KVCacheManager 集成**：generate() cache 路径使用 KVCacheManager
+- [x] **[P2] 生成策略扩展**：top_p (nucleus) + repetition_penalty
+- [x] **[P3] Batch 推理**：eos_token_id + finished mask 实现逐序列提前终止，cache/no-cache 双路径支持
+
+### 数据管道层
+
+- [x] **[P2] 数据质量验证**：`data/validate.py`
+- [x] **[P1] 算术数据多样化模板**：5种 hard 模板 (嵌套括号/优先级/多组/指数取模/两组乘法)
+- [x] **[P1] 文档边界数据集可运行**：`DocBoundaryDataset` 支持 `resume_offset`
+
+### 质量保障
+
+- [x] **[P0] 回归测试**：`tests/test_bugfixes.py` 覆盖 KV Cache dtype、优化器去重、EMA、checkpoint  round-trip、DocBoundaryDataset
+
+---
+
+## 预训练架构改造详解
+
+从老式 GPT-2 升级到现代架构的具体改动：
+
+### 1. LayerNorm → RMSNorm (`model/modern_gpt.py`)
 
 ```python
-ModernGPTConfig(
-    vocab_size=50257,         # 词表大小
-    block_size=1024,          # 最大上下文长度
-    n_layer=12,               # Transformer 层数
-    n_head=8,                 # Query 注意力头数
-    n_embd=512,               # 隐藏维度
-    n_kv_head=None,           # KV 头数 (None=n_head, 即 MHA; 设为 2/4 启用 GQA)
-    intermediate_size=None,   # SwiGLU 隐层维度 (None=自动, 8d/3 向上取 128 的倍数)
-    dropout=0.0,              # Dropout 概率
-    norm_position="pre",      # "pre" (LLaMA) 或 "post" (GPT-2 原始)
-    num_experts=1,            # MoE Expert 数量 (1=稠密 SwiGLU, >1=top-1 gating)
-)
+# LayerNorm: 减均值 + 除标准差 + 仿射变换
+y = (x - mean) / std * gamma + beta  # 2个可学习参数
+
+# RMSNorm: 仅除 RMS + 缩放 (无 bias, 无减均值)
+rms = sqrt(mean(x^2) + eps)
+y = x / rms * weight  # 仅1个可学习参数
 ```
 
-### 技术选型深度说明
+**收益**：计算量减少约15%, 参数减少 (去掉了 bias), LLaMA 系列的标准选择。
 
-**GQA (Grouped Query Attention)**：源自 [GQA: Training Generalized Multi-Query Transformer Models (Ainslie et al., 2023)](https://arxiv.org/abs/2305.13245)。通过减少 K/V 头数降低推理时 KV Cache 显存，在几乎不损失质量的前提下实现 50-75% 的缓存节省。本项目通过 `n_kv_head` 参数控制，`n_head % n_kv_head == 0` 约束保证 Q 头均匀分组。
-
-**SwiGLU**：源自 [GLU Variants Improve Transformer (Shazeer, 2020)](https://arxiv.org/abs/2002.05202)。用门控线性单元替代标准 FFN，`intermediate_size` 按 `8d/3` 计算并向上取 128 的倍数（9 层 512 dim 下为 1408），兼顾 GPU 内存对齐和与 Baseline GELU FFN 的参数对齐。
-
-**RoPE (Rotary Position Embedding)**：源自 [RoFormer: Enhanced Transformer with Rotary Position Embedding (Su et al., 2021)](https://arxiv.org/abs/2104.09864)。将位置信息编码为 Q/K 向量的旋转变换，天然支持相对位置建模和序列外推。本项目通过 `start_pos` 绝对位置追踪 + 懒更新缓存保证 cache/no-cache 的 100% bit-wise 一致。
-
-**Pre/Post-Norm**：Pre-Norm (`x = x + Attn(Norm(x))`) 是现代 LLaMA 风格，最终 loss 更优但需要 warmup；Post-Norm (`x = Norm(x + Attn(x))`) 是 GPT-2 原始风格，训练更稳定但收敛稍慢。通过 `norm_position` 一键切换，方便做消融实验。
-
-**MoE FFN (实验性)**：SwiGLU 可扩展为 top-1 gating 的 Mixture of Experts。每个 expert 拥有独立的 gate/up/down 投影，router 输出 softmax 权重。单 token 的 forward FLOPs 与稠密 SwiGLU 相同（仅一个 expert 激活），但总参数量随 `num_experts` 线性增长。
-
----
-
-## KV Cache 推理加速系统
-
-### 问题定义
-
-自回归生成中，每生成一个新 token 都需要对整个历史序列做 Attention。无缓存时第 N 步的 forward 计算量为 O(N²)，其中绝大多数是重复计算（历史 token 的 K/V 从未改变）。
-
-### 解决方案
-
-```
-无 KV Cache (BaselineGPT):              有 KV Cache (ModernGPT):
-每步 forward 全序列 ── O(N²)              Prefill: 一次性计算 prompt ── O(N²)
-                                         Decode:  每步只算 1 个 token 的 K/V ── O(N)
-```
-
-**核心数据流**：
-
-```
-Step 0 (Prefill):  prompt → [Q₀,Q₁,Q₂] [K₀,K₁,K₂] [V₀,V₁,V₂]
-                    缓存 KV = [K₀,K₁,K₂], [V₀,V₁,V₂]
-
-Step 1 (Decode):    token₃ → Q₃
-                    拼接: K₀K₁K₂K₃, V₀V₁V₂V₃
-                    Attention(Q₃, K_all, V_all) → token₄
-                    缓存 KV = [K₀..K₄], [V₀..V₄]   (追加)
-```
-
-### 关键技术细节
-
-**RoPE 绝对位置追踪**（`start_pos` 机制）：缓存的 K 在加入时已经应用了对应位置的 RoPE 旋转。当滑动窗口截断左侧 KV 时，`start_pos` 同步增加 `trim` 量，确保后续 token 的 RoPE 角度基于真实绝对索引计算。
-
-**滑动窗口**：当 `cache_len > block_size` 时自动丢弃最早的 KV 块，位置基准同步更新，避免 OOM 和位置编码溢出。
-
-**RoPE 缓存**：`RotaryEmbedding` 首次前向时预计算 `max_seq_len` 长的 cos/sin 表，后续调用按索引切片，消除 token-by-token 生成时的重复三角函数计算。
-
-**因子化 generate**：将生成过程显式分离为 prefill（一次性处理 prompt）和 decode（逐 token 循环），消除 per-token 条件分支，减少 `torch.cat` 导致的 GPU 内存重分配。
-
-### Benchmark 设计
-
-`inference/generate.py` 使用 **CUDA Events** 精确计时（微秒级），分离测量：
-
-| 指标           | 含义                    | 测量方式                            |
-| -------------- | ----------------------- | ----------------------------------- |
-| `prefill_ms`   | Prompt 编码耗时         | ev0 → ev1 的时间差                  |
-| `decode_ms`    | 逐 token 生成耗时       | ev1 → ev2 的时间差                  |
-| `decode_tok_s` | **纯 decode 阶段** 吞吐 | `max_new_tokens / (decode_ms/1000)` |
-| `total_tok_s`  | 端到端吞吐 (含 prefill) | `max_new_tokens / (total_ms/1000)`  |
-| `peak_mem_mb`  | 峰值显存                | `torch.cuda.max_memory_allocated`   |
-
-```bash
-python inference/generate.py \
-    --checkpoint out/pretrain/best_ckpt.pt \
-    --max_new_tokens 400 500 --num_samples 30 \
-    --output_json out/bench.json
-```
-
-### KVCacheManager
+### 2. GELU FFN → SwiGLU FFN (`model/modern_gpt.py`)
 
 ```python
-from model.kv_cache_utils import KVCacheManager
+# GELU FFN: x -> Linear(4d) -> GELU -> Linear(d)
+# 参数量: 2 * d * 4d = 8d^2
 
-cache = KVCacheManager.from_config(config)
-cache.init_cache(batch_size, device, dtype)
-# decode loop:
-cache.update(layer_idx, new_k, new_v)
+# SwiGLU: x -> gate(x)*up(x) -> down
+# gate = Linear(d -> hidden), up = Linear(d -> hidden), down = Linear(hidden -> d)
+# hidden = 8d/3 (向上取整至128倍数), 参数量: 3 * d * hidden
 ```
 
----
+**收益**：SwiGLU 在相同计算量下提供更好的训练动态和收敛效果，LLaMA 等模型验证。
 
-## 训练系统设计
-
-### 预训练管线 (`train_pretrain.py`)
-
-完整工业级训练特性，全部通过 CLI 控制：
-
-```
-训练循环
-├── Mixed Precision (torch.amp.autocast)
-│   └── fp16 → GradScaler 防梯度下溢; bf16 → 无需
-├── 梯度累积 (`--gradient_accumulation_steps N`)
-│   └── 每 N 个 micro-batch 做一次 optimizer.step()
-├── LR Scheduler (`--lr_schedule`)
-│   ├── cosine:  linear warmup → cosine decay (默认)
-│   ├── linear:  linear warmup → linear decay
-│   ├── wsd:     Warmup → Stable → cosine Decay (Chinchilla 风格)
-│   └── constant: linear warmup → 恒定 LR
-├── EMA (`--use_ema --ema_decay 0.999`)
-│   └── 影子权重指数平滑，eval 时 swap in/out
-├── Early Stopping (`--early_stopping_patience N`)
-│   └── val loss 连续 N 次未改善 → 自动停止
-├── DDP 多卡支持
-├── Checkpoint (模型 + 优化器 + iter + best_val_loss)
-└── 日志 (wandb / TensorBoard / console 三后端)
-```
-
-**参数速查**：
-
-| 参数                              | 默认值  | 说明                                    |
-| --------------------------------- | ------- | --------------------------------------- |
-| `--model`                         | modern  | `baseline` 或 `modern`                  |
-| `--n_layer / --n_head / --n_embd` | 9/8/512 | 模型结构                                |
-| `--n_kv_head`                     | None    | GQA KV 头数 (None=MHA)                  |
-| `--batch_size`                    | 12      | 每 GPU 的 micro-batch                   |
-| `--gradient_accumulation_steps`   | 1       | 累积步数 (effective batch = bs × accum) |
-| `--lr_schedule`                   | cosine  | `cosine`/`linear`/`wsd`/`constant`      |
-| `--use_ema`                       | False   | 启用 EMA                                |
-| `--early_stopping_patience`       | 0       | 早停容忍度 (0=禁用)                     |
-
-### SFT 监督微调 (`train_sft.py`)
-
-支持 `--lr_schedule` 和 `--min_lr`，默认 cosine 调度 + 5% warmup：
-
-```bash
-python training/train_sft.py \
-    --init_from out/pretrain/best_ckpt.pt \
-    --lr_schedule cosine --min_lr 1e-5 --epochs 3 \
-    --variant sft-only  # 或 sft-continued (更长训练)
-```
-
-### GRPO 强化学习对齐 (`train_grpo.py`)
-
-完整的 Group Relative Policy Optimization 实现，无需 Critic 网络：
-
-```
-对每个 prompt:
-  1. 从当前 policy 采样 G 个 response (eval 模式, dropout=0)
-  2. 规则奖励函数打分 → [r₁, r₂, ..., rG]
-  3. 组内优势: Aᵢ = (rᵢ - mean(r)) / (std(r) + ε)
-  4. 记录 old_logprob (detach, 供后续 ratio 计算)
-  5. 优化阶段重新计算 new_logprob (train 模式)
-  6. ratio = exp(new - old)
-  7. PPO loss = -min(ratio × A, clip(ratio, 1-ε, 1+ε) × A)
-  8. total loss = PPO_loss + β × KL(ref || policy)
-```
-
-**健壮性设计**：初始化时自动检查 `dropout` 参数。若 `dropout > 0`，发出 `UserWarning`（eval 和 train 模式下的 old/new logprob 会因 dropout mask 不一致产生偏差）。
-
-```bash
-python training/train_grpo.py \
-    --init_from out/sft/final.pt \
-    --ref_from out/sft/final.pt \
-    --group_size 4 --num_steps 1000 --beta 0.04 --eps 0.2
-```
-
----
-
-## 生成策略
-
-`ModernGPT.generate()` 支持完整的采样参数矩阵，同时兼容 no-cache 和 cache 模式：
+### 3. 绝对位置编码 → RoPE 旋转位置编码 (`model/modern_gpt.py`)
 
 ```python
-model.generate(
-    idx,                          # prompt token IDs [1, prompt_len]
-    max_new_tokens=500,           # 生成 token 数
-    temperature=0.8,              # 温度 (>0 缩放, =0 贪婪)
-    top_k=50,                     # Top-K 过滤
-    top_p=0.95,                   # Nucleus sampling (核采样)
-    repetition_penalty=1.1,       # 重复惩罚 (>1.0 抑制已生成 token)
-    use_cache=True,               # 启用 KV Cache
-)
+# 绝对位置: lookup embedding[wpe] (固定长度, 无法外推)
+pos_emb = wpe[positions]
+
+# RoPE: 通过旋转矩阵注入位置信息 (相对位置天然编码, 可外推)
+q_rot = q * cos(pos) + rotate_half(q) * sin(pos)
+k_rot = k * cos(pos) + rotate_half(k) * sin(pos)
 ```
 
-**top_p 实现**：按概率降序排列，累积概率超过阈值的 token 被置为 `-inf`，保留至少 1 个 token。  
-**repetition_penalty 实现**：对已出现在生成序列中的 token，其 logits 除以 `repetition_penalty` 降低重选概率。
+**收益**：
 
----
+- 相对位置关系天然编码在 attention score 中
+- 支持长序列外推 (训练1024长度可推理更长)
+- 配合 KV Cache 时通过 `start_pos` 追踪绝对位置
 
-## 数据管道
-
-### OpenWebText 流式加载 (`data/openwebtext.py`)
-
-```
-预处理 (prepare.py)                   训练时读取 (openwebtext.py)
-───────────────────                   ──────────────────────────
-raw text → tiktoken encode            np.memmap → 按 block_size 切 chunk
-       → np.uint16/32 binary          → buffer shuffle (每 10000 chunk)
-       → .bin + .idx (元信息)          → resume_offset 断点续接
-                                     → DocBoundaryDataset (可选)
-```
-
-**自动 dtype**：`prepare.py` 根据 tokenizer 词表大小自动选择 `uint16`（≤65535）或 `uint32`（>65535），元信息写入 `.idx` 文件。
-
-**DocBoundaryDataset**：在 EOT token 处截断 chunk，防止一个文档的结尾与下一个文档的开头拼接产生语义噪声。
-
-**数据验证** (`data/validate.py`)：
-
-```bash
-python data/validate.py data/openwebtext/train.bin
-# → token 范围、词表覆盖、EOT 频率、top-20 histogram、随机解码样本
-```
-
-### 算术数据集 (`data/arithmetic.py`)
-
-三档难度，训练时动态生成，中高难度含多样化模板：
-
-| 难度   | 数字范围 | 模板数 | 示例                           |
-| ------ | -------- | ------ | ------------------------------ |
-| easy   | 0–100    | 4      | `23 + 45`, `100 / 7`           |
-| medium | 0–1000   | 2 类   | `(a+b)*c`, `a+b*c-d/e`         |
-| hard   | 0–10000  | 5      | 嵌套括号、`a**b%c`、双组运算等 |
-
-`safe_eval` 区分除零、溢出和一般异常，确保数据质量。
-
----
-
-## 工程特性汇总
-
-| 特性                     | 实现在                               | 说明                                    |
-| ------------------------ | ------------------------------------ | --------------------------------------- |
-| Flash Attention 后端诊断 | `ModernGPT._log_attention_backend()` | 模型初始化时打印实际 SDPA 内核          |
-| GradScaler               | `train_pretrain.py`                  | fp16 时激活，bf16/CPU 时自动禁用        |
-| RoPE 缓存                | `RotaryEmbedding._ensure_cache()`    | 懒更新，首次 forward 缓存全表           |
-| 因子化 generate          | `ModernGPT.generate()`               | prefill/decode 分离，消除条件分支       |
-| Config 序列化            | `ModernGPTConfig.to_dict/from_dict`  | JSON 兼容，向后兼容旧 checkpoint        |
-| Dropout 守卫             | `GRPOTrainer.__init__`               | dropout>0 时发出 UserWarning            |
-| 日志双后端               | `utils/logging.py`                   | wandb + TensorBoard，初始化失败自动降级 |
-| 检查点完整性             | `utils/checkpoint.py`                | 模型 + 优化器 + iter + best_val_loss    |
-| 可复现性                 | 全局 seed                            | torch/numpy/random 统一 seed=1337       |
-
----
-
-## 快速开始
-
-### 环境
-
-```bash
-pip install torch numpy tiktoken tensorboard wandb datasets pyyaml
-```
-
-### 完整流程
-
-```bash
-# 1. 数据准备
-python data/prepare.py --split train
-python data/prepare.py --split val
-python data/validate.py data/openwebtext/train.bin
-
-# 2. 预训练 (ModernGPT, GQA-4KV, cosine LR, EMA, 梯度累积)
-python training/train_pretrain.py --model modern \
-    --n_layer 9 --n_head 8 --n_embd 512 --n_kv_head 4 \
-    --batch_size 12 --gradient_accumulation_steps 4 \
-    --lr_schedule cosine --use_ema --early_stopping_patience 5 \
-    --max_iters 18000 --device cuda
-
-# 3. 推理消融 Benchmark
-python inference/generate.py \
-    --checkpoint out/pretrain/best_ckpt.pt \
-    --max_new_tokens 400 500 --num_samples 30 \
-    --output_json out/bench.json
-
-# 4. SFT 监督微调
-python training/train_sft.py \
-    --init_from out/pretrain/best_ckpt.pt \
-    --lr_schedule cosine --min_lr 1e-5 --epochs 3
-
-# 5. GRPO 对齐
-python training/train_grpo.py \
-    --init_from out/sft/final.pt --ref_from out/sft/final.pt \
-    --group_size 4 --num_steps 1000 --beta 0.04
-
-# 6. 评估
-python evaluation/eval_alignment.py \
-    --checkpoint out/grpo/best.pt --ref_checkpoint out/sft/final.pt
-```
+配置参数：`rotary_base=10000`, `max_seq_len=block_size * 2`
 
 ---
 
@@ -392,10 +318,10 @@ python evaluation/eval_alignment.py \
 
 | 阶段    | 指标                                      | 目标                                    |
 | ------- | ----------------------------------------- | --------------------------------------- |
-| 预训练  | ModernGPT val loss vs Baseline @ 18k iter | **↓2.29%** (3.9126 → 3.8229)            |
-| 推理    | KV Cache 吞吐                             | 长序列 (>400 tokens) 正向提升           |
-| GQA     | KV Cache 显存 vs MHA                      | **↓50%** (GQA-4KV) / **↓75%** (GQA-2KV) |
-| SFT     | Format pass rate                          | easy 100%, medium ≥ 96%                 |
+| 预训练  | ModernGPT val loss vs Baseline @ 18k iter | **-2.29%** (3.9126 -> 3.8229)           |
+| GQA     | KV Cache 显存 vs MHA                      | **-50%** (GQA-4KV) / **-75%** (GQA-2KV) |
+| 推理    | KV Cache 吞吐 vs no-cache                 | 长序列 (>400 tokens) 正向提升           |
+| SFT     | Format pass rate                          | easy 100%, medium >= 96%                |
 | GRPO-G4 | Accuracy vs SFT-only                      | easy +19.1 pts, medium +2.8 pts         |
 | GRPO-G4 | Format pass rate                          | **100%**, invalid rate **0%**           |
 
@@ -403,15 +329,86 @@ python evaluation/eval_alignment.py \
 
 ## 复现清单
 
-- [ ] 数据准备: `python data/prepare.py --split train/val` + `validate.py`
-- [ ] 预训练: BaselineGPT + ModernGPT (MHA / GQA-4KV / GQA-2KV)
+- [ ] 数据准备: `python data/prepare.py --split train` + `data/validate.py`
+- [ ] 预训练: `BaselineGPT` + `ModernGPT` (n_kv_head=8/4/2)
 - [ ] 推理消融: cache vs no-cache, 多种长度, CUDA Events
 - [ ] SFT: `sft-only` + `sft-continued`
 - [ ] GRPO: G4 (1000 steps) + G8 (250 steps)
 - [ ] 评估: `eval_alignment.py` 全维度
-- [ ] 消融: GQA (n_kv_head=8/4/2), Pre/Post-Norm, LR schedule (cosine/wsd), KL (β=0 vs 0.04)
+- [ ] 消融: GQA (n_kv_head=8/4/2), Pre/Post-Norm, LR schedule (cosine/wsd), KL (beta=0 vs 0.04)
+- [ ] 回归测试: `python tests/test_bugfixes.py`
 
 > 固定种子 `1337`
+
+---
+
+## 关键命令速查
+
+```bash
+# ====== 预训练 ======
+# ModernGPT + GQA-2KV
+python training/train_pretrain.py --model modern --n_kv_head 2 --use_ema --use_wandb
+
+# BaselineGPT (对照)
+python training/train_pretrain.py --model baseline
+
+# Gradient accumulation (effective batch = 48)
+python training/train_pretrain.py --model modern --gradient_accumulation_steps 4
+
+# FSDP (多GPU)
+torchrun --nproc_per_node=4 training/train_pretrain.py --model modern --fsdp
+
+# 断点续训
+python training/train_pretrain.py --model modern --resume out/pretrain/latest_ckpt.pt
+
+# ====== SFT ======
+python training/train_sft.py --init_from out/pretrain/best_ckpt.pt --out_dir out/sft
+
+# ====== GRPO ======
+python training/train_grpo.py --init_from out/sft/best.pt --ref_from out/sft/best.pt --group_size 4 --num_steps 1000 --beta 0.04
+
+# ====== 推理消融 ======
+python inference/generate.py --checkpoint out/pretrain/best_ckpt.pt --max_new_tokens 200 400 600 --num_samples 30 --output_json out/ablation.json
+
+# ====== 评估 ======
+python evaluation/eval_alignment.py --checkpoint out/grpo/best.pt --ref_checkpoint out/sft/best.pt
+
+# ====== 系统消融 ======
+python run_inference_ablation.py    # KV Cache 消融
+python run_full_evaluation.py       # 全维度评估
+python generate_experiment_log.py   # 生成实验日志
+
+# ====== 质量保障 ======
+python tests/test_bugfixes.py       # 关键 Bug 回归测试
+```
+
+---
+
+## ModernGPTConfig 完整参数
+
+```python
+ModernGPTConfig(
+    vocab_size=50257,         # 词表大小 (GPT-2 tokenizer)
+    block_size=1024,          # 最大上下文长度
+    n_layer=12,               # Transformer 层数
+    n_head=8,                 # Query 注意力头数
+    n_embd=512,               # 隐藏维度 (head_dim = 512/8 = 64)
+    n_kv_head=None,           # KV 头数 (None=n_head 即 MHA; 设为 2/4 启用 GQA)
+    intermediate_size=None,   # SwiGLU 隐层维度 (None=自动: 8d/3 向上取整到128倍数 -> 1408)
+    dropout=0.0,              # Dropout rate
+    norm_position="pre",      # Pre-Norm / Post-Norm
+    num_experts=1,            # MoE experts (1=密集 SwiGLU, >1=top-1 gating)
+)
+```
+
+### 参数量精确对齐
+
+| 配置 (12L/512D)        | 总参数量 | 非嵌入参数 | KV Cache (B/tok) |
+| ---------------------- | -------- | ---------- | ---------------- |
+| BaselineGPT            | 54.6M    | 28.4M      | N/A              |
+| ModernGPT MHA (n_kv=8) | 54.0M    | 28.3M      | 18,432           |
+| ModernGPT GQA-4KV      | 51.7M    | 26.0M      | **9,216** (-50%) |
+| ModernGPT GQA-2KV      | 50.5M    | 24.8M      | **4,608** (-75%) |
 
 ---
 
@@ -422,7 +419,7 @@ nanogpt-modern/
 ├── config/                     # YAML 配置
 │   ├── pretrain.yaml, sft.yaml, grpo.yaml, generate.yaml
 ├── data/
-│   ├── prepare.py              # 下载 → tokenize → 二进制
+│   ├── prepare.py              # 下载 -> tokenize -> 二进制
 │   ├── openwebtext.py          # MemmapDataset + DocBoundaryDataset
 │   ├── arithmetic.py           # 三档算术生成 + 多样化模板 + safe_eval
 │   └── validate.py             # 数据质量验证
@@ -431,9 +428,10 @@ nanogpt-modern/
 │   ├── modern_gpt.py           # ModernGPT (RMSNorm/SwiGLU/RoPE/GQA/MoE/EMA + Pre/Post-Norm)
 │   └── kv_cache_utils.py       # KVCacheManager + 滑动窗口
 ├── training/
-│   ├── train_pretrain.py       # AMP+GradScaler+梯度累积+LR Scheduler+EMA+EarlyStop+DDP
+│   ├── train_pretrain.py       # AMP+GradScaler+梯度累积+LR Scheduler+EMA+EarlyStop+DDP/FSDP
 │   ├── train_sft.py            # SFT + LR Scheduler
-│   └── train_grpo.py           # GRPO (PPO Clip + KL + dropout guard)
+│   ├── train_grpo.py           # GRPO (PPO Clip + KL + dropout guard)
+│   └── iterative_grpo.py       # 迭代 RLHF + Rejection Sampling SFT
 ├── inference/
 │   └── generate.py             # CUDA Events benchmark + prefill/decode 分离
 ├── evaluation/
@@ -443,7 +441,18 @@ nanogpt-modern/
 ├── utils/
 │   ├── lr_scheduler.py         # 统一 LR Scheduler (cosine/linear/wsd/constant)
 │   ├── logging.py              # wandb/TensorBoard/console
-│   └── checkpoint.py           # 模型+优化器+iter 序列化
+│   └── checkpoint.py           # 完整训练状态序列化
+├── tests/
+│   ├── __init__.py
+│   └── test_bugfixes.py        # 关键 Bug 回归测试
+├── out/                        # 训练产出 (checkpoints + logs)
+├── run_inference_ablation.py    # 推理消融自动化脚本
+├── run_full_evaluation.py       # 全维度评估自动化脚本
+├── generate_experiment_log.py   # 实验日志生成
+├── IMPROVEMENT_CHECKLIST.md     # 系统改进清单 (30+项)
+├── IMPROVEMENT_REPORT.md        # 深度诊断与优化报告
+├── REPRODUCTION_REPORT.md       # 完整复现报告
+├── FULL_EXPERIMENT_LOG.md       # 详细实验日志
 ├── requirements.txt
 └── README.md
 ```
@@ -452,26 +461,35 @@ nanogpt-modern/
 
 ## 设计决策 FAQ
 
-**为什么用 GRPO 而非 PPO/DPO？**  
+**为什么用 GRPO 而非 PPO/DPO？**
 GRPO 不需要 Value/Critic 网络，在轻量级模型上显著降低实现复杂度与显存开销。通过组内相对奖励计算优势，天然适合规则奖励函数场景。
 
-**SwiGLU 的 intermediate_size 为什么取 128 的倍数？**  
-`8d/3` 向上取整到 128 的倍数（如 512→1408）提升 GPU 内存对齐。但参数量仍与 Baseline GELU FFN 的 `8d²` 在合理范围内对齐。
+**SwiGLU 的 intermediate_size 为什么取 128 的倍数？**
+`8d/3` 向上取整到 128 的倍数（如 512->1408）提升 GPU 内存对齐。参数量仍与 Baseline GELU FFN 的 `8d^2` 在合理范围内对齐。
 
-**KV Cache 如何保证与 no-cache 的数值一致？**  
+**KV Cache 如何保证与 no-cache 的数值一致？**
 `start_pos` 追踪 KV cache 中第一个 token 的绝对位置。截断时 `start_pos += trim`，后续 RoPE 角度基于真实索引计算，而非缓存物理长度。
 
-**为什么 old_logprobs 必须在 eval 模式下采样？**  
+**为什么 old_logprobs 必须在 eval 模式下采样？**
 需要 dropout=0 保证 old/new logprobs 的 ratio 无偏。`GRPOTrainer` 在 `dropout > 0` 时发出警告。
 
-**为什么规则奖励不用神经网络 Critic？**  
+**为什么规则奖励不用神经网络 Critic？**
 算术任务正确性是离散且可验证的。规则奖励函数零延迟、100% 确定、无 approximation error，是此类结构化任务的最优选择。
+
+**GQA 的 KV head 数量如何选择？**
+`n_kv_head` 是 `n_head` 的约数。推荐 `n_head / n_kv_head = 2 或 4`：
+
+- 比例越大，KV Cache 节省越多，但表达能力下降
+- 本项目中 `n_head=8`，推荐 `n_kv_head=2` (4x 压缩) 或 `n_kv_head=4` (2x 压缩)
+
+**Checkpoint 为什么保存 RNG 和 EMA 状态？**
+为了严格复现训练过程。断点续训时恢复 RNG 可保证数据顺序与 dropout mask 一致；恢复 EMA 可避免 shadow weights 从头累计，保证评估稳定性。
 
 ---
 
 ## 参考文献
 
-- [nanoGPT](https://github.com/karpathy/nanoGPT) — Andrej Karpathy
+- [nanoGPT](https://github.com/karpathy/nanoGPT) --- Andrej Karpathy
 - [RMSNorm] Root Mean Square Layer Normalization (Zhang & Sennrich, 2019)
 - [SwiGLU] GLU Variants Improve Transformer (Shazeer, 2020)
 - [RoPE] RoFormer: Enhanced Transformer with Rotary Position Embedding (Su et al., 2021)
