@@ -5,15 +5,15 @@
 
 ---
 
-## 实施进度追踪 (2026-06-02 更新)
+## 实施进度追踪 (2026-06-17 更新)
 
 以下统计基于对当前代码库 (`nanogpt-modern/`) 的完整审查。
 
-### 已完成 (38 / 38 项)
+### 已完成 (40 / 40 项)
 
 | 编号 | 优先级 | 项目 | 实施说明 |
 |------|--------|------|----------|
-| 1.1 | P0 | GQA 完整实现 | `pretrain.yaml` 设 `n_kv_head: 2`，`repeat_interleave` 正确执行，KV Cache 节省 75% |
+| 1.1 | P0 | GQA 完整实现 | `pretrain.yaml` 设 `n_kv_head: 2`，grouped-broadcast 零拷贝替代 `repeat_interleave`，KV Cache 节省 75%，`gqa_broadcast` 配置项支持 auto/grouped/raw/repeat |
 | 1.2 | P1 | BaselineGPT SDPA 后端 | `attention_backend="sdpa"|"manual"` 通过 Config 切换 |
 | 1.3 | P1 | Pre/Post-Norm 消融 | `norm_position="pre"|"post"` 两个模型均支持 |
 | 1.4 | P2 | SwiGLU multiple-of 对齐 | `intermediate_size` 向上取整至 128 的倍数 (512→1408) |
@@ -42,6 +42,8 @@
 | 7.3 | P1 | 补齐依赖 | `requirements.txt` 新增 `datasets`、`huggingface_hub`、`safetensors`、`omegaconf`、`hydra-core`、`pytest` |
 | 7.4 | P0 | 单元测试覆盖 | `tests/` 新增/扩展 `test_bugfixes.py`、`test_config.py`、`test_logger.py`、`test_trainer_base.py`、`test_attention_utils.py`、`test_grpo.py`；运行 `pytest tests/ -q` |
 | 1.5 | P2 | Flash Attention / SDPA 显式后端选择 | `model/attention_utils.py` 提供 `set_attention_backend`（auto/flash/mem_efficient/math/default）；训练与推理脚本新增 `--attn_backend` 参数 |
+| 1.5b | P1 | FlashAttention 显式集成 (varlen/kvcache) | `model/flash_attention.py` 封装 `flash_attn_func`/`flash_attn_varlen_func`/`flash_attn_with_kvcache` + `is_available()`/`has_varlen()`/`has_kvcache()` 探测；GQA 原生支持 |
+| 1.7 | P0 | GQA grouped-broadcast 零拷贝 | `CausalSelfAttention` grouped-broadcast 替代 `repeat_interleave`，Q reshape `[B,n_kv,rep,T,D]` + KV unsqueeze `[B,n_kv,1,S,D]`，SDPA 广播 singleton 维度；`probe_gqa_sdpa_support()` 懒探测；`gqa_broadcast` 配置项 (auto/grouped/raw/repeat) |
 | 4.4 | P2 | Streaming DataLoader 可恢复状态 | `MemmapDataset` / `DocBoundaryDataset` 新增 `state_dict` / `load_state_dict`；`DocBoundaryDataset` 正确应用 `resume_offset` |
 | 5.1 | P0 | GRPO old_logprobs dropout 一致性强化 | `train_grpo.py` 默认拒绝 dropout > 0 的 SFT checkpoint，提供 `--allow_dropout` 覆盖；保留 `maybe_warn_dropout` 警告 |
 | 6.1 | P0 | 预训练标准化 Benchmark 评估 | 新增 `evaluation/eval_benchmark.py`：本地 val set  perplexity + 可选 `lm-eval` 下游任务（HellaSwag/LAMBADA 等） |
@@ -111,8 +113,22 @@
 - 新增 `model/attention_utils.py`：
   - `set_attention_backend(backend)`：强制启用 `flash` / `mem_efficient` / `math`，或 `auto`/`default` 让 PyTorch 自动选择；
   - `get_attention_backend_info()` / `print_attention_backend()`：查询/打印当前启用的后端；
+  - `probe_gqa_sdpa_support(device, dtype)`：懒运行时探测 GQA raw/grouped broadcast 支持情况，线程安全缓存；
+  - `reset_gqa_probe_cache()`：重置探测缓存（测试用）。
 - `train_pretrain.py`、`train_sft.py`、`train_grpo.py`、`inference/generate.py` 均新增 `--attn_backend` 参数，在模型创建前调用 `set_attention_backend()`；
 - 启动日志现在会输出当前启用的 SDPA 后端列表，便于排查实际使用的 attention kernel。
+
+### 1.5b [P1] FlashAttention 显式集成 (varlen/kvcache) ✅ **已完成**
+
+**实现要点**：
+- `model/flash_attention.py` 完整封装三个 flash-attn 接口：
+  - `flash_attention()` — 训练/预填充路径，调用 `flash_attn_func`；
+  - `flash_attention_varlen()` — 变长/打包序列路径，调用 `flash_attn_varlen_func`；
+  - `flash_attention_with_cache()` — decode 步骤 KV Cache 路径，调用 `flash_attn_with_kvcache`。
+- 运行时探测：`is_available()` / `version_info()` / `has_varlen()` / `has_kvcache()` 检测 flash-attn 是否安装及功能支持。
+- 条件导入：flash-attn 不可用时所有函数返回 `None`，`CausalSelfAttention` 自动回退 SDPA/eager。
+- GQA 原生支持：flash-attn 路径接受不同 Q/KV head 数，无需 `repeat_interleave`。
+- 测试：`tests/test_flash_attention.py` 10 测试覆盖可用性、版本、varlen/kvcache wrapper、模型集成与 GQA。
 
 
 
@@ -123,6 +139,18 @@
 **建议**：
 - 作为实验性 Extension：在 FFN 层加 `num_experts` 和 `top_k` 参数
 - 评估指标：相同 forward FLOPs 下的 val loss vs 参数量 scaling 曲线
+
+### 1.7 [P0] GQA grouped-broadcast 零拷贝 ✅ **已完成**
+
+**现状**：`CausalSelfAttention` 在 GQA 模式下使用 `k_embed.repeat_interleave(self.n_rep, dim=1)` 将 KV 显式复制到 Q head 数量，使 KV 张量临时从 `[B, n_kv_head, T, hd]` 膨胀到 `[B, n_head, T, hd]`，抵消部分 GQA 显存收益。
+
+**实现要点**：
+- **Grouped Broadcast 策略**：将 Q reshape 为 `[B, n_kv_head, n_rep, T, hd]`，KV unsqueeze 为 `[B, n_kv_head, 1, S, hd]`，SDPA 自动广播 singleton 维度，零 KV 拷贝，所有 SDPA 后端（flash/mem_efficient/math/cudnn）均支持。
+- **懒运行时探测**：`model/attention_utils.py` 新增 `probe_gqa_sdpa_support(device, dtype)` 首次 forward 时自动测试 raw broadcast 与 grouped broadcast 可用性，线程安全缓存结果（`_PROBE_CACHE` + `_PROBE_LOCK`）。
+- **配置项 `gqa_broadcast`**：`"auto"`（默认，运行时探测）、`"raw"`（直接传不同 head 数）、`"grouped"`（grouped broadcast）、`"repeat"`（保留 repeat_interleave 旧行为，兼容测试/基准对比）。
+- **MHA 兼容**：`n_kv_head == n_head` 时直接走标准 SDPA 路径，无额外开销。
+- **数值验证**：grouped broadcast 与 repeat_interleave 输出 `torch.allclose(atol=1e-5)` 为 True，`maxdiff=0.0`；`generate()` 输出 `torch.equal()` 为 True。
+- **测试**：`tests/test_gqa_broadcast.py` 16 测试覆盖 grouped SDPA（causal/noncausal/masked/scale/MHA passthrough）、probe（缓存/强制刷新/无效配置/CUDA grouped 可用）、集成（auto/forced/数值等价/config 序列化/invalid raises/MHA ignores）。
 
 
 
@@ -241,17 +269,18 @@ scaler.update()
 
 **修复**：`benchmark()` 现在接收 `temperature`/`top_k`/`top_p`/`use_cache` 参数，cache 路径调用 `inference.generate_utils._sample_logits` 应用这些超参数，no-cache 路径通过 `model.generate(...)` 透传。`main()` 循环将命令行参数正确传入。
 
-### 3.2 [P1] ~~`generate()` 中 token-by-token 循环未向量化~~ ✅ **已完成**
+### 3.2 [P1/P2] ~~`generate()` 中 token-by-token 循环未向量化~~ ✅ **已完成**
 
 **现状**：`ModernGPT.generate(use_cache=True)` 每次 forward 只传 `idx[:, -1:]`，循环 `max_new_tokens` 次。每次循环都要从 Python 发起一次完整的 PyTorch forward（kernel launch overhead）。
 
 **实现要点**：
 - `ModernGPT.generate()` 新增 `compile=False` 参数；在 CUDA 设备上启用时，用 `torch.compile(self, mode="reduce-overhead", fullgraph=False, dynamic=True)` 编译 forward 调用，减少 Python 侧 kernel launch overhead；
-- 捕获/编译失败（如缺少 C++ 工具链、CUDA Graph 不支持的结构）自动降级到 eager 模式并打印 warning，不中断生成；
+- `compile="fullgraph"` 进一步对单 token decode 步骤（forward + sampling + finished mask）做 `torch.compile(..., fullgraph=True, dynamic=True)`，将提前终止重构为 per-sequence mask 操作，适合固定 batch/长度的低延迟场景；
+- 捕获/编译失败（如缺少 C++ 工具链、Triton 不可用、CUDA Graph 不支持的结构）自动降级到 eager 模式并打印 warning，不中断生成；
 - `inference/generate.py` 新增 `--compile` 参数，benchmark 的 cache/no-cache 路径均会透传编译开关；
-- 当前 KV Cache 采用动态环形 buffer（单段 tuple / 多段 list 混合），真正的静态 CUDA Graph 需要把 cache 形状完全固定；因此本次采用 `torch.compile` 作为工程上可落地的 graph-mode 优化，后续如需极致低延迟可进一步把 KV Cache 改为固定长度 padded tensor。
+- 当前 KV Cache 采用动态环形 buffer（单段 tuple / 多段 list 混合），真正的静态 CUDA Graph 需要把 cache 形状完全固定；`fullgraph` 路径通过约束 `prompt_len + max_new_tokens <= block_size - 1` 避免 ring-buffer wrap-around，未来可进一步改为固定长度 padded tensor。
 
-**验证**：`tests/test_generate_compile.py` 覆盖 CUDA/CPU 两种场景，确保 `compile=True` 与 eager 输出一致。
+**验证**：`tests/test_generate_compile.py` 覆盖 `compile=True`、`compile="fullgraph"` 与 CPU 回退场景，确保与 eager 输出一致。
 
 ### 3.3 [P1] RoPE 旋转矩阵每次生成都重新计算
 
@@ -280,6 +309,21 @@ scaler.update()
 **建议**：
 - 添加 `top_p`、`repetition_penalty` 作为最低限度的扩展
 - 这些策略对 GRPO 中的采样多样性有直接影响（当前用 temperature=1.0 + top_k=50 较为粗糙）
+
+
+
+### 3.5b [P2] ~~未支持 Speculative Decoding~~ ✅ **已实现**
+
+**现状**：`generate()` 为标准自回归解码，每 token 一次目标模型 forward。
+
+**实现要点**：
+- `ModernGPT.generate()` 新增 `draft_model` / `draft_tokens` / `draft_temperature` / `draft_top_k` 参数。
+- 传入 `draft_model` 时进入 `_generate_speculative`：draft 模型提出最多 `draft_tokens` 个候选 token，目标模型一次 forward 验证。
+- 接受比 `min(1, p_target / p_draft)`；拒绝时从 `normalize(relu(p_target - p_draft))` 采样替换 token。
+- 分别为目标与 draft 维护 `KVCacheManager`，`KVCacheManager.truncate()` 支持拒绝后回退 draft cache。
+- 当前支持 batch size 1；自 draft 模型 greedy 输出与目标 greedy 输出完全一致。
+
+**验证**：`tests/test_speculative_decode.py` 6 passed。
 
 
 
@@ -568,7 +612,7 @@ adv = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
 - 新增 `tests/test_config.py`：YAML 加载、环境变量展开、嵌套 YAML + CLI 覆盖、`NestedNamespace`、`flatten/unflatten`、`to_dict`、`validate_keys`。
 - 新增 `tests/test_logger.py`：wandb/TensorBoard 失败降级、标量/文本/直方图/梯度 norm / 显存日志、close 幂等。
 - 新增 `tests/test_trainer_base.py`：分布式辅助单进程行为、种子可复现、`infer_device`、AMP 上下文、`CheckpointManager` 全状态往返、`BaseTrainer` 初始化。
-- 运行方式：`python -m pytest tests/ -q`（当前 57 passed，1 skipped）。
+- 运行方式：`python -m pytest tests/ -q`（当前 158 passed，1 skipped）。
 
 ### 7.5 [P2] Checkpoint 管理缺乏生命周期策略 ✅ **已完成**
 
@@ -605,6 +649,61 @@ adv = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
 - 支持 `pip install -e .` 开发安装；
 - 建议后续逐步将 `sys.path.insert` 替换为相对/绝对包内导入。
 
+### 7.8 [P3] 缺少 HuggingFace Transformers 兼容层 ✅ **已实现**
+
+**现状**：模型权重无法以 HuggingFace 格式发布或被 `transformers` 工具链加载。
+
+**实现要点**：
+- 新增 `model/hf_model.py`：
+  - `NanoGPTModernConfig` 继承 `PretrainedConfig`，与 `ModernGPTConfig` 双向转换；
+  - `NanoGPTModernForCausalLM` 继承 `PreTrainedModel`，内部托管原生 `ModernGPT`，`forward` / `generate` 直接委托。
+- 新增 `export_to_hf.py`：将 nanoGPT-Modern `.pt` checkpoint 导出为 HF 格式（`config.json` + `model.safetensors`）。
+- 新增 `load_from_hf.py`：将 HF 格式 checkpoint 转回 nanoGPT-Modern `.pt`。
+- `RMSNorm` 移除 `torch.nn.RMSNorm` 子模块，改用 `F.rms_norm`，避免与 fused 层共享权重导致 safetensors 保存失败。
+
+**验证**：`tests/test_hf_compat.py` 4 passed，覆盖 config 往返、HF save/load 权重一致、HF forward/generate 与原生一致。
+
+
+
+
+
+### 7.9 [P3] 模型量化与 GGUF 导出 ✅ **已实现**
+
+**现状**：缺少面向部署的模型量化与跨生态导出能力；外部 `gguf` 包在部分环境（如 Windows）未预装，阻塞了导出脚本运行。
+
+**实现要点**：
+- 新增 `model/quantization.py`：
+  - `QuantConfig` / `QuantizedLinear` 实现静态 per-channel INT8 量化，纯 PyTorch 运行，CPU/GPU 通用；
+  - `quantize_model` / `dequantize_model` 在模型内部替换 `nn.Linear`，支持按子串跳过模块与正则过滤；
+  - 可选 `bitsandbytes` 后端（`bnb_8bit`、`bnb_4bit`），自动处理 weight 迁移到目标设备。
+- 新增 `model/gguf_utils.py`：
+  - 内置最小化的 GGUF writer/reader，支持 `F32` / `F16` / `Q8_0`；
+  - `quantize_q8_0` / `dequantize_q8_0` 严格按 GGUF block 布局（32 元素 + fp16 scale）实现，避免依赖外部 `gguf` 包。
+- 新增 `export_gguf.py`：加载 nanoGPT checkpoint 并导出为 `.gguf`，支持 `--quant f32/f16/q8_0`。
+- `pyproject.toml` 新增 `[project.optional-dependencies] quant = ["bitsandbytes>=0.41.0", "gguf>=0.6.0"]` 与 `nanogpt-export-gguf` 等脚本入口。
+
+**验证**：`tests/test_quantization.py` 8 passed、`tests/test_gguf_export.py` 6 passed；覆盖 INT8 前向一致性、量化/反量化往返、跳过模块、内存估算、`export_gguf.py` CLI、Q8_0 GGUF 文件头与 tensor 元数据解析。
+
+### 7.10 [P3] 数据质量管道（去重/过滤/混合） ✅ **已实现**
+
+**现状**：预训练数据缺少文档级过滤、近重复检测与多源混合能力。
+
+**实现要点**：
+- 新增 `data/filter.py`：
+  - `LengthFilter`、`RepetitionFilter`、`RegexFilter`；
+  - 可选 `FastTextQualityFilter`（fasttext 模型存在时启用，否则透传）；
+  - `CompositeFilter` 串联多种过滤并输出拒绝统计。
+- 新增 `data/dedup.py`：
+  - `MinHash` + `LocalitySensitiveHashing` 实现 band-based LSH；
+  - `MinHashDeduplicator` 批量模式，用于 map-mode prepare；
+  - `StreamingDuplicateDetector` 单-pass 模式，用于 streaming-mode prepare。
+- 新增 `data/mixer.py`：
+  - `MixtureStrategy` 支持温度缩放；
+  - `MixedIterableDataset` 在线按权重采样；
+  - `mix_datasets` 优先使用 HuggingFace `interleave_datasets`，否则回退到自定义 iterable。
+- `data/prepare.py` 集成：新增 `--min_doc_chars`、`--max_doc_chars`、`--max_repetition_ratio`、`--require_regex`、`--reject_regex`、`--dedup_threshold` 等参数；新增 `--mixture_config` 支持多源混合。
+
+**验证**：`tests/test_data_quality.py` 16 passed，覆盖过滤器行为、MinHash 签名相似度、批量/流式去重、混合比例、`prepare.py` 辅助函数。
 
 
 

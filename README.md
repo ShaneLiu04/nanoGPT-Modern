@@ -4,7 +4,7 @@
 
 > :clipboard: 完整的系统改进清单见 [IMPROVEMENT_CHECKLIST.md](IMPROVEMENT_CHECKLIST.md)  
 > :bar_chart: 深度诊断与优化报告见 [IMPROVEMENT_REPORT.md](IMPROVEMENT_REPORT.md)  
-> :white_check_mark: 关键阻塞 Bug 已修复；RL 管线（GRPO / Iterative GRPO）已完成批量化、AMP、梯度累积、LR 调度改造；`pretrain/sft/grpo` 已统一继承 `BaseTrainer`；配置/日志/依赖/可安装化已补齐；SDPA attention 后端可显式选择；checkpoint 生命周期、种子管理、GRPO dropout  guard 已落地；新增 benchmark 评估与消融自动化脚本；DataLoader 缓冲乱序、文档打包 (`PackingDataset`) 与跨文档 mask、`generate()` `torch.compile` 推理加速已完成；回归测试覆盖 `tests/` 全目录（57 passed, 1 skipped）。
+> :white_check_mark: 关键阻塞 Bug 已修复；RL 管线（GRPO / Iterative GRPO）已完成批量化、AMP、梯度累积、LR 调度改造；`pretrain/sft/grpo` 已统一继承 `BaseTrainer`；配置/日志/依赖/可安装化已补齐；SDPA attention 后端可显式选择；checkpoint 生命周期、种子管理、GRPO dropout  guard 已落地；新增 benchmark 评估与消融自动化脚本；DataLoader 缓冲乱序、文档打包 (`PackingDataset`) 与跨文档 mask、`generate()` `torch.compile` 推理加速已完成；**GQA grouped-broadcast 零拷贝**（M2 完成）与 **FlashAttention varlen/kvcache 显式集成**（M7 完成）已落地；回归测试覆盖 `tests/` 全目录（201 passed, 2 skipped），核心模块通过 `mypy` 类型检查。
 
 ---
 
@@ -25,7 +25,7 @@ nanoGPT-Modern 的设计目标是在**可完整复现的轻量级规模**（~50M
 ### 核心创新点
 
 1. **双轨制架构对比**：在同一仓库中实现 GPT-2 经典架构与 LLaMA/Gemma 风格现代架构，可直接切换、公平对比。
-2. **现代组件全集成**：RMSNorm、SwiGLU、RoPE、GQA、KV Cache、MoE（实验性）、EMA 全部可配置。
+2. **现代组件全集成**：RMSNorm、SwiGLU、RoPE、GQA、可选第三方 `flash-attn`、QK-Norm、Attention Temperature、NTK-aware 长度外推、Sliding Window Attention、带负载均衡的 MoE、Paged KV Cache、MTP（Multi-Token Prediction）、KV Cache、EMA 全部可配置。
 3. **三阶段对齐流水线**：预训练 → 监督微调（SFT）→ GRPO 强化学习对齐，覆盖大模型后训练完整链路。
 4. **工程化训练设施**：AMP、GradScaler、梯度累积、多模式 LR Scheduler、Early Stopping、DDP/FSDP、完整 checkpoint 状态恢复。
 5. **严谨的性能测量**：CUDA Events 分离 prefill/decode 阶段，cache/no-cache 双路径消融，KV Cache 显存精确量化。
@@ -43,6 +43,15 @@ python data/prepare.py --split train
 python data/prepare.py --split val
 python data/validate.py data/openwebtext/train.bin
 
+# 2b. 启用数据质量管道：长度过滤 + 重复过滤 + MinHash 去重 + 多源混合
+python data/prepare.py --split train \
+  --min_doc_chars 50 --max_doc_chars 50_000 \
+  --max_repetition_ratio 0.3 \
+  --dedup_threshold 0.85 --dedup_num_hashes 128
+
+# 混合多源数据示例（mixture.json 见文档下方）
+# python data/prepare.py --split train --mixture_config mixture.json
+
 # 3. 快速验证预训练 (1000步, ~5分钟)
 python training/train_pretrain.py --config config/pretrain.yaml --max_iters 1000 --n_kv_head 2
 
@@ -59,12 +68,39 @@ python evaluation/eval_alignment.py --checkpoint out/grpo/best_grpo_g4.pt --ref_
 python evaluation/eval_benchmark.py --checkpoint out/pretrain/best_ckpt.pt \
     --data_dir data/openwebtext --split val --tasks hellaswag,lambada_openai
 
+# 6.1 Hydra / OmegaConf 入口（M23，与上面 argparse 入口等价）
+python training/train_pretrain_hydra.py
+python training/train_pretrain_hydra.py batch_size=16 n_layer=2
+python training/train_sft_hydra.py init_from=out/pretrain/best_ckpt.pt
+python training/train_grpo_hydra.py init_from=out/sft/best_sft-only.pt ref_from=out/sft/best_sft-only.pt
+python inference/generate_hydra.py checkpoint=out/pretrain/best_ckpt.pt prompt="Hello"
+python evaluation/eval_benchmark_hydra.py checkpoint=out/pretrain/best_ckpt.pt
+
 # 7. 消融实验自动化
 python run_ablations.py --mode inference --checkpoint out/pretrain/best_ckpt.pt
 
 # 8. 运行回归测试
 python -m pytest tests/ -q
 ```
+
+---
+
+## 近期关键优化
+
+- **类型安全**：核心模块（`model/modern_gpt.py`、`utils/rl_utils.py`）已添加类型注解；`tests/test_mypy.py` 在 pytest 中调用 `mypy` 防止回退。
+- **MoE 负载均衡**：`num_experts > 1` 时自动启用 load-balancing aux loss 与 per-expert 容量限制，可通过 `return_aux_loss=True` 获取并加入训练 loss。
+- **FlashAttention 可选后端**：`model/flash_attention.py` 封装 `flash_attn_func` / `flash_attn_varlen_func` / `flash_attn_with_kvcache` 三接口；`use_flash_attn=True` 时优先调用 flash kernel，不可用时自动回退 SDPA/eager；GQA 原生支持无需 repeat_interleave。
+- **GQA grouped-broadcast 零拷贝**：`CausalSelfAttention` 在 GQA 模式下将 Q reshape 为 `[B, n_kv, n_rep, T, hd]`、KV unsqueeze 为 `[B, n_kv, 1, S, hd]`，SDPA 自动广播 singleton 维度，消除 `repeat_interleave` 的 KV 临时膨胀，完全保留 GQA 显存收益。`probe_gqa_sdpa_support()` 懒探测设备支持，`gqa_broadcast` 配置项支持 auto/grouped/raw/repeat 四种策略。
+- **QK-Norm / Attention Temperature / NTK 外推 / Sliding Window**：`qk_norm`、`attn_temperature`、`rope_scaling`、`sliding_window_size` 已接入 `ModernGPTConfig`。
+- **Paged KV Cache**：新增 `model/paged_kv_cache.py`，`use_paged_kv_cache=True` 时 `generate()` 使用 block-table 布局，未来可对接 PagedAttention kernel。
+- **Multi-Token Prediction (MTP)**：`n_future > 0` 时增加未来 token 预测头，训练 loss 自动叠加 MTP loss。
+- **DPO / IPO / KTO**：新增 `utils/dpo_utils.py` 与 `training/train_dpo.py`，支持三种偏好对齐损失的统一训练入口。
+- **类型注解扩展**：`model/modern_gpt.py`、`model/paged_kv_cache.py`、`utils/rl_utils.py`、`utils/dpo_utils.py`、`inference/generate_utils.py` 通过 `mypy` 检查。
+- **`generate()` fullgraph 编译**：`ModernGPT.generate(..., compile="fullgraph")` 对单 token decode 步骤做 `torch.compile(..., fullgraph=True, dynamic=True)`；提前终止用 mask 操作替代，失败自动回退 eager。
+- **Speculative Decoding**：`ModernGPT.generate(..., draft_model=...)` 支持 draft-then-verify 投机采样，batch size 1 场景下可用小模型加速目标模型推理。
+- **HuggingFace 兼容层**：新增 `model/hf_model.py`、`export_to_hf.py`、`load_from_hf.py`；`NanoGPTModernConfig` / `NanoGPTModernForCausalLM` 包装原生 ``ModernGPT``，支持 HF 格式保存与加载；`RMSNorm` 改用 `F.rms_norm` 消除与 fused 层的共享权重，兼容 safetensors 序列化。
+- **模型量化与 GGUF 导出**：新增 `model/quantization.py` 提供静态 per-channel INT8 量化与可选 `bitsandbytes` 8-bit/4-bit 后端；新增 `model/gguf_utils.py` 与 `export_gguf.py`，无需外部 `gguf` 包即可导出 `f32/f16/q8_0` 的 GGUF 文件。
+- **数据质量管道**：新增 `data/filter.py`（长度/重复/正则/可选 fasttext 过滤）、`data/dedup.py`（MinHash + LSH 近重复检测）、`data/mixer.py`（多源数据按权重混合）；`data/prepare.py` 集成过滤/去重/混合参数，支持命令行一键启用。
 
 ---
 
@@ -80,14 +116,34 @@ python -m pytest tests/ -q
 | `data/openwebtext.py` | `MemmapDataset` 流式读取 + `shuffle_buffer` 缓冲乱序；`DocBoundaryDataset` 按 EOT 文档边界切分，支持断点续训 offset；`PackingDataset` 多文档打包并产出 `document_ids`；`.idx` 自动识别 uint16/uint32 |
 | `data/arithmetic.py` | 合成算术数据集生成器：`easy` / `medium` / `hard`；`ArithmeticDataset` 在 `__init__` 中一次性预编码全部样本，避免 DataLoader worker 重复 tokenize |
 | `data/validate.py` | 数据质检：token 范围检查、词表覆盖率、EOT 频率统计、随机 decode 采样 |
+| `data/filter.py` | 文档级质量过滤：长度、字符 n-gram 重复、正则、可选 fasttext 语言/质量分类 |
+| `data/dedup.py` | MinHash + LSH 近重复检测，支持批量 `MinHashDeduplicator` 与流式 `StreamingDuplicateDetector` |
+| `data/mixer.py` | 多源数据集按权重混合，支持温度缩放与 `MixedIterableDataset` |
+
+**数据质量管道**：`data/prepare.py` 在 tokenize 之前可依次执行过滤、去重、混合：
+- 过滤：`--min_doc_chars`、`--max_doc_chars`、`--max_repetition_ratio`、`--require_regex`、`--reject_regex`
+- 去重：`--dedup_threshold`（Jaccard 阈值）、`--dedup_ngram`、`--dedup_num_hashes`、`--dedup_num_bands`、`--dedup_rows_per_band`
+- 混合：`--mixture_config` 指向 JSON，例如
+  ```json
+  {
+    "datasets": {
+      "openwebtext": {"name": "openwebtext", "split": "train"},
+      "skylion": {"name": "Skylion007/openwebtext", "split": "train", "trust_remote_code": true}
+    },
+    "weights": {"openwebtext": 0.7, "skylion": 0.3},
+    "temperature": 0.8,
+    "seed": 42
+  }
+  ```
 
 ### 2. 模型层 --- 双轨制架构对比
 
 | 模块 | 职能 |
 |------|------|
 | `model/baseline_gpt.py` | GPT-2 经典架构：LayerNorm + GELU FFN + 绝对位置编码。支持 SDPA/manual 双后端切换、Pre/Post-Norm |
-| `model/modern_gpt.py` | ModernGPT：RMSNorm + SwiGLU + RoPE + GQA + MoE(可选) + EMA。支持 KV Cache 原生推理 |
+| `model/modern_gpt.py` | ModernGPT：RMSNorm + SwiGLU + RoPE + GQA + 可选 flash-attn + QK-Norm + Attention Temperature + NTK 外推 + Sliding Window + MoE(带负载均衡) + MTP + EMA。支持 KV Cache / Paged KV Cache 原生推理 |
 | `model/kv_cache_utils.py` | `KVCacheManager`：管理逐层 past KV 张量，支持滑动窗口截断、批量重置、GQA 适配 |
+| `model/paged_kv_cache.py` | `PagedKVCacheManager`：block-table 布局 KV Cache，API 兼容 `KVCacheManager`，为 PagedAttention kernel 预留扩展点 |
 
 **两模型的关系**：共享相同的训练超参、数据顺序、随机种子，确保对比实验中 **唯一变量是架构差异**。
 
@@ -112,13 +168,64 @@ python -m pytest tests/ -q
 **推理管线**：`ModernGPT.generate()` 支持两种路径：
 - **No-cache 路径**：每次生成一个 token 都完整 forward 全序列 (O(T^2) 复杂度)
 - **Cache 路径**：prefill 阶段一次编码全 prompt → decode 阶段逐 token forward 仅新 token，复用 cached KV (O(T) 复杂度)
-- **编译加速**：`ModernGPT.generate(..., compile=True)` 或 `python inference/generate.py --compile` 在 CUDA 上通过 `torch.compile` 编译 forward，失败自动回退 eager；这是当前动态 KV Cache 结构下可落地的 graph-mode 优化
+- **编译加速**：`ModernGPT.generate(..., compile=True)` 或 `python inference/generate.py --compile` 在 CUDA 上通过 `torch.compile` 编译 forward，失败自动回退 eager；`compile="fullgraph"` 进一步对单 token decode 步骤做 `fullgraph=True` 编译，提前终止用 mask 操作替代
+- **投机采样**：`ModernGPT.generate(..., draft_model=...)` 支持 draft-then-verify 投机解码，可用小 draft 模型加速大目标模型生成
+
+```python
+# 使用与目标模型同架构的较小模型作为 draft 模型
+draft_config = ModernGPTConfig(n_layer=2, n_head=4, n_embd=256, block_size=1024)
+draft_model = ModernGPT(draft_config).cuda().eval()
+
+out = target_model.generate(
+    idx,
+    max_new_tokens=200,
+    use_cache=True,
+    draft_model=draft_model,
+    draft_tokens=4,
+    draft_temperature=0.0,   # greedy draft 最稳定
+)
+```
+
+**HuggingFace 格式导出/加载**：
+
+```bash
+# nanoGPT-Modern -> HuggingFace
+python export_to_hf.py --checkpoint out/pretrain/best_ckpt.pt --out_dir hf/nanogpt-modern
+
+# HuggingFace -> nanoGPT-Modern
+python load_from_hf.py --hf_dir hf/nanogpt-modern --out out/pretrain/best_ckpt_roundtrip.pt
+```
+
+```python
+from model.hf_model import NanoGPTModernForCausalLM
+
+wrapper = NanoGPTModernForCausalLM.from_pretrained("hf/nanogpt-modern")
+out = wrapper.generate(idx, max_new_tokens=100, use_cache=True, top_k=1)
+```
+
+**模型量化与 GGUF 导出**：
+
+```bash
+# 静态 per-channel INT8 量化（纯 PyTorch，CPU/GPU 通用）
+python - <<'PY'
+import torch
+from model.modern_gpt import ModernGPT, ModernGPTConfig
+from model.quantization import QuantConfig, quantize_model
+model = ModernGPT(ModernGPTConfig()).eval()
+quantize_model(model, QuantConfig(method="int8", compute_dtype=torch.float16))
+PY
+
+# 导出为 GGUF（支持 f32 / f16 / q8_0）
+python export_gguf.py --checkpoint out/pretrain/best_ckpt.pt --out out/pretrain/best_ckpt.q8_0.gguf --quant q8_0
+```
+
+```
 
 ### 5. 评估与奖励系统层
 
 | 模块 | 职能 |
 |------|------|
-| `evaluation/eval_alignment.py` | 全维度评估：按 prompt 长度分组批量生成，KL 仅对 response token 计算；输出 accuracy / format_pass_rate / process_score / invalid_rate / reward / KL_divergence |
+| `evaluation/eval_alignment.py` | 全维度评估：按 prompt 长度分组批量生成，KL 仅对 response token 计算，训练与评估统一使用反向 KL `ref_logp - policy_logp` 并做数值裁剪；输出 accuracy / format_pass_rate / process_score / invalid_rate / reward / KL_divergence |
 | `rewards/rule_reward.py` | 规则奖励函数：格式分 + 过程奖励（中间推导步骤）+ 连续正确性分（相对误差多级 partial credit）；拒绝 nan/inf/overflow，检查标签闭合与模板一致性 |
 
 ### 6. 工具与基础设施层
@@ -189,7 +296,7 @@ KV Cache: 18,432 B/tok       KV Cache: 9,216 B/tok (-50%)   KV Cache: 4,608 B/to
 参数: 54.0M                  参数: 51.7M                    参数: 50.5M
 ```
 
-实现方式：`CausalSelfAttention` 中 K/V 投影到 `n_kv_head * head_dim` (窄投影)，reshape 后通过 `repeat_interleave(self.n_rep, dim=1)` 扩展到与 Q 相同头数，再进入 `F.scaled_dot_product_attention`。
+实现方式：`CausalSelfAttention` 中 K/V 投影到 `n_kv_head * head_dim`（窄投影），通过 **grouped-broadcast** 策略将 Q reshape 为 `[B, n_kv_head, n_rep, T, hd]`、KV unsqueeze 为 `[B, n_kv_head, 1, S, hd]`，SDPA 自动广播 singleton 维度，**零 KV 拷贝**，保留 GQA 显存节省。运行时通过 `probe_gqa_sdpa_support()` 懒探测当前设备/ dtype 的支持情况，可通过 `gqa_broadcast` 配置项（`"auto"`/`"grouped"`/`"raw"`/`"repeat"`）强制指定策略。
 
 ---
 
@@ -236,7 +343,7 @@ Step 3: [tok1,tok2,tok3] -> ...   Step 3 (decode):  [tokN+2] -> 同上
 以下列出从 [IMPROVEMENT_CHECKLIST.md](IMPROVEMENT_CHECKLIST.md) 中已落地的主要改进：
 
 ### 模型架构层
-- [x] **[P0] GQA 完整实现**：`n_kv_head=2` 已配置，`repeat_interleave` 正确执行，KV Cache 节省 75%
+- [x] **[P0] GQA 完整实现**：`n_kv_head=2` 已配置，grouped-broadcast 零拷贝替代 `repeat_interleave`，KV Cache 节省 75%，`gqa_broadcast` 配置项支持 auto/grouped/raw/repeat
 - [x] **[P1] BaselineGPT SDPA 后端**：`attention_backend="sdpa"|"manual"` 可切换
 - [x] **[P1] Pre/Post-Norm 消融开关**：`norm_position="pre"|"post"`
 - [x] **[P2] SwiGLU multiple-of 对齐**：`intermediate_size` 向上取整至 128 的倍数 (1408)
@@ -265,9 +372,13 @@ Step 3: [tok1,tok2,tok3] -> ...   Step 3 (decode):  [tokN+2] -> 同上
 - [x] **[P2] KVCacheManager 集成**：generate() cache 路径使用 KVCacheManager
 - [x] **[P2] 生成策略扩展**：top_p (nucleus) + repetition_penalty
 - [x] **[P3] Batch 推理**：eos_token_id + finished mask 实现逐序列提前终止，cache/no-cache 双路径支持
-- [x] **[P1] 生成循环 torch.compile**：`ModernGPT.generate(compile=True)` + `inference/generate.py --compile`，CUDA 上编译 forward 降低 kernel launch overhead，失败自动回退 eager
+- [x] **[P1] 生成循环 torch.compile**：`ModernGPT.generate(compile=True)` + `inference/generate.py --compile`，CUDA 上编译 forward 降低 kernel launch overhead，失败自动回退 eager；`compile="fullgraph"` 对单 token decode 步骤做 `fullgraph=True` 编译，mask 替代 break
+- [x] **[P2] Speculative Decoding**：`ModernGPT.generate(..., draft_model=...)` 支持 draft-then-verify 投机采样，自 draft 模型 greedy 输出与目标 greedy 完全一致
+- [x] **[P3] HuggingFace 兼容层**：`model/hf_model.py` 提供 `NanoGPTModernConfig` / `NanoGPTModernForCausalLM`；`export_to_hf.py` / `load_from_hf.py` 实现 nanoGPT ↔ HF 格式互转；`RMSNorm` 改用 `F.rms_norm` 以兼容 safetensors
+- [x] **[P3] 模型量化与 GGUF 导出**：`model/quantization.py` 提供 INT8 静态量化与可选 `bitsandbytes` 8-bit/4-bit；`model/gguf_utils.py` 内置 F32/F16/Q8_0 GGUF writer；`export_gguf.py` 一键导出；`tests/test_quantization.py`、`tests/test_gguf_export.py` 覆盖量化误差与 GGUF 往返
 
 ### 数据管道层
+- [x] **[P3] 数据质量管道**：`data/filter.py` 长度/重复/正则/可选 fasttext 过滤；`data/dedup.py` MinHash+LSH 去重；`data/mixer.py` 多源混合；`data/prepare.py` 集成全部参数；`tests/test_data_quality.py` 覆盖
 - [x] **[P2] 数据质量验证**：`data/validate.py`
 - [x] **[P1] 算术数据多样化模板**：5种 hard 模板 (嵌套括号/优先级/多组/指数取模/两组乘法)
 - [x] **[P1] 文档边界数据集可运行**：`DocBoundaryDataset` 支持 `resume_offset`
@@ -282,7 +393,7 @@ Step 3: [tok1,tok2,tok3] -> ...   Step 3 (decode):  [tokN+2] -> 同上
 - [x] **[P0] GRPO dropout guard**：默认拒绝 dropout > 0，提供 `--allow_dropout` 覆盖
 
 ### 质量保障
-- [x] **[P0] 回归测试**：`tests/test_bugfixes.py` 覆盖 KV Cache dtype / 环形缓存顺序 / 滑动窗口淘汰 / 超长生成与 no-cache 一致性 / set-restore、优化器去重、EMA、checkpoint round-trip、DocBoundaryDataset、GRPO batched logprob 一致性、GRPO 梯度累积行为、IterativeGRPOTrainer 数据池构建、`data/prepare.py` shard/dtype/index、算术预编码、规则奖励各种 case；`tests/test_packing.py` 覆盖 packing 格式 / `document_ids` mask / shuffle buffer；`tests/test_generate_compile.py` 覆盖 `compile=True` 与 eager 输出一致
+- [x] **[P0] 回归测试**：`tests/test_bugfixes.py` 覆盖 KV Cache dtype / 环形缓存顺序 / 滑动窗口淘汰 / 超长生成与 no-cache 一致性 / set-restore、优化器去重、EMA、checkpoint round-trip、DocBoundaryDataset、GRPO batched logprob 一致性、GRPO 梯度累积行为、IterativeGRPOTrainer 数据池构建、`data/prepare.py` shard/dtype/index、算术预编码、规则奖励各种 case；`tests/test_packing.py` 覆盖 packing 格式 / `document_ids` mask / shuffle buffer；`tests/test_generate_compile.py` 覆盖 `compile=True` 与 eager 输出一致；`tests/test_data_quality.py` 覆盖过滤/去重/混合
 - [x] **[P0] 配置系统测试**：`tests/test_config.py` 覆盖 YAML 加载/环境变量/嵌套 CLI 覆盖、`NestedNamespace`、flatten/unflatten、`to_dict`、`validate_keys`
 - [x] **[P1] 日志系统测试**：`tests/test_logger.py` 覆盖 wandb/TensorBoard 失败降级、标量/文本/直方图、梯度 norm / 显存日志、close 幂等
 - [x] **[P1] 训练基础设施测试**：`tests/test_trainer_base.py` 覆盖分布式辅助单进程行为、种子可复现、`infer_device`、AMP 上下文、`CheckpointManager` 全状态往返与 `keep_last_n`、`BaseTrainer` 初始化、worker 种子
@@ -483,16 +594,31 @@ python tests/test_bugfixes.py       # 关键 Bug 回归测试
 
 ```python
 ModernGPTConfig(
-    vocab_size=50257,         # 词表大小 (GPT-2 tokenizer)
-    block_size=1024,          # 最大上下文长度
-    n_layer=12,               # Transformer 层数
-    n_head=8,                 # Query 注意力头数
-    n_embd=512,               # 隐藏维度 (head_dim = 512/8 = 64)
-    n_kv_head=None,           # KV 头数 (None=n_head 即 MHA; 设为 2/4 启用 GQA)
-    intermediate_size=None,   # SwiGLU 隐层维度 (None=自动: 8d/3 向上取整到128倍数 -> 1408)
-    dropout=0.0,              # Dropout rate
-    norm_position="pre",      # Pre-Norm / Post-Norm
-    num_experts=1,            # MoE experts (1=密集 SwiGLU, >1=top-1 gating)
+    vocab_size=50257,            # 词表大小 (GPT-2 tokenizer)
+    block_size=1024,             # 最大上下文长度
+    n_layer=12,                  # Transformer 层数
+    n_head=8,                    # Query 注意力头数
+    n_embd=512,                  # 隐藏维度 (head_dim = 512/8 = 64)
+    n_kv_head=None,              # KV 头数 (None=n_head 即 MHA; 设为 2/4 启用 GQA)
+    intermediate_size=None,      # SwiGLU 隐层维度 (None=自动: 8d/3 向上取整到128倍数 -> 1408)
+    dropout=0.0,                 # Dropout rate
+    norm_position="pre",         # Pre-Norm / Post-Norm
+    num_experts=1,               # MoE experts (1=密集 SwiGLU, >1=top-1 gating)
+    gradient_checkpointing=False,# 是否启用梯度检查点
+    qk_norm=False,               # 是否在 RoPE 前对 Q/K 做 per-head RMSNorm
+    attn_temperature=1.0,        # Attention 温度系数 (1.0=标准 1/sqrt(head_dim))
+    rmsnorm_eps=1e-6,            # RMSNorm epsilon
+    rope_theta=10000.0,          # RoPE 基频 theta
+    rope_scaling=None,           # RoPE 长度外推, e.g. {"type": "ntk", "factor": 2.0}
+    moe_aux_loss_factor=0.01,    # MoE load-balancing aux loss 系数
+    moe_capacity_factor=1.25,    # MoE per-expert 容量因子
+    use_flash_attn=False,        # 是否尝试第三方 flash-attn 后端
+    sliding_window_size=None,    # Sliding Window Attention 窗口大小 (None=全长)
+    use_paged_kv_cache=False,    # 是否使用 block-table Paged KV Cache
+    kv_cache_block_size=16,      # Paged KV Cache 每块 token 数
+    n_future=0,                  # Multi-Token Prediction 未来头数量 (0=关闭)
+    mtp_weight=1.0,              # MTP loss 权重
+    gqa_broadcast="auto",        # GQA 广播策略: auto(探测)/grouped(零拷贝)/raw(直传)/repeat(兼容)
 )
 ```
 
@@ -521,6 +647,8 @@ nanogpt-modern/
 ├── model/
 │   ├── baseline_gpt.py         # GPT-2 (LayerNorm/GELU/AbsPos + SDPA/manual + Pre/Post-Norm)
 │   ├── modern_gpt.py           # ModernGPT (RMSNorm/SwiGLU/RoPE/GQA/MoE/EMA + Pre/Post-Norm)
+│   ├── flash_attention.py      # FlashAttention 封装 (flash_attn_func/varlen/kvcache + 条件导入 + 自动回退)
+│   ├── attention_utils.py      # Attention 工具 (后端切换 + GQA SDPA 探测 probe_gqa_sdpa_support)
 │   └── kv_cache_utils.py       # KVCacheManager + 滑动窗口
 ├── training/
 │   ├── trainer_base.py         # BaseTrainer: 统一分布式/AMP/scheduler/checkpoint/logger

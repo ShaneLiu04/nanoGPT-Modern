@@ -1,10 +1,10 @@
 # nanoGPT-Modern 系统深度诊断与改进报告
 
-> 报告生成时间：2026-06-15
+> 报告生成时间：2026-06-15（最后更新：2026-06-17）
 > 诊断范围：`model/`、`training/`、`data/`、`inference/`、`evaluation/`、`rewards/`、`utils/`、`config/` 及根目录自动化脚本
 > 方法：源码静态分析 + 模块依赖梳理 + 实验结果复现审查
 >
-> **修复状态**：本报告中 §3 列出的 6 个关键 Bug/缺陷已在本轮迭代中修复；§4.1 所述 RL 管线性能瓶颈（GRPO 批量化、AMP、梯度累积、LR 调度）也已完成；§5 工程与可维护性改造（BaseTrainer 统一训练抽象、嵌套配置系统、日志失败降级与扩展、`requirements.txt` 补齐、回归测试扩展）已全部落地。后续增量完成：SDPA attention 后端显式选择、GRPO dropout guard、checkpoint 生命周期管理、种子管理健壮性、Streaming DataLoader 可恢复状态、预训练 benchmark 评估、消融自动化脚本、`pyproject.toml` 可安装化。当前回归测试位于 `tests/`，共 57 passed，1 skipped。
+> **修复状态**：本报告中 §3 列出的 6 个关键 Bug/缺陷已在本轮迭代中修复；§4.1 所述 RL 管线性能瓶颈（GRPO 批量化、AMP、梯度累积、LR 调度）也已完成；§5 工程与可维护性改造（BaseTrainer 统一训练抽象、嵌套配置系统、日志失败降级与扩展、`requirements.txt` 补齐、回归测试扩展）已全部落地。后续增量完成：SDPA attention 后端显式选择、GRPO dropout guard、checkpoint 生命周期管理、种子管理健壮性、Streaming DataLoader 可恢复状态、预训练 benchmark 评估、消融自动化脚本、`pyproject.toml` 可安装化。**M2 GQA grouped-broadcast 零拷贝与 M7 FlashAttention varlen/kvcache 显式集成已完成**。当前回归测试位于 `tests/`，共 201 passed，2 skipped；新增 `tests/test_gqa_broadcast.py`（16 测试）与 `tests/test_flash_attention.py`（10 测试）。
 
 ---
 
@@ -46,7 +46,7 @@
 
 已完成 38 / 38 项，覆盖现代 Transformer 核心组件与基础训练设施：
 
-- ✅ GQA、SDPA/FlashAttention 自动调度、Pre/Post-Norm 消融
+- ✅ GQA（grouped-broadcast 零拷贝）、SDPA/FlashAttention 自动调度与显式集成（varlen/kvcache）、Pre/Post-Norm 消融
 - ✅ SwiGLU 尺寸对齐、RoPE 缓存、KV Cache Manager
 - ✅ 梯度累积、多模式 LR Scheduler、EMA 基础设施、Early Stopping
 - ✅ FSDP/DDP、混合精度（AMP + GradScaler）
@@ -65,7 +65,11 @@
 - ✅ 消融自动化脚本：`run_ablations.py`
 - ✅ DataLoader shuffle 与文档边界：`MemmapDataset.shuffle_buffer`、`DocBoundaryDataset`、`PackingDataset`
 - ✅ 数据打包与跨文档 mask：`document_ids` 传入 `ModernGPT`，`prepare.py` 记录 `doc_boundary`
-- ✅ 生成循环 `torch.compile`：`ModernGPT.generate(compile=True)` + `inference/generate.py --compile`
+- ✅ 生成循环 `torch.compile`：`ModernGPT.generate(compile=True)` + `inference/generate.py --compile`；`compile="fullgraph"` 对单 token decode 步骤做 `fullgraph=True` 编译
+- ✅ Speculative Decoding：`ModernGPT.generate(..., draft_model=...)` 支持 draft-then-verify 投机采样
+- ✅ HuggingFace 兼容层：`model/hf_model.py` + `export_to_hf.py` / `load_from_hf.py` 实现 nanoGPT ↔ HF 格式互转
+- ✅ 模型量化与 GGUF 导出：`model/quantization.py`（INT8 + 可选 bitsandbytes）+ `model/gguf_utils.py`（内置 F32/F16/Q8_0 writer）+ `export_gguf.py`；无需外部 `gguf` 包即可生成 `.gguf`
+- ✅ 数据质量管道：`data/filter.py`（长度/重复/正则/可选 fasttext）+ `data/dedup.py`（MinHash+LSH 去重）+ `data/mixer.py`（多源混合）；`data/prepare.py` 集成全部参数
 
 ### 2.3 实验现状与目标差距
 
@@ -164,7 +168,7 @@ def rotate_half(x):
 
 每次前向都产生新的张量拷贝。可使用 in-place 操作或 `flash-attn` 的 `apply_rotary_emb_` 优化。
 
-#### 4.2.3 GQA `repeat_interleave` 膨胀 KV 显存
+#### 4.2.3 GQA `repeat_interleave` 膨胀 KV 显存 ✅ 已修复
 
 ```python
 if self.use_gqa:
@@ -172,7 +176,9 @@ if self.use_gqa:
     v = v.repeat_interleave(self.n_rep, dim=1)
 ```
 
-功能正确，但将 KV head 显式复制到 Q head 数量，使 KV 显存从 `[B, n_kv_head, T, hd]` 膨胀到 `[B, n_head, T, hd]`。PyTorch SDPA 支持通过广播处理不同 head 数，可省去 `repeat_interleave`，保留 GQA 的显存优势。
+功能正确，但将 KV head 显式复制到 Q head 数量，使 KV 显存从 `[B, n_kv_head, T, hd]` 膨胀到 `[B, n_head, T, hd]`。
+
+**已实现 grouped-broadcast 零拷贝**：将 Q reshape 为 `[B, n_kv_head, n_rep, T, hd]`，KV unsqueeze 为 `[B, n_kv_head, 1, S, hd]`，SDPA 自动广播 singleton 维度，零 KV 拷贝，所有 SDPA 后端均支持。运行时通过 `probe_gqa_sdpa_support()` 懒探测，`gqa_broadcast` 配置项支持 auto/grouped/raw/repeat 四种策略。
 
 #### 4.2.4 MoE 实现仅具示意性
 
@@ -360,14 +366,14 @@ KL 计算已改为仅对 response target positions 求和。实现流程：
 | P1 | 评估脚本批量化生成 | 评估加速 5-10× |
 | P1 | 修复 KL 计算 mask 与训练一致 | 指标可比、有意义 |
 | P1 | checkpoint 保存随机状态 / scheduler / scaler / EMA | 断点续训可复现 |
-| P1 | 引入统一配置系统（OmegaConf / Hydra） | 实验可管理 |
+| P1 | 引入统一配置系统（OmegaConf / Hydra） | 实验可管理 | ✅ 已完成 |
 
 ### 6.3 长期：性能与规模扩展（1-3 月）
 
 | 优先级 | 任务 | 预期收益 |
 |--------|------|----------|
 | P2 | 预分配静态 KV Cache / Paged KV Cache | 长序列推理 2-5× 加速 |
-| P2 | 移除 GQA `repeat_interleave`，利用 SDPA 广播 | 减少 30%-50% KV 显存 |
+| P2 | 移除 GQA `repeat_interleave`，利用 SDPA 广播 | ✅ 已完成：grouped-broadcast 零拷贝 |
 | P2 | 使用 fused RMSNorm / fused RoPE | 每层 forward 5%-10% 加速 |
 | P2 | 数据预处理分 shard + 多进程 | 支持完整 OpenWebText |
 | P2 | 奖励函数细化（过程奖励、相对误差、长度惩罚） | RL 信号更强，对齐效果更好 |
@@ -387,7 +393,7 @@ KL 计算已改为仅对 response target positions 求和。实现流程：
 
 1. **修复 KV Cache dtype**：`cache.init_cache(B, idx.device, next(self.parameters()).dtype)`。
 2. **静态 KV Cache ✅ 已完成**：预分配 `[B, n_kv_heads, max_cache_len, head_dim]` 环形缓存，用指针写入，避免 `torch.cat`；滑动窗口保留 `max_cache_len - 1` 个 token，保证与 no-cache 路径在超长生成时数值一致。
-3. **GQA 优化**：移除 `repeat_interleave`，直接传入不同 head 数的 Q/K/V 给 SDPA。
+3. **GQA 优化 ✅ 已完成**：移除 `repeat_interleave`，改用 grouped-broadcast（Q reshape `[B,n_kv,rep,T,D]` + KV unsqueeze `[B,n_kv,1,S,D]`，SDPA 广播 singleton 维度），零 KV 拷贝。`probe_gqa_sdpa_support()` 懒探测，`gqa_broadcast` 配置项支持 auto/grouped/raw/repeat。
 4. **Fused 算子**：
    - 使用 `torch.nn.RMSNorm`（PyTorch 2.4+）或 `apex`/`flash-attn` 的 RMSNorm；
    - 使用 `flash-attn` 的 `apply_rotary_emb_` 替换手写 RoPE。
@@ -431,8 +437,9 @@ KL 计算已改为仅对 response target positions 求和。实现流程：
 1. **修复 benchmark 参数传递 ✅ 已完成**：`benchmark()` 接收并透传 `temperature/top_k/top_p/use_cache`。
 2. **批量推理**：支持 batch > 1 的高效生成。
 3. **优化重复惩罚**：使用集合去重历史 token，或限制在最近 N 个 token。
-4. **生成循环 torch.compile ✅ 已完成**：`ModernGPT.generate(compile=True)` 在 CUDA 上编译 forward，失败自动回退 eager；`inference/generate.py` 新增 `--compile` 参数。
-5. **接入高效推理后端**：长期考虑 vLLM / SGLang / TGI。
+4. **生成循环 torch.compile ✅ 已完成**：`ModernGPT.generate(compile=True)` 在 CUDA 上编译 forward，失败自动回退 eager；`compile="fullgraph"` 对单 token decode 步骤做 `fullgraph=True` 编译，提前终止用 mask 操作替代；`inference/generate.py` 新增 `--compile` 参数。
+5. **Speculative Decoding ✅ 已完成**：`ModernGPT.generate(..., draft_model=...)` 支持 draft-then-verify 投机采样，batch size 1 场景下可用小模型加速目标模型。
+6. **接入高效推理后端**：长期考虑 vLLM / SGLang / TGI。
 
 ### 7.5 `evaluation/` 评估层
 
@@ -497,7 +504,7 @@ KL 计算已改为仅对 response target positions 求和。实现流程：
 1. ✅ 静态 KV Cache / Paged KV Cache
 2. fused RMSNorm / RoPE
 3. ✅ 生成循环 torch.compile
-4. GQA 移除 repeat_interleave
+4. ✅ GQA 移除 repeat_interleave（grouped-broadcast 零拷贝）
 5. DDP/FSDP 覆盖 SFT/GRPO
 6. 单元测试覆盖
 
@@ -509,7 +516,7 @@ KL 计算已改为仅对 response target positions 求和。实现流程：
 2. **小模型容量瓶颈**：3M 参数模型无法学会算术推理，SFT 只能学到格式。不要基于小模型结论否定 ModernGPT 架构价值。
 3. **KV Cache 在小模型下可能无益**：短序列/小模型场景下，KV Cache 管理开销可能超过计算节省。应在 50M 模型 + 长序列上重新测量。
 4. **GRPO 训练稳定性**：二值奖励 + 小模型 + 短步数容易导致策略震荡。需要更细粒度奖励、更长训练、更大模型容量。
-5. **torch.compile 与动态结构冲突**：ModernGPT `generate` 使用动态 list of tuples 传递 KV cache，可能与 `fullgraph=True` 冲突，建议使用 `fullgraph=False` 或改为静态 cache。
+5. **torch.compile 与动态结构**：`ModernGPT.generate(compile="fullgraph")` 在限定条件（无 ring-buffer wrap-around、无 sliding-window/paged-cache）下已可成功编译单 token decode 步骤；更复杂的动态结构场景会继续关注。
 
 ---
 
