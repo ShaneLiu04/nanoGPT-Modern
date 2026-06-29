@@ -1,0 +1,18 @@
+# SFT configuration
+init_from: out/pretrain/best_ckpt.pt
+out_dir: out/sft
+variant: sft-only       # or sft-continued
+
+batch_size: 8
+gradient_accumulation_steps: 1   # accumulate gradients across N micro batches
+max_length: 256
+epochs: 3
+learning_rate: 3.0e-4
+min_lr: 1.0e-5
+lr_schedule: cosine     # cosine / linear / wsd / constant
+weight_decay: 0.1
+grad_clip: 1.0
+eval_interval: 100
+seed: 1337
+device: cuda
+use_wandb: false

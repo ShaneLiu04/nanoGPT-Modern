@@ -1,0 +1,18 @@
+torch>=2.0.0
+numpy
+tiktoken
+tensorboard
+wandb
+pyyaml
+
+# Data / Hub
+datasets
+huggingface_hub
+safetensors
+
+# Configuration frameworks (used by experiments and optional Hydra/OmegaConf configs)
+omegaconf
+hydra-core
+
+# Testing
+pytest

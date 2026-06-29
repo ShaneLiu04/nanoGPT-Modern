@@ -1,0 +1,8 @@
+# @package _global_
+# Optimizer / LR schedule defaults.
+
+learning_rate: 6.0e-4
+min_lr: 6.0e-5
+lr_schedule: cosine
+weight_decay: 0.1
+grad_clip: 1.0

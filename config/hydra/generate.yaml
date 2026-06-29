@@ -1,0 +1,29 @@
+# Hydra configuration for text generation.
+defaults:
+  - defaults/model/modern
+  - _self_
+
+checkpoint: out/pretrain/best_ckpt.pt
+model: modern
+prompt: "The future of artificial intelligence is"
+
+max_new_tokens:
+  - 400
+num_samples: 100
+temperature: 1.0
+top_k: 50
+top_p: null
+
+output_json: null
+prompt_len: 50
+
+device: cuda
+attn_backend: auto
+compile: false
+
+hydra:
+  job:
+    chdir: false
+  output_subdir: null
+  run:
+    dir: .

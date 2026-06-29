@@ -1,0 +1,18 @@
+# Inference configuration
+checkpoint: out/pretrain/best_ckpt.pt
+model: modern
+
+prompt: "The future of artificial intelligence is"
+max_new_tokens: 400
+num_samples: 100
+temperature: 1.0
+top_k: 50
+batch_size: 1
+device: cuda
+
+# Toggle cache on/off for ablation
+use_cache: true
+
+# Compile the forward pass with torch.compile (CUDA only) to reduce
+# token-by-token decode overhead. Falls back to eager on failure.
+compile: false

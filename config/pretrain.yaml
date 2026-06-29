@@ -1,0 +1,46 @@
+﻿# Pretraining configuration for ModernGPT (and BaselineGPT)
+model: modern          # or baseline
+out_dir: out/pretrain
+
+# Model architecture
+vocab_size: 50257
+block_size: 1024
+n_layer: 12
+n_head: 8
+n_embd: 512
+n_kv_head: 2           # GQA: 2 KV heads shared by 8 Q heads (n_head must be divisible)
+dropout: 0.0
+
+# Optional blockwise (Ring) attention: pure-PyTorch fallback, useful when
+# flash-attn / SDPA Flash kernels are unavailable or for deterministic tests.
+use_ring_attention: false
+ring_block_size_q: 64
+ring_block_size_kv: 64
+attn_backend: auto
+
+# Training
+batch_size: 12
+learning_rate: 6.0e-4
+min_lr: 6.0e-5
+max_iters: 18000
+warmup_iters: 2000
+lr_decay_iters: 18000
+weight_decay: 0.1
+grad_clip: 1.0
+
+# Data
+data_dir: data/openwebtext
+num_workers: 4
+shuffle_buffer:       # chunk-level buffer shuffle size (None = min(10000, chunks))
+use_packing: false    # pack multiple short documents per sequence with cross-doc mask
+
+# Logging & Checkpointing
+eval_interval: 1000
+eval_iters: 200
+log_interval: 10
+use_wandb: false
+
+# System
+seed: 1337
+device: cuda
+compile: false

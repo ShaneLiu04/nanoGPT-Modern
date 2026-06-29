@@ -1,0 +1,21 @@
+# @package _global_
+# Shared training hyperparameters used across pretrain / SFT / GRPO / DPO.
+
+seed: 1337
+device: cuda
+backend: nccl
+use_wandb: false
+
+out_dir: out/run
+
+batch_size: 8
+gradient_accumulation_steps: 1
+
+learning_rate: 6.0e-4
+min_lr: 6.0e-5
+weight_decay: 0.1
+grad_clip: 1.0
+lr_schedule: cosine
+
+keep_last_n: 0
+resume: null

@@ -1,0 +1,31 @@
+# Hydra configuration for DPO / IPO / KTO preference learning.
+defaults:
+  - defaults/training/base
+  - _self_
+
+out_dir: out/dpo
+
+init_from: ???
+ref_from: null
+
+batch_size: 4
+max_length: 128
+epochs: 1
+
+learning_rate: 1.0e-6
+min_lr: 1.0e-7
+
+beta: 0.1
+preference_loss: dpo
+label_smoothing: 0.0
+
+num_train: 256
+num_val: 64
+eval_interval: 50
+
+hydra:
+  job:
+    chdir: false
+  output_subdir: null
+  run:
+    dir: .

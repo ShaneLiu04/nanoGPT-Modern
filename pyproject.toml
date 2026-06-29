@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nanogpt-modern"
+version = "0.2.0"
+description = "端到端轻量级大语言模型训练-推理-对齐全栈框架"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "nanoGPT-Modern Contributors"},
+]
+keywords = ["llm", "gpt", "transformer", "pretraining", "rlhf", "grpo"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.0.0",
+    "numpy",
+    "tiktoken",
+    "tensorboard",
+    "wandb",
+    "pyyaml",
+    "datasets",
+    "huggingface_hub",
+    "safetensors",
+    "omegaconf",
+    "hydra-core",
+    "pytest",
+]
+
+[project.optional-dependencies]
+eval = ["lm-eval>=0.4.0"]
+quant = ["bitsandbytes>=0.41.0", "gguf>=0.6.0"]
+dev = ["pytest", "black", "ruff", "mypy"]
+
+[project.scripts]
+nanogpt-prepare = "data.prepare:main"
+nanogpt-train-pretrain = "training.train_pretrain:main"
+nanogpt-train-sft = "training.train_sft:main"
+nanogpt-train-grpo = "training.train_grpo:main"
+nanogpt-train-dpo = "training.train_dpo:main"
+nanogpt-train-iterative-grpo = "training.iterative_grpo:main"
+nanogpt-generate = "inference.generate:main"
+nanogpt-eval-alignment = "evaluation.eval_alignment:main"
+nanogpt-export-gguf = "export_gguf:main"
+nanogpt-export-hf = "export_to_hf:main"
+nanogpt-load-hf = "load_from_hf:main"
+# Hydra / OmegaConf entry points (M23)
+nanogpt-train-pretrain-hydra = "training.train_pretrain_hydra:main"
+nanogpt-train-sft-hydra = "training.train_sft_hydra:main"
+nanogpt-train-grpo-hydra = "training.train_grpo_hydra:main"
+nanogpt-train-dpo-hydra = "training.train_dpo_hydra:main"
+nanogpt-train-iterative-grpo-hydra = "training.iterative_grpo_hydra:main"
+nanogpt-generate-hydra = "inference.generate_hydra:main"
+nanogpt-eval-benchmark-hydra = "evaluation.eval_benchmark_hydra:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["model*", "data*", "training*", "inference*", "evaluation*", "rewards*", "utils*", "config*"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+ignore_missing_imports = true
+no_namespace_packages = true
+exclude = ["tests/"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

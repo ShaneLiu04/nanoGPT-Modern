@@ -1,0 +1,23 @@
+# Hydra configuration for downstream benchmark evaluation.
+defaults:
+  - defaults/model/modern
+  - _self_
+
+checkpoint: ???
+
+data_dir: data/openwebtext
+split: val
+batch_size: 8
+block_size: 1024
+num_batches: null
+
+device: cuda
+tasks: hellaswag,piqa
+output_json: null
+
+hydra:
+  job:
+    chdir: false
+  output_subdir: null
+  run:
+    dir: .

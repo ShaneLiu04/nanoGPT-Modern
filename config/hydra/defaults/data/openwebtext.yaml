@@ -1,0 +1,7 @@
+# @package _global_
+# OpenWebText data loading defaults.
+
+data_dir: data/openwebtext
+num_workers: 4
+shuffle_buffer: null
+use_packing: false
