@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Hydra
+outputs/
+multirun/
+
+# Checkpoints / outputs
+out/
+*.pt
+*.pth
+*.ckpt
+
+# Data
+data/openwebtext/
+data/openwebtext_test/
+*.bin
+*.idx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

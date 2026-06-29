@@ -1,0 +1,24 @@
+# GRPO configuration
+init_from: out/sft/final_sft-only.pt
+ref_from: out/sft/final_sft-only.pt
+out_dir: out/grpo
+
+group_size: 4           # or 8
+num_steps: 1000
+batch_size: 4
+gradient_accumulation_steps: 1   # accumulate gradients across N group rollouts
+max_prompt_len: 128
+max_response_len: 128
+
+learning_rate: 1.0e-5
+min_lr: 1.0e-6
+lr_schedule: cosine     # cosine / linear / wsd / constant
+weight_decay: 0.01
+grad_clip: 1.0
+beta: 0.04              # KL penalty coefficient
+eps: 0.2                # PPO clip epsilon
+
+eval_interval: 100
+seed: 1337
+device: cuda
+use_wandb: false

@@ -1,0 +1,25 @@
+# Hydra configuration for supervised fine-tuning.
+defaults:
+  - defaults/training/base
+  - _self_
+
+out_dir: out/sft
+
+init_from: ???
+variant: sft-only
+
+batch_size: 8
+max_length: 256
+epochs: 3
+
+num_train: 5000
+num_val: 500
+
+eval_interval: 100
+
+hydra:
+  job:
+    chdir: false
+  output_subdir: null
+  run:
+    dir: .

@@ -1,0 +1,37 @@
+# @package _global_
+# ModernGPT architecture defaults.
+
+model: modern
+
+vocab_size: 50257
+block_size: 1024
+n_layer: 12
+n_head: 8
+n_embd: 512
+n_kv_head: 2
+dropout: 0.0
+
+norm_position: pre
+num_experts: 1
+moe_aux_loss_factor: 0.01
+moe_capacity_factor: 1.25
+
+qk_norm: false
+attn_temperature: 1.0
+rmsnorm_eps: 1.0e-6
+rope_theta: 10000.0
+rope_scaling: null
+
+gradient_checkpointing: false
+
+use_flash_attn: false
+use_ring_attention: false
+ring_block_size_q: 64
+ring_block_size_kv: 64
+
+sliding_window_size: null
+use_paged_kv_cache: false
+kv_cache_block_size: 16
+
+n_future: 0
+mtp_weight: 1.0

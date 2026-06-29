@@ -1,0 +1,35 @@
+# Hydra configuration for pretraining ModernGPT / BaselineGPT.
+defaults:
+  - defaults/training/base
+  - defaults/model/modern
+  - defaults/optimizer/adamw
+  - defaults/data/openwebtext
+  - _self_
+
+out_dir: out/pretrain
+
+batch_size: 12
+max_iters: 18000
+warmup_iters: 2000
+lr_decay_iters: 18000
+
+eval_interval: 1000
+eval_iters: 200
+log_interval: 10
+
+compile: false
+fsdp: false
+fsdp_sharding_strategy: full
+
+use_ema: false
+ema_decay: 0.999
+early_stopping_patience: 0
+
+attn_backend: auto
+
+hydra:
+  job:
+    chdir: false
+  output_subdir: null
+  run:
+    dir: .

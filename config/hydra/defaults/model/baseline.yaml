@@ -1,0 +1,14 @@
+# @package _global_
+# BaselineGPT architecture defaults.
+
+model: baseline
+
+vocab_size: 50257
+block_size: 1024
+n_layer: 12
+n_head: 8
+n_embd: 512
+dropout: 0.0
+
+attention_backend: sdpa
+gradient_checkpointing: false
