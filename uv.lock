@@ -1,0 +1,4 @@
+# Slim-mirror stub (gitee): the real uv.lock (~1.4MB, ~400KB gzipped)
+# exceeds the corporate proxy's ~100KB POST cap and cannot be hosted
+# on this remote.  Regenerate locally with `uv lock`, or copy the file
+# from the GitHub origin mirror.
