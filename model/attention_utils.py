@@ -147,9 +147,21 @@ def probe_gqa_sdpa_support(
     rep = n_head // n_kv_head
     B = 1
     try:
-        q = torch.randn(B, n_head, seq_len, head_dim, device=device, dtype=dtype)
-        k = torch.randn(B, n_kv_head, seq_len, head_dim, device=device, dtype=dtype)
-        v = torch.randn(B, n_kv_head, seq_len, head_dim, device=device, dtype=dtype)
+        # Save the global random state so the probe does not affect external
+        # sampling (e.g. torch.multinomial inside model.generate).
+        rng_state = torch.get_rng_state()
+        cuda_rng_state = None
+        if device.type == "cuda":
+            cuda_rng_state = torch.cuda.get_rng_state(device)
+
+        try:
+            q = torch.randn(B, n_head, seq_len, head_dim, device=device, dtype=dtype)
+            k = torch.randn(B, n_kv_head, seq_len, head_dim, device=device, dtype=dtype)
+            v = torch.randn(B, n_kv_head, seq_len, head_dim, device=device, dtype=dtype)
+        finally:
+            torch.set_rng_state(rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state(cuda_rng_state, device)
 
         # Reference computed with explicit repeat_interleave (always valid).
         ref = torch.nn.functional.scaled_dot_product_attention(
