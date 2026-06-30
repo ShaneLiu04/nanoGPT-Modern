@@ -90,7 +90,7 @@ class NanoGPTModernForCausalLM(PreTrainedModel):
     # The LM head shares its weight with the token embedding.  Declaring the
     # mapping lets ``transformers`` retie the head after ``from_pretrained``
     # even when we do not save the redundant key.
-    _tied_weights_keys = {"model.lm_head.weight": "model.transformer.wte.weight"}
+    _tied_weights_keys: dict[str, str] = {"model.lm_head.weight": "model.transformer.wte.weight"}  # type: ignore[assignment]
 
     def __init__(self, config: NanoGPTModernConfig):
         super().__init__(config)
@@ -99,7 +99,7 @@ class NanoGPTModernForCausalLM(PreTrainedModel):
         # Avoid safetensors shared-tensor errors by not saving the tied head
         # weight separately.  The embedding weight is sufficient; on load
         # ``from_pretrained`` uses ``_tied_weights_keys`` to restore the tie.
-        self._keys_to_ignore_on_save = ["model.lm_head.weight"]
+        self._keys_to_ignore_on_save = ["model.lm_head.weight"]  # type: ignore[assignment]
 
     def get_input_embeddings(self) -> Any:
         return self.model.transformer.wte
