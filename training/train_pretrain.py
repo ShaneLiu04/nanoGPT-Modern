@@ -214,7 +214,9 @@ class PretrainTrainer(BaseTrainer):
             document_ids = None
         if self.args.model == "modern":
             return self.model(input_ids, targets=targets, document_ids=document_ids)
-        return self.model(input_ids, targets)
+        # BaselineGPT returns (logits, loss); pad to the 3-tuple ModernGPT API.
+        logits, loss = self.model(input_ids, targets)
+        return logits, loss, None
 
     @torch.no_grad()
     def estimate_loss(self):
