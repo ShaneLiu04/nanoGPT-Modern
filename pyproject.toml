@@ -41,6 +41,7 @@ dependencies = [
 [project.optional-dependencies]
 eval = ["lm-eval>=0.4.0"]
 quant = ["bitsandbytes>=0.41.0", "gguf>=0.6.0"]
+hf = ["transformers"]
 dev = ["pytest", "black", "ruff", "mypy"]
 
 [project.scripts]
