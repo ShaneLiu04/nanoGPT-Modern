@@ -5,6 +5,7 @@ import tempfile
 import pytest
 import torch
 
+pytest.importorskip("transformers")
 
 from model.hf_model import NanoGPTModernConfig, NanoGPTModernForCausalLM
 from model.modern_gpt import ModernGPT, ModernGPTConfig
