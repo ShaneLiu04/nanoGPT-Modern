@@ -83,7 +83,6 @@ jobs:
             --eval_iters 5 \
             --log_interval 10 \
             --device cpu \
-            --compile false \
             --model baseline \
             --n_layer 2 --n_head 2 --n_embd 128 \
             --data_dir data/openwebtext \
