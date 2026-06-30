@@ -17,13 +17,13 @@ are probed:
   works on every backend we have tested and never copies KV, so it is the
   preferred memory-saving path when raw broadcast is unavailable.
 """
+
 from __future__ import annotations
 
 import threading
 from typing import Dict, Tuple
 
 import torch
-
 
 VALID_BACKENDS = ("auto", "flash", "mem_efficient", "math", "default")
 
@@ -40,7 +40,9 @@ def set_attention_backend(backend="auto"):
         * ``math``: force plain cuBLAS/math attention only.
     """
     if backend not in VALID_BACKENDS:
-        raise ValueError(f"Unknown attention backend: {backend}. Choose from {VALID_BACKENDS}")
+        raise ValueError(
+            f"Unknown attention backend: {backend}. Choose from {VALID_BACKENDS}"
+        )
 
     if not torch.cuda.is_available():
         return
@@ -165,14 +167,19 @@ def probe_gqa_sdpa_support(
 
         # Reference computed with explicit repeat_interleave (always valid).
         ref = torch.nn.functional.scaled_dot_product_attention(
-            q, k.repeat_interleave(rep, dim=1), v.repeat_interleave(rep, dim=1),
+            q,
+            k.repeat_interleave(rep, dim=1),
+            v.repeat_interleave(rep, dim=1),
             is_causal=True,
         )
 
         # 1) Raw broadcast: different head counts passed directly.
         try:
             out = torch.nn.functional.scaled_dot_product_attention(
-                q, k, v, is_causal=True,
+                q,
+                k,
+                v,
+                is_causal=True,
             )
             supports_raw = out.shape == ref.shape and bool(
                 torch.allclose(out, ref, atol=1e-3, rtol=1e-3)
@@ -186,7 +193,10 @@ def probe_gqa_sdpa_support(
             k_g = k.unsqueeze(2)  # [B, n_kv, 1, S, D]
             v_g = v.unsqueeze(2)  # [B, n_kv, 1, S, D]
             out_g = torch.nn.functional.scaled_dot_product_attention(
-                q_g, k_g, v_g, is_causal=True,
+                q_g,
+                k_g,
+                v_g,
+                is_causal=True,
             )
             out_g = out_g.reshape(B, n_head, seq_len, head_dim)
             supports_grouped = out_g.shape == ref.shape and bool(

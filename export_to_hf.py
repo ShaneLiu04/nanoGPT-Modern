@@ -1,4 +1,5 @@
 """Export a nanoGPT-Modern checkpoint to HuggingFace format."""
+
 import argparse
 import os
 
@@ -10,10 +11,18 @@ from model.modern_gpt import ModernGPTConfig
 
 def get_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", type=str, required=True,
-                   help="Path to a nanoGPT-Modern checkpoint (.pt)")
-    p.add_argument("--out_dir", type=str, required=True,
-                   help="Destination directory for the HF-format checkpoint")
+    p.add_argument(
+        "--checkpoint",
+        type=str,
+        required=True,
+        help="Path to a nanoGPT-Modern checkpoint (.pt)",
+    )
+    p.add_argument(
+        "--out_dir",
+        type=str,
+        required=True,
+        help="Destination directory for the HF-format checkpoint",
+    )
     return p.parse_args()
 
 

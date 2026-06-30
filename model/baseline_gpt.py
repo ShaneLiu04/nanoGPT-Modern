@@ -1,6 +1,7 @@
 """
 BaselineGPT: Standard GPT-2 architecture with LayerNorm, GELU FFN, and absolute positional embeddings.
 """
+
 import math
 import torch
 import torch.nn as nn
@@ -63,7 +64,9 @@ class CausalSelfAttention(nn.Module):
     def _forward_sdpa(self, q, k, v, T):
         """PyTorch native scaled_dot_product_attention (FlashAttention dispatcher)."""
         return F.scaled_dot_product_attention(
-            q, k, v,
+            q,
+            k,
+            v,
             attn_mask=None,
             is_causal=True,
             dropout_p=self.attn_dropout.p if self.training else 0.0,
@@ -122,7 +125,9 @@ class Block(nn.Module):
         self.config = config
         self.norm_pos = getattr(config, "norm_position", "pre")
         if self.norm_pos not in ("pre", "post"):
-            raise ValueError(f"norm_position must be 'pre' or 'post', got '{self.norm_pos}'")
+            raise ValueError(
+                f"norm_position must be 'pre' or 'post', got '{self.norm_pos}'"
+            )
 
         self.ln_1 = nn.LayerNorm(config.n_embd, bias=config.bias)
         self.attn = CausalSelfAttention(config)
@@ -130,9 +135,8 @@ class Block(nn.Module):
         self.mlp = MLP(config)
 
     def forward(self, x):
-        gc_enabled = (
-            self.training
-            and getattr(self.config, "gradient_checkpointing", False)
+        gc_enabled = self.training and getattr(
+            self.config, "gradient_checkpointing", False
         )
 
         if self.norm_pos == "pre":
@@ -165,6 +169,7 @@ class BaselineGPTConfig:
         forward results (to within floating-point tolerance) and have the same
         trainable parameters.
     """
+
     def __init__(
         self,
         vocab_size=50257,
@@ -215,7 +220,9 @@ class BaselineGPTConfig:
     @classmethod
     def from_dict(cls, d: dict) -> "BaselineGPTConfig":
         """Deserialize from a dict, ignoring unknown keys."""
-        return cls(**{k: v for k, v in d.items() if k in cls.__init__.__code__.co_varnames})
+        return cls(
+            **{k: v for k, v in d.items() if k in cls.__init__.__code__.co_varnames}
+        )
 
 
 class BaselineGPT(nn.Module):
@@ -239,7 +246,9 @@ class BaselineGPT(nn.Module):
         self.apply(self._init_weights)
         for pn, p in self.named_parameters():
             if pn.endswith("c_proj.weight"):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
+                torch.nn.init.normal_(
+                    p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
+                )
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -252,7 +261,9 @@ class BaselineGPT(nn.Module):
     def forward(self, idx, targets=None, attention_mask=None, **kwargs):
         device = idx.device
         b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is {self.config.block_size}"
+        assert (
+            t <= self.config.block_size
+        ), f"Cannot forward sequence of length {t}, block size is {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0)
 
         tok_emb = self.transformer.wte(idx)
@@ -265,7 +276,9 @@ class BaselineGPT(nn.Module):
         logits = self.lm_head(x)
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
+            )
         return logits, loss
 
     def crop_block_size(self, block_size):
@@ -274,12 +287,16 @@ class BaselineGPT(nn.Module):
         self.transformer.wpe.weight.data = self.transformer.wpe.weight.data[:block_size]
         for block in self.transformer.h:
             if hasattr(block.attn, "bias") and block.attn.bias.numel() > 0:
-                block.attn.bias.data = block.attn.bias.data[:, :, :block_size, :block_size]
+                block.attn.bias.data = block.attn.bias.data[
+                    :, :, :block_size, :block_size
+                ]
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         # Deduplicate parameters by tensor id.  wte and lm_head share the same
         # weight tensor, so without deduplication AdamW would update it twice.
-        param_dict = {id(p): (n, p) for n, p in self.named_parameters() if p.requires_grad}
+        param_dict = {
+            id(p): (n, p) for n, p in self.named_parameters() if p.requires_grad
+        }
         decay_params = [p for n, p in param_dict.values() if p.dim() >= 2]
         nodecay_params = [p for n, p in param_dict.values() if p.dim() < 2]
         optim_groups = [
@@ -287,16 +304,33 @@ class BaselineGPT(nn.Module):
             {"params": nodecay_params, "weight_decay": 0.0},
         ]
         import inspect
+
         fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == "cuda"
         extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        optimizer = torch.optim.AdamW(
+            optim_groups, lr=learning_rate, betas=betas, **extra_args
+        )
         return optimizer
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None, use_cache=False, eos_token_id=None, **kwargs):
+    def generate(
+        self,
+        idx,
+        max_new_tokens,
+        temperature=1.0,
+        top_k=None,
+        top_p=None,
+        use_cache=False,
+        eos_token_id=None,
+        **kwargs,
+    ):
         for _ in range(max_new_tokens):
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            idx_cond = (
+                idx
+                if idx.size(1) <= self.config.block_size
+                else idx[:, -self.config.block_size :]
+            )
             logits, _ = self(idx_cond)
             logits = logits[:, -1, :] / temperature
             if top_k is not None:

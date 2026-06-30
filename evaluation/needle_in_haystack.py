@@ -10,6 +10,7 @@ Usage
 >>> evaluator = NeedleEvaluator(model, tokenizer, max_context_length=4096)
 >>> results = evaluator.evaluate(depths=[0.0, 0.5, 1.0], num_trials=5)
 """
+
 from __future__ import annotations
 
 import random
@@ -71,7 +72,9 @@ class NeedleEvaluator:
         question_len = len(question_toks)
         available = context_len - needle_len - question_len - 5  # safety margin
         if available <= 0:
-            raise ValueError(f"Context length {context_len} too short for needle + question")
+            raise ValueError(
+                f"Context length {context_len} too short for needle + question"
+            )
 
         # Build haystack as filler text that tokenizes to roughly the needed length.
         haystack_text = "The sky is blue. The grass is green. " * (available // 10)
@@ -105,7 +108,7 @@ class NeedleEvaluator:
                 top_k=None,
                 use_cache=True,
             )
-        generated = out[0, len(toks):].tolist()
+        generated = out[0, len(toks) :].tolist()
         return self.tokenizer.decode(generated)
 
     def evaluate(
@@ -150,17 +153,21 @@ class NeedleEvaluator:
                     prompt = self._build_prompt(depth, length)
                     answer = self._generate_answer(prompt, max_new_tokens)
                     correct = self.expected_answer in answer
-                    scores.append({
-                        "context_length": length,
-                        "depth": depth,
-                        "correct": correct,
-                    })
-                    raw.append({
-                        "context_length": length,
-                        "depth": depth,
-                        "answer": answer,
-                        "correct": correct,
-                    })
+                    scores.append(
+                        {
+                            "context_length": length,
+                            "depth": depth,
+                            "correct": correct,
+                        }
+                    )
+                    raw.append(
+                        {
+                            "context_length": length,
+                            "depth": depth,
+                            "answer": answer,
+                            "correct": correct,
+                        }
+                    )
 
         # Summary.
         by_depth: Dict[float, List[bool]] = {d: [] for d in depths}
@@ -170,7 +177,9 @@ class NeedleEvaluator:
             by_length[int(s["context_length"])].append(bool(s["correct"]))
 
         summary = {
-            "overall_accuracy": sum(s["correct"] for s in scores) / len(scores) if scores else 0.0,
+            "overall_accuracy": (
+                sum(s["correct"] for s in scores) / len(scores) if scores else 0.0
+            ),
             "by_depth": {d: sum(v) / len(v) for d, v in by_depth.items()},
             "by_length": {l: sum(v) / len(v) for l, v in by_length.items()},
         }
@@ -182,7 +191,10 @@ class NeedleEvaluator:
         }
 
     def evaluate_single(
-        self, depth: float = 0.5, context_length: Optional[int] = None, max_new_tokens: int = 20
+        self,
+        depth: float = 0.5,
+        context_length: Optional[int] = None,
+        max_new_tokens: int = 20,
     ) -> Dict[str, Any]:
         """Quick single-shot evaluation for CI / smoke tests."""
         length = context_length or self.max_context_length

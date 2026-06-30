@@ -18,21 +18,23 @@ a Transformer decoder:
   Calls ``flash_attn_with_kvcache`` when available, falling back to
   ``flash_attn_func`` with explicit cache concatenation otherwise.
 """
+
 from __future__ import annotations
 
 from typing import Optional, Tuple
 
 import torch
 
-
 # ---------------------------------------------------------------------------
 #  Availability introspection
 # ---------------------------------------------------------------------------
+
 
 def is_available() -> bool:
     """Return True if ``flash_attn`` is installed and imports cleanly."""
     try:
         import flash_attn  # noqa: F401
+
         return True
     except Exception:
         return False
@@ -42,6 +44,7 @@ def version_info() -> Optional[Tuple[int, ...]]:
     """Return the ``flash_attn`` version tuple, or ``None`` if unavailable."""
     try:
         import flash_attn
+
         return tuple(int(x) for x in flash_attn.__version__.split(".") if x.isdigit())
     except Exception:
         return None
@@ -51,6 +54,7 @@ def has_varlen() -> bool:
     """Return True if ``flash_attn_varlen_func`` is available."""
     try:
         from flash_attn import flash_attn_varlen_func  # noqa: F401
+
         return True
     except Exception:
         return False
@@ -60,6 +64,7 @@ def has_kvcache() -> bool:
     """Return True if ``flash_attn_with_kvcache`` is available."""
     try:
         from flash_attn import flash_attn_with_kvcache  # noqa: F401
+
         return True
     except Exception:
         return False
@@ -68,6 +73,7 @@ def has_kvcache() -> bool:
 # ---------------------------------------------------------------------------
 #  Standard forward (training / prefill)
 # ---------------------------------------------------------------------------
+
 
 def flash_attention(
     q: torch.Tensor,
@@ -106,7 +112,9 @@ def flash_attention(
     v_t = v.transpose(1, 2)
     try:
         out = flash_attn_func(
-            q_t, k_t, v_t,
+            q_t,
+            k_t,
+            v_t,
             dropout_p=0.0,
             softmax_scale=softmax_scale,
             causal=causal,
@@ -119,6 +127,7 @@ def flash_attention(
 # ---------------------------------------------------------------------------
 #  Variable-length / packed sequences
 # ---------------------------------------------------------------------------
+
 
 def flash_attention_varlen(
     q: torch.Tensor,
@@ -166,7 +175,9 @@ def flash_attention_varlen(
 
     try:
         out = flash_attn_varlen_func(
-            q, k, v,
+            q,
+            k,
+            v,
             cu_seqlens_q,
             cu_seqlens_k,
             max_seqlen_q,
@@ -183,6 +194,7 @@ def flash_attention_varlen(
 # ---------------------------------------------------------------------------
 #  Decode-step attention with KV cache
 # ---------------------------------------------------------------------------
+
 
 def flash_attention_with_cache(
     q: torch.Tensor,

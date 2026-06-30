@@ -24,6 +24,7 @@ Usage Example
 >>> scheduler = ContinuousBatchScheduler(queue, model, device="cuda")
 >>> results = scheduler.run_batch_size=4, max_total_tokens=1024)
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -145,9 +146,7 @@ class PrefixCache:
             del self._cache[lru]
         self._access_order.append(key)
         # Deep-copy to avoid accidental mutation by the caller.
-        self._cache[key] = [
-            (k.clone(), v.clone()) for k, v in kv_cache
-        ]
+        self._cache[key] = [(k.clone(), v.clone()) for k, v in kv_cache]
 
     def clear(self) -> None:
         self._cache.clear()
@@ -265,17 +264,26 @@ class BatchGenerator:
         prompt_lens = [cast(torch.Tensor, r.prompt_ids).shape[1] for r in requests]
         max_prompt_len = max(prompt_lens)
         input_ids = torch.full(
-            (B, max_prompt_len), self.eos_token_id or 0, dtype=torch.long, device=self.device
+            (B, max_prompt_len),
+            self.eos_token_id or 0,
+            dtype=torch.long,
+            device=self.device,
         )
-        attention_mask = torch.zeros((B, max_prompt_len), dtype=torch.bool, device=self.device)
+        attention_mask = torch.zeros(
+            (B, max_prompt_len), dtype=torch.bool, device=self.device
+        )
         for b, req in enumerate(requests):
             pl = prompt_lens[b]
-            input_ids[b, :pl] = cast(torch.Tensor, req.prompt_ids)[0, :pl].to(self.device)
+            input_ids[b, :pl] = cast(torch.Tensor, req.prompt_ids)[0, :pl].to(
+                self.device
+            )
             attention_mask[b, :pl] = True
 
         # Build a shared KV cache manager for the batch.
         cache = self._get_cache_manager(B)
-        cache.init_cache(B, torch.device(self.device), next(self.model.parameters()).dtype)
+        cache.init_cache(
+            B, torch.device(self.device), next(self.model.parameters()).dtype
+        )
 
         # --- Prefill: encode all prompts together ---
         with torch.no_grad():
@@ -313,21 +321,30 @@ class BatchGenerator:
         # --- Decode loop ---
         finished = torch.zeros(B, dtype=torch.bool, device=self.device)
         generated_counts = torch.zeros(B, dtype=torch.long, device=self.device)
-        results: List[List[int]] = [input_ids[b, :prompt_lens[b]].tolist() for b in range(B)]
+        results: List[List[int]] = [
+            input_ids[b, : prompt_lens[b]].tolist() for b in range(B)
+        ]
 
         # Prepare per-request hyperparameters as tensors for vectorised sampling.
-        temperatures = torch.tensor([r.temperature for r in requests], device=self.device, dtype=torch.float32)
+        temperatures = torch.tensor(
+            [r.temperature for r in requests], device=self.device, dtype=torch.float32
+        )
         top_ks = [r.top_k for r in requests]
         top_ps = [r.top_p for r in requests]
         repetition_penalties = [r.repetition_penalty for r in requests]
-        eos_ids = [r.eos_token_id if r.eos_token_id is not None else self.eos_token_id for r in requests]
+        eos_ids = [
+            r.eos_token_id if r.eos_token_id is not None else self.eos_token_id
+            for r in requests
+        ]
 
         for step in range(max_new):
             if finished.all():
                 break
 
             # Feed EOS to finished sequences so KV cache stays aligned.
-            next_in = torch.full((B, 1), self.eos_token_id or 0, dtype=torch.long, device=self.device)
+            next_in = torch.full(
+                (B, 1), self.eos_token_id or 0, dtype=torch.long, device=self.device
+            )
             for b in range(B):
                 if not finished[b]:
                     next_in[b] = results[b][-1]
@@ -347,7 +364,10 @@ class BatchGenerator:
 
             # Apply repetition penalty per sequence.
             for b in range(B):
-                if repetition_penalties[b] is not None and repetition_penalties[b] != 1.0:
+                if (
+                    repetition_penalties[b] is not None
+                    and repetition_penalties[b] != 1.0
+                ):
                     for tid in results[b]:
                         logits_last[b, tid] /= repetition_penalties[b]
 
@@ -461,7 +481,10 @@ class ContinuousBatchScheduler:
             all_results.update(batch_results)
 
             # Check timeout.
-            if timeout_seconds is not None and (time.time() - start_time) > timeout_seconds:
+            if (
+                timeout_seconds is not None
+                and (time.time() - start_time) > timeout_seconds
+            ):
                 break
 
             # Back-fill finished slots and continue.
@@ -492,13 +515,19 @@ class ContinuousBatchingServer:
         self.model = model
         self.queue = RequestQueue()
         self.scheduler = ContinuousBatchScheduler(
-            self.queue, model, device=device, batch_size=batch_size, use_compile=use_compile
+            self.queue,
+            model,
+            device=device,
+            batch_size=batch_size,
+            use_compile=use_compile,
         )
 
     def submit(self, req: Request) -> None:
         """Enqueue a new request."""
         self.queue.enqueue(req)
 
-    def generate_pending(self, max_total_tokens: Optional[int] = None) -> Dict[str, List[int]]:
+    def generate_pending(
+        self, max_total_tokens: Optional[int] = None
+    ) -> Dict[str, List[int]]:
         """Run the scheduler on all pending requests and return results."""
         return self.scheduler.run(max_total_tokens=max_total_tokens)

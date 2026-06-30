@@ -5,6 +5,7 @@ This module provides a thin ``transformers.PreTrainedModel`` wrapper around
 HuggingFace Hub format (``config.json`` + ``model.safetensors``) without
 rewriting the underlying model.
 """
+
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -99,7 +100,6 @@ class NanoGPTModernForCausalLM(PreTrainedModel):
         # weight separately.  The embedding weight is sufficient; on load
         # ``from_pretrained`` uses ``_tied_weights_keys`` to restore the tie.
         self._keys_to_ignore_on_save = ["model.lm_head.weight"]
-
 
     def get_input_embeddings(self) -> Any:
         return self.model.transformer.wte
