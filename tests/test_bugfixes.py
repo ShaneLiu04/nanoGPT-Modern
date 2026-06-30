@@ -91,7 +91,7 @@ def test_ma_update_and_checkpoint():
 
 def test_doc_boundary_dataset_resume_offset():
     """DocBoundaryDataset must accept resume_offset and iterate without error."""
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         bin_path = os.path.join(tmpdir, "train.bin")
         # 1024 tokens with EOT at positions 100, 200, ...
         data = np.zeros(1024, dtype=np.uint16)
@@ -110,7 +110,7 @@ def test_doc_boundary_dataset_resume_offset():
 
 def test_doc_boundary_dataset_state_dict():
     """DocBoundaryDataset state_dict/load_state_dict round-trip."""
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         bin_path = os.path.join(tmpdir, "train.bin")
         data = np.zeros(1024, dtype=np.uint16)
         for pos in range(100, 1024, 100):
