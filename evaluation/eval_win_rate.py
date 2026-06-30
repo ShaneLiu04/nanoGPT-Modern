@@ -165,8 +165,8 @@ class WinRateEvaluator:
             policy_scores_all.extend(policy_scores)
             ref_scores_all.extend(ref_scores)
 
-        wins = sum(r["policy_wins"] for r in records)
-        ties = sum(r["tie"] for r in records)
+        wins = sum(bool(r["policy_wins"]) for r in records)
+        ties = sum(bool(r["tie"]) for r in records)
         total = len(records)
         win_rate = wins / total if total > 0 else 0.0
         tie_rate = ties / total if total > 0 else 0.0
