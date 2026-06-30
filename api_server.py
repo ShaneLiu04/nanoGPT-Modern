@@ -20,6 +20,7 @@ Then test with curl:
       -H "Content-Type: application/json" \
       -d '{"model":"modern","messages":[{"role":"user","content":"Hello"}],"max_tokens":20}'
 """
+
 from __future__ import annotations
 
 import argparse
@@ -170,6 +171,7 @@ class ModelState:
         if self._tokenizer is None:
             try:
                 import tiktoken
+
                 self._tokenizer = tiktoken.get_encoding("gpt2")
             except Exception:
                 self._tokenizer = None
@@ -240,7 +242,11 @@ class ModelState:
         import torch.nn.functional as F
 
         for _ in range(max_new_tokens):
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size :]
+            idx_cond = (
+                idx
+                if idx.size(1) <= self.config.block_size
+                else idx[:, -self.config.block_size :]
+            )
             logits = self.model(idx_cond)
             if isinstance(logits, tuple):
                 logits = logits[0]
@@ -266,7 +272,9 @@ model_state: Optional[ModelState] = None
 @app.on_event("startup")
 async def startup_event() -> None:
     """Log startup info."""
-    print(f"[API Server] Model loaded: {model_state.model_type if model_state else 'None'}")
+    print(
+        f"[API Server] Model loaded: {model_state.model_type if model_state else 'None'}"
+    )
 
 
 @app.get("/health")
@@ -390,7 +398,9 @@ def get_args() -> argparse.Namespace:
     )
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--compile", action="store_true", help="torch.compile the model")
+    parser.add_argument(
+        "--compile", action="store_true", help="torch.compile the model"
+    )
     return parser.parse_args()
 
 

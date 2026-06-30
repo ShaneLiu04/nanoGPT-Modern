@@ -4,6 +4,7 @@ Supports both ``tiktoken`` (GPT-2 BPE) and ``sentencepiece`` backends, plus a
 lightweight language detector that tries ``langdetect`` before falling back to
 heuristic rules.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,26 +18,23 @@ import numpy as np
 import torch
 from torch.utils.data import IterableDataset
 
-
 # ---------------------------------------------------------------------------
 # Tokeniser abstraction
 # ---------------------------------------------------------------------------
+
 
 class TokenizerBackend(ABC):
     """Abstract tokeniser backend."""
 
     @abstractmethod
-    def encode(self, text: str) -> List[int]:
-        ...
+    def encode(self, text: str) -> List[int]: ...
 
     @abstractmethod
-    def decode(self, tokens: List[int]) -> str:
-        ...
+    def decode(self, tokens: List[int]) -> str: ...
 
     @property
     @abstractmethod
-    def vocab_size(self) -> int:
-        ...
+    def vocab_size(self) -> int: ...
 
 
 class TiktokenBackend(TokenizerBackend):
@@ -44,6 +42,7 @@ class TiktokenBackend(TokenizerBackend):
 
     def __init__(self, encoding_name: str = "gpt2"):
         import tiktoken
+
         self._enc = tiktoken.get_encoding(encoding_name)
 
     def encode(self, text: str) -> List[int]:
@@ -62,6 +61,7 @@ class SentencePieceBackend(TokenizerBackend):
 
     def __init__(self, model_path: str):
         import sentencepiece as spm  # type: ignore[import-untyped]
+
         self._sp = spm.SentencePieceProcessor(model_file=model_path)
 
     def encode(self, text: str) -> List[int]:
@@ -119,6 +119,7 @@ class MultilingualTokenizer:
 # Language detection
 # ---------------------------------------------------------------------------
 
+
 class LanguageDetector:
     """Detect the dominant language of a text string.
 
@@ -130,6 +131,7 @@ class LanguageDetector:
         self._langdetect_available = False
         try:
             from langdetect import detect  # type: ignore[import-untyped]
+
             self._detect = detect
             self._langdetect_available = True
         except Exception as exc:
@@ -166,6 +168,7 @@ class LanguageDetector:
 # ---------------------------------------------------------------------------
 # Multilingual dataset mixer
 # ---------------------------------------------------------------------------
+
 
 class MultilingualDataset(IterableDataset):
     """Mixed-language dataset that samples from language-specific sources.
@@ -300,8 +303,10 @@ def _test_language_detector():
 
 def _test_multilingual_dataset():
     ds = MultilingualDataset(
-        sources={"en": iter([{"text": "a"}, {"text": "b"}, {"text": "c"}]),
-               "zh": iter([{"text": "一"}, {"text": "二"}, {"text": "三"}])},
+        sources={
+            "en": iter([{"text": "a"}, {"text": "b"}, {"text": "c"}]),
+            "zh": iter([{"text": "一"}, {"text": "二"}, {"text": "三"}]),
+        },
         weights={"en": 1.0, "zh": 1.0},
         total_examples=4,
         seed=42,

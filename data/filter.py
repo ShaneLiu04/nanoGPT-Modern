@@ -8,6 +8,7 @@ and can be combined via ``CompositeFilter``.  The ``fasttext`` quality
 classifier is optional: if the library or model is unavailable the filter
 falls back to ``True`` so the pipeline keeps running.
 """
+
 from __future__ import annotations
 
 import re
@@ -90,9 +91,7 @@ class RepetitionFilter(QualityFilter):
         return max_count / positions <= self.max_repetition_ratio
 
     def describe(self) -> str:
-        return (
-            f"RepetitionFilter(n={self.n}, max_ratio={self.max_repetition_ratio})"
-        )
+        return f"RepetitionFilter(n={self.n}, max_ratio={self.max_repetition_ratio})"
 
 
 class RegexFilter(QualityFilter):

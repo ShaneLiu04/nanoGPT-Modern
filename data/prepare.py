@@ -19,6 +19,7 @@ Both modes:
   * produce a canonical ``{split}.bin`` plus per-shard files for resumable
     loading.
 """
+
 import os
 import sys
 import argparse
@@ -27,55 +28,122 @@ from pathlib import Path
 import numpy as np
 
 
-
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", type=str, default="data/openwebtext")
     parser.add_argument("--split", type=str, default="train", choices=["train", "val"])
-    parser.add_argument("--max_docs", type=int, default=None,
-                        help="Max docs to process (default: 1M for train, 10K for val)")
-    parser.add_argument("--shard_size", type=int, default=100_000_000,
-                        help="Target tokens per shard")
-    parser.add_argument("--batch_size", type=int, default=1000,
-                        help="Number of documents per tokenization batch")
-    parser.add_argument("--num_proc", type=int, default=None,
-                        help="Number of processes for datasets.map (default: os.cpu_count())")
-    parser.add_argument("--streaming", action="store_true",
-                        help="Use streaming mode instead of cached map mode")
-    parser.add_argument("--eot_token", type=int, default=50256,
-                        help="GPT-2 EOT token id")
+    parser.add_argument(
+        "--max_docs",
+        type=int,
+        default=None,
+        help="Max docs to process (default: 1M for train, 10K for val)",
+    )
+    parser.add_argument(
+        "--shard_size", type=int, default=100_000_000, help="Target tokens per shard"
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1000,
+        help="Number of documents per tokenization batch",
+    )
+    parser.add_argument(
+        "--num_proc",
+        type=int,
+        default=None,
+        help="Number of processes for datasets.map (default: os.cpu_count())",
+    )
+    parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="Use streaming mode instead of cached map mode",
+    )
+    parser.add_argument(
+        "--eot_token", type=int, default=50256, help="GPT-2 EOT token id"
+    )
 
     # Data-quality pipeline options
-    parser.add_argument("--min_doc_chars", type=int, default=None,
-                        help="Drop documents shorter than this")
-    parser.add_argument("--max_doc_chars", type=int, default=None,
-                        help="Drop documents longer than this")
-    parser.add_argument("--max_repetition_ratio", type=float, default=None,
-                        help="Drop documents whose most common char n-gram exceeds this ratio")
-    parser.add_argument("--repetition_n", type=int, default=10,
-                        help="n-gram size used by the repetition filter")
-    parser.add_argument("--require_regex", type=str, default=None,
-                        help="Keep only documents matching this regex")
-    parser.add_argument("--reject_regex", type=str, default=None,
-                        help="Drop documents matching this regex")
-    parser.add_argument("--fasttext_model", type=str, default=None,
-                        help="Path to a fasttext .bin model for quality/language filtering")
-    parser.add_argument("--fasttext_threshold", type=float, default=0.5,
-                        help="Minimum fasttext score to keep a document")
-    parser.add_argument("--fasttext_label", type=str, default=None,
-                        help="Required fasttext top-1 label (e.g. __label__en)")
-    parser.add_argument("--dedup_threshold", type=float, default=0.0,
-                        help="MinHash Jaccard threshold for near-duplicate removal (0=disabled)")
-    parser.add_argument("--dedup_ngram", type=int, default=5,
-                        help="Character n-gram size for MinHash")
-    parser.add_argument("--dedup_num_hashes", type=int, default=128,
-                        help="MinHash signature length")
-    parser.add_argument("--dedup_num_bands", type=int, default=8,
-                        help="Number of LSH bands")
-    parser.add_argument("--dedup_rows_per_band", type=int, default=16,
-                        help="Number of rows per LSH band")
-    parser.add_argument("--mixture_config", type=str, default=None,
-                        help="JSON config for mixing multiple source datasets")
+    parser.add_argument(
+        "--min_doc_chars",
+        type=int,
+        default=None,
+        help="Drop documents shorter than this",
+    )
+    parser.add_argument(
+        "--max_doc_chars",
+        type=int,
+        default=None,
+        help="Drop documents longer than this",
+    )
+    parser.add_argument(
+        "--max_repetition_ratio",
+        type=float,
+        default=None,
+        help="Drop documents whose most common char n-gram exceeds this ratio",
+    )
+    parser.add_argument(
+        "--repetition_n",
+        type=int,
+        default=10,
+        help="n-gram size used by the repetition filter",
+    )
+    parser.add_argument(
+        "--require_regex",
+        type=str,
+        default=None,
+        help="Keep only documents matching this regex",
+    )
+    parser.add_argument(
+        "--reject_regex",
+        type=str,
+        default=None,
+        help="Drop documents matching this regex",
+    )
+    parser.add_argument(
+        "--fasttext_model",
+        type=str,
+        default=None,
+        help="Path to a fasttext .bin model for quality/language filtering",
+    )
+    parser.add_argument(
+        "--fasttext_threshold",
+        type=float,
+        default=0.5,
+        help="Minimum fasttext score to keep a document",
+    )
+    parser.add_argument(
+        "--fasttext_label",
+        type=str,
+        default=None,
+        help="Required fasttext top-1 label (e.g. __label__en)",
+    )
+    parser.add_argument(
+        "--dedup_threshold",
+        type=float,
+        default=0.0,
+        help="MinHash Jaccard threshold for near-duplicate removal (0=disabled)",
+    )
+    parser.add_argument(
+        "--dedup_ngram", type=int, default=5, help="Character n-gram size for MinHash"
+    )
+    parser.add_argument(
+        "--dedup_num_hashes", type=int, default=128, help="MinHash signature length"
+    )
+    parser.add_argument(
+        "--dedup_num_bands", type=int, default=8, help="Number of LSH bands"
+    )
+    parser.add_argument(
+        "--dedup_rows_per_band",
+        type=int,
+        default=16,
+        help="Number of rows per LSH band",
+    )
+    parser.add_argument(
+        "--mixture_config",
+        type=str,
+        default=None,
+        help="JSON config for mixing multiple source datasets",
+    )
     return parser.parse_args()
 
 
@@ -88,6 +156,7 @@ def _build_quality_filter(args):
         RepetitionFilter,
         QualityFilter,
     )
+
     try:
         from data.filter import FastTextQualityFilter
     except Exception:  # pragma: no cover
@@ -132,6 +201,7 @@ def _build_dedup(args, streaming: bool = False):
         return None
     if streaming:
         from data.dedup import StreamingDuplicateDetector
+
         return StreamingDuplicateDetector(
             threshold=args.dedup_threshold,
             num_hashes=args.dedup_num_hashes,
@@ -140,6 +210,7 @@ def _build_dedup(args, streaming: bool = False):
             rows_per_band=args.dedup_rows_per_band,
         )
     from data.dedup import MinHashDeduplicator
+
     return MinHashDeduplicator(
         threshold=args.dedup_threshold,
         num_hashes=args.dedup_num_hashes,
@@ -196,9 +267,12 @@ def _select_dtype(vocab_size):
     return np.uint16 if vocab_size <= 65535 else np.uint32
 
 
-def _concatenate_shards_to_bin(shard_dir, output_dir, split, dtype, chunk_tokens=10_000_000):
+def _concatenate_shards_to_bin(
+    shard_dir, output_dir, split, dtype, chunk_tokens=10_000_000
+):
     """Stream all shard files into a single ``{split}.bin`` without loading it all into RAM."""
     import glob
+
     shard_files = sorted(glob.glob(os.path.join(shard_dir, f"{split}_*.bin")))
     if not shard_files:
         return
@@ -245,7 +319,9 @@ class _ShardWriter:
         while offset < n:
             room = self.shard_size - self._used
             take = min(room, n - offset)
-            self._buffer[self._used:self._used + take] = tokens[offset:offset + take]
+            self._buffer[self._used : self._used + take] = tokens[
+                offset : offset + take
+            ]
             self._used += take
             offset += take
             self._total_tokens += take
@@ -268,14 +344,16 @@ class _ShardWriter:
         }
 
     def _flush(self, partial=False):
-        data = self._buffer[:self._used].copy()
+        data = self._buffer[: self._used].copy()
         if partial:
             # Also write the tail as the canonical single-file bin for convenience.
             main_path = os.path.join(self.output_dir, f"{self.split}.bin")
             data.tofile(main_path)
             print(f"Saved {self._used:,} tokens to {main_path}")
 
-        shard_path = os.path.join(self.shard_dir, f"{self.split}_{self._shard_idx:05d}.bin")
+        shard_path = os.path.join(
+            self.shard_dir, f"{self.split}_{self._shard_idx:05d}.bin"
+        )
         data.tofile(shard_path)
         print(f"  shard {self._shard_idx:05d}: {self._used:,} tokens -> {shard_path}")
 
@@ -310,12 +388,22 @@ def _tokenize_batch(batch, tokenizer, eot_token):
 
 def _load_streaming_dataset(split):
     from datasets import load_dataset
+
     print(f"Loading OpenWebText ({split}) via streaming...")
     try:
-        return load_dataset("openwebtext", split=split, streaming=True, trust_remote_code=True)
+        return load_dataset(
+            "openwebtext", split=split, streaming=True, trust_remote_code=True
+        )
     except Exception:
-        print("Failed to load openwebtext via streaming; trying Skylion007/openwebtext subset...")
-        return load_dataset("Skylion007/openwebtext", split=split, streaming=True, trust_remote_code=True)
+        print(
+            "Failed to load openwebtext via streaming; trying Skylion007/openwebtext subset..."
+        )
+        return load_dataset(
+            "Skylion007/openwebtext",
+            split=split,
+            streaming=True,
+            trust_remote_code=True,
+        )
 
 
 def _prepare_map_mode(args, tokenizer, dtype):
@@ -323,7 +411,9 @@ def _prepare_map_mode(args, tokenizer, dtype):
     quality_filter = _build_quality_filter(args)
     dedup = _build_dedup(args, streaming=False)
 
-    print(f"Loading source dataset ({args.split}) into local cache for map-mode tokenization...")
+    print(
+        f"Loading source dataset ({args.split}) into local cache for map-mode tokenization..."
+    )
     ds = _load_mixed_dataset(args, streaming=False)
 
     default_max = 1_000_000 if args.split == "train" else 10_000
@@ -379,7 +469,7 @@ def _prepare_map_mode(args, tokenizer, dtype):
         while offset < n:
             room = args.shard_size - used
             take = min(room, n - offset)
-            buffer[used:used + take] = tokens[offset:offset + take]
+            buffer[used : used + take] = tokens[offset : offset + take]
             used += take
             offset += take
             if used >= args.shard_size:
@@ -388,7 +478,10 @@ def _prepare_map_mode(args, tokenizer, dtype):
         writer.record_doc_boundary()
         doc_count += 1
         if doc_count % 10_000 == 0:
-            print(f"  written {doc_count:,} docs, {writer._total_tokens:,} tokens...", flush=True)
+            print(
+                f"  written {doc_count:,} docs, {writer._total_tokens:,} tokens...",
+                flush=True,
+            )
 
     if used > 0:
         writer.append(buffer[:used])
@@ -406,7 +499,9 @@ def _prepare_streaming_mode(args, tokenizer, dtype):
 
     default_max = 1_000_000 if args.split == "train" else 10_000
     max_docs = args.max_docs if args.max_docs is not None else default_max
-    print(f"Target: up to {max_docs:,} documents, shards of ~{args.shard_size:,} tokens")
+    print(
+        f"Target: up to {max_docs:,} documents, shards of ~{args.shard_size:,} tokens"
+    )
 
     writer = _ShardWriter(
         output_dir=args.output_dir,
@@ -447,7 +542,10 @@ def _prepare_streaming_mode(args, tokenizer, dtype):
         if len(batch) >= args.batch_size:
             _flush_batch()
         if doc_count % 10_000 == 0:
-            print(f"  processed {doc_count:,} docs, {writer._total_tokens:,} tokens...", flush=True)
+            print(
+                f"  processed {doc_count:,} docs, {writer._total_tokens:,} tokens...",
+                flush=True,
+            )
 
     _flush_batch()
     meta = writer.close()
@@ -483,7 +581,10 @@ def main():
 
     writer.write_index()
 
-    print(f"\nDone. Docs: {meta['num_docs']:,}, tokens: {meta['total_tokens']:,}, shards: {meta['n_shards']}", flush=True)
+    print(
+        f"\nDone. Docs: {meta['num_docs']:,}, tokens: {meta['total_tokens']:,}, shards: {meta['n_shards']}",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

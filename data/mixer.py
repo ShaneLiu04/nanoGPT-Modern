@@ -3,11 +3,22 @@
 Provides both a standalone mixing strategy and a ``torch.utils.data.IterableDataset``
 that samples from multiple source datasets according to configured proportions.
 """
+
 from __future__ import annotations
 
 import json
 import warnings
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Union
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Union,
+)
 
 import numpy as np
 
@@ -163,14 +174,18 @@ def mix_datasets(
         if all(isinstance(ds, Dataset) for ds in datasets.values()):
             names = list(datasets.keys())
             ds_list = [datasets[name] for name in names]
-            strategy = MixtureStrategy({name: weights.get(name, 1.0) for name in names}, temperature)
+            strategy = MixtureStrategy(
+                {name: weights.get(name, 1.0) for name in names}, temperature
+            )
             return interleave_datasets(
                 ds_list,
                 probabilities=strategy.probabilities.tolist(),
                 seed=seed,
             )
     except Exception as exc:  # pragma: no cover
-        warnings.warn(f"Could not use datasets.interleave_datasets ({exc}); falling back to MixedIterableDataset.")
+        warnings.warn(
+            f"Could not use datasets.interleave_datasets ({exc}); falling back to MixedIterableDataset."
+        )
 
     return MixedIterableDataset(
         datasets,
@@ -183,11 +198,11 @@ def mix_datasets(
 def load_mixture_config(path: str) -> Dict[str, Any]:
     """Load a mixture config JSON such as::
 
-        {
-          "weights": {"openwebtext": 0.7, "wikipedia": 0.3},
-          "temperature": 0.8,
-          "seed": 42
-        }
+    {
+      "weights": {"openwebtext": 0.7, "wikipedia": 0.3},
+      "temperature": 0.8,
+      "seed": 42
+    }
     """
     with open(path, "r", encoding="utf-8") as f:
         cfg = json.load(f)

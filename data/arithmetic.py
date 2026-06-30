@@ -2,6 +2,7 @@
 Synthetic arithmetic dataset generator.
 Three difficulty levels: easy, medium, hard.
 """
+
 import ast
 import operator
 import random
@@ -10,7 +11,6 @@ from typing import Any, Optional
 
 import torch
 from torch.utils.data import Dataset
-
 
 # Safe AST-based operators for arithmetic evaluation (replaces eval()).
 _ALLOWED_OPS = {
@@ -118,7 +118,9 @@ def select_prompt_templates(diversity: int = 1):
     return PROMPT_TEMPLATES[:diversity]
 
 
-def format_prompt(expr: str, diversity: int = 1, rng: Optional[random.Random] = None) -> str:
+def format_prompt(
+    expr: str, diversity: int = 1, rng: Optional[random.Random] = None
+) -> str:
     """Format an arithmetic expression into a prompt using diverse templates.
 
     Parameters
@@ -214,15 +216,23 @@ def generate_hard(num_samples=1000, seed=44, prompt_diversity: int = 1):
     data: list[dict[str, Any]] = []
 
     templates = [
-        lambda: (f"({random.randint(0, 10000)} + {random.randint(1, 10000)}) * "
-                 f"{random.randint(1, 500)} / {random.randint(1, 500)}"),
-        lambda: (f"{random.randint(0, 5000)} + {random.randint(1, 100)} * "
-                 f"{random.randint(1, 100)} - {random.randint(1, 500)} / {random.randint(1, 100)}"),
-        lambda: (f"({random.randint(0, 5000)} * {random.randint(1, 100)}) + "
-                 f"({random.randint(1, 1000)} / {random.randint(1, 100)})"),
+        lambda: (
+            f"({random.randint(0, 10000)} + {random.randint(1, 10000)}) * "
+            f"{random.randint(1, 500)} / {random.randint(1, 500)}"
+        ),
+        lambda: (
+            f"{random.randint(0, 5000)} + {random.randint(1, 100)} * "
+            f"{random.randint(1, 100)} - {random.randint(1, 500)} / {random.randint(1, 100)}"
+        ),
+        lambda: (
+            f"({random.randint(0, 5000)} * {random.randint(1, 100)}) + "
+            f"({random.randint(1, 1000)} / {random.randint(1, 100)})"
+        ),
         lambda: f"{random.randint(2, 20)} ** {random.randint(1, 6)} % {random.randint(1, 50) + 1}",
-        lambda: (f"({random.randint(0, 5000)} - {random.randint(0, 5000)}) * "
-                 f"({random.randint(1, 200)} + {random.randint(1, 200)})"),
+        lambda: (
+            f"({random.randint(0, 5000)} - {random.randint(0, 5000)}) * "
+            f"({random.randint(1, 200)} + {random.randint(1, 200)})"
+        ),
     ]
 
     attempts = 0
@@ -292,6 +302,7 @@ class ArithmeticDataset(Dataset):
 # ---------------------------------------------------------------------------
 # Chain-of-Thought (CoT) extensions
 # ---------------------------------------------------------------------------
+
 
 def generate_cot_problems(num_samples=1000, seed=42, difficulty="easy"):
     """Generate arithmetic problems with chain-of-thought reasoning.
@@ -373,11 +384,13 @@ def generate_cot_problems(num_samples=1000, seed=42, difficulty="easy"):
             prompt = f"Calculate ({a} + {b}) * {c} / {d}. Show your reasoning."
             answer = str(val2)
 
-        problems.append({
-            "prompt": prompt,
-            "reasoning": reasoning,
-            "answer": answer,
-        })
+        problems.append(
+            {
+                "prompt": prompt,
+                "reasoning": reasoning,
+                "answer": answer,
+            }
+        )
 
     return problems
 
@@ -446,7 +459,9 @@ def collate_fn(batch, pad_token_id=50256):
         lab = b["labels"]
         pad_len = max_len - len(inp)
         if pad_len > 0:
-            inp = torch.cat([inp, torch.full((pad_len,), pad_token_id, dtype=torch.long)])
+            inp = torch.cat(
+                [inp, torch.full((pad_len,), pad_token_id, dtype=torch.long)]
+            )
             lab = torch.cat([lab, torch.full((pad_len,), -1, dtype=torch.long)])
         input_ids.append(inp)
         labels.append(lab)
@@ -469,12 +484,15 @@ def collate_fn(batch, pad_token_id=50256):
 def _test_cot_generation():
     data = generate_cot_problems(num_samples=5, seed=42, difficulty="easy")
     assert len(data) == 5
-    assert all("prompt" in item and "reasoning" in item and "answer" in item for item in data)
+    assert all(
+        "prompt" in item and "reasoning" in item and "answer" in item for item in data
+    )
     print("generate_cot_problems smoke test passed")
 
 
 def _test_chain_of_thought_dataset():
     import tiktoken
+
     tokenizer = tiktoken.get_encoding("gpt2")
     data = generate_cot_problems(num_samples=3, seed=42, difficulty="easy")
     ds = ChainOfThoughtDataset(data, tokenizer, max_length=256)

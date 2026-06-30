@@ -4,6 +4,7 @@ The implementation is intentionally dependency-free so it works on Windows and
 in minimal environments.  For very large corpora consider swapping in
 ``datasketch``.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -183,7 +184,11 @@ class MinHashDeduplicator:
         self._all_ngrams: List[Set[str]] = []
         self._cumulative_size = 0
 
-        if incremental and signature_path is not None and os.path.exists(signature_path):
+        if (
+            incremental
+            and signature_path is not None
+            and os.path.exists(signature_path)
+        ):
             self.load_signatures(signature_path)
 
     def fit(self, texts: Sequence[str]) -> "MinHashDeduplicator":
@@ -217,7 +222,10 @@ class MinHashDeduplicator:
                 else:
                     # Compare against an earlier new signature.
                     prev = j - self._cumulative_size
-                    if prev < i and _jaccard(new_ngrams[i], new_ngrams[prev]) >= self.threshold:
+                    if (
+                        prev < i
+                        and _jaccard(new_ngrams[i], new_ngrams[prev]) >= self.threshold
+                    ):
                         duplicate.add(i)
                         break
             if i not in duplicate:
@@ -294,7 +302,13 @@ class MinHashDeduplicator:
             raise FileNotFoundError(f"Signature file not found: {path}")
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        for key in ("num_hashes", "ngram_size", "num_bands", "rows_per_band", "threshold"):
+        for key in (
+            "num_hashes",
+            "ngram_size",
+            "num_bands",
+            "rows_per_band",
+            "threshold",
+        ):
             stored = data.get(key)
             expected = getattr(self, key)
             if stored is not None and stored != expected:

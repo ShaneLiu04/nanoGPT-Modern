@@ -5,6 +5,7 @@ continuous quality score in ``[0, 1]`` instead of a binary keep/drop decision.
 Supports both FastText-based and rule-based scoring, and exposes stratified
 sampling utilities so high-quality documents can be up-sampled.
 """
+
 from __future__ import annotations
 
 import math
@@ -78,6 +79,7 @@ class QualityScoreFilter(QualityFilter):
         if fasttext_model_path is not None:
             try:
                 import fasttext  # type: ignore[import-untyped]
+
                 self._fasttext_model = fasttext.load_model(fasttext_model_path)
                 self._fasttext_available = True
             except Exception as exc:
@@ -181,9 +183,7 @@ class QualityScoreFilter(QualityFilter):
             return 0.0
         counts = Counter(text)
         total = len(text)
-        entropy = -sum(
-            (c / total) * math.log2(c / total) for c in counts.values()
-        )
+        entropy = -sum((c / total) * math.log2(c / total) for c in counts.values())
         # Normalise against the maximum possible entropy for printable ASCII.
         max_entropy = math.log2(min(95, total))
         if max_entropy <= 0:
