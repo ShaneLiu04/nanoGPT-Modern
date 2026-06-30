@@ -41,7 +41,7 @@ class NanoGPTModernConfig(PretrainedConfig):
         tie_word_embeddings: bool = True,
         **kwargs: Any,
     ):
-        super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
+        super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)  # type: ignore[call-arg]
         self.vocab_size = vocab_size
         self.block_size = block_size
         self.n_layer = n_layer

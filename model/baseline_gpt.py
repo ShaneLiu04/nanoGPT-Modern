@@ -197,6 +197,26 @@ class BaselineGPTConfig:
         self.norm_position = norm_position
         self.gradient_checkpointing = gradient_checkpointing
 
+    def to_dict(self) -> dict:
+        """Serialize the config to a shallow dict for checkpointing."""
+        return {
+            "vocab_size": self.vocab_size,
+            "block_size": self.block_size,
+            "n_layer": self.n_layer,
+            "n_head": self.n_head,
+            "n_embd": self.n_embd,
+            "dropout": self.dropout,
+            "bias": self.bias,
+            "attention_backend": self.attention_backend,
+            "norm_position": self.norm_position,
+            "gradient_checkpointing": self.gradient_checkpointing,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "BaselineGPTConfig":
+        """Deserialize from a dict, ignoring unknown keys."""
+        return cls(**{k: v for k, v in d.items() if k in cls.__init__.__code__.co_varnames})
+
 
 class BaselineGPT(nn.Module):
     def __init__(self, config):
