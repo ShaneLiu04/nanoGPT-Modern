@@ -91,7 +91,7 @@ class ChatTemplate(ABC):
         }
         if name.lower() not in registry:
             raise ValueError(f"Unknown chat template: {name}. Available: {list(registry.keys())}")
-        return registry[name.lower()]()
+        return registry[name.lower()]()  # type: ignore[abstract]
 
 
 class ChatMLTemplate(ChatTemplate):

@@ -11,7 +11,7 @@ import os
 import re
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
 
 import numpy as np
 import torch
@@ -159,7 +159,7 @@ class LanguageDetector:
         }
         if not counts:
             return "en"
-        best = max(counts, key=counts.get)
+        best = max(counts, key=lambda k: counts[k])
         return best if counts[best] > 0 else "en"
 
 
