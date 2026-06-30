@@ -12,6 +12,7 @@ Usage
 >>> results = evaluator.evaluate(prompts, n_samples=4, max_new_tokens=128)
 >>> print(results["win_rate"])
 """
+
 from __future__ import annotations
 
 import json
@@ -100,7 +101,11 @@ class WinRateEvaluator:
         self.device = device
 
     def _generate(
-        self, model: nn.Module, prompt_ids: torch.Tensor, max_new_tokens: int, temperature: float
+        self,
+        model: nn.Module,
+        prompt_ids: torch.Tensor,
+        max_new_tokens: int,
+        temperature: float,
     ) -> str:
         """Greedy or sampled generation wrapper."""
         model.eval()
@@ -112,7 +117,7 @@ class WinRateEvaluator:
                 top_k=50,
                 use_cache=True,
             )
-        generated_ids = out[0, prompt_ids.shape[1]:].tolist()
+        generated_ids = out[0, prompt_ids.shape[1] :].tolist()
         return self.tokenizer.decode(generated_ids)
 
     def evaluate(
@@ -143,25 +148,33 @@ class WinRateEvaluator:
         ref_scores_all = []
 
         for prompt in prompts:
-            prompt_ids = torch.tensor([self.tokenizer.encode(prompt)], dtype=torch.long, device=self.device)
+            prompt_ids = torch.tensor(
+                [self.tokenizer.encode(prompt)], dtype=torch.long, device=self.device
+            )
             policy_scores = []
             ref_scores = []
             for _ in range(n_samples):
-                policy_resp = self._generate(self.policy_model, prompt_ids, max_new_tokens, temperature)
-                ref_resp = self._generate(self.ref_model, prompt_ids, max_new_tokens, temperature)
+                policy_resp = self._generate(
+                    self.policy_model, prompt_ids, max_new_tokens, temperature
+                )
+                ref_resp = self._generate(
+                    self.ref_model, prompt_ids, max_new_tokens, temperature
+                )
                 ps = self.judge.score(prompt, policy_resp)
                 rs = self.judge.score(prompt, ref_resp)
                 policy_scores.append(ps)
                 ref_scores.append(rs)
-                records.append({
-                    "prompt": prompt,
-                    "policy_response": policy_resp,
-                    "ref_response": ref_resp,
-                    "policy_score": ps,
-                    "ref_score": rs,
-                    "policy_wins": ps > rs,
-                    "tie": ps == rs,
-                })
+                records.append(
+                    {
+                        "prompt": prompt,
+                        "policy_response": policy_resp,
+                        "ref_response": ref_resp,
+                        "policy_score": ps,
+                        "ref_score": rs,
+                        "policy_wins": ps > rs,
+                        "tie": ps == rs,
+                    }
+                )
             policy_scores_all.extend(policy_scores)
             ref_scores_all.extend(ref_scores)
 
@@ -174,8 +187,14 @@ class WinRateEvaluator:
         return {
             "win_rate": win_rate,
             "tie_rate": tie_rate,
-            "policy_mean_score": sum(policy_scores_all) / len(policy_scores_all) if policy_scores_all else 0.0,
-            "ref_mean_score": sum(ref_scores_all) / len(ref_scores_all) if ref_scores_all else 0.0,
+            "policy_mean_score": (
+                sum(policy_scores_all) / len(policy_scores_all)
+                if policy_scores_all
+                else 0.0
+            ),
+            "ref_mean_score": (
+                sum(ref_scores_all) / len(ref_scores_all) if ref_scores_all else 0.0
+            ),
             "total_comparisons": total,
             "records": records,
         }
@@ -198,6 +217,7 @@ class WinRateEvaluator:
 def build_arithmetic_prompts(num_samples: int = 100, seed: int = 42) -> List[str]:
     """Generate a simple arithmetic prompt set for quick win-rate smoke tests."""
     import random
+
     random.seed(seed)
     prompts = []
     for _ in range(num_samples):

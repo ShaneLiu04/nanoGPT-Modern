@@ -22,6 +22,7 @@ Examples
         --data_dir data/openwebtext --split val \
         --tasks hellaswag,lambada_openai
 """
+
 import os
 import argparse
 import math
@@ -40,22 +41,44 @@ from utils.config import parse_args_with_config
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", type=str, required=True, help="Path to checkpoint")
-    parser.add_argument("--hf_dir", type=str, default=None,
-                        help="HuggingFace-format directory for lm-eval (auto-exported from "
-                             "--checkpoint if omitted and the checkpoint is ModernGPT)")
-    parser.add_argument("--data_dir", type=str, default="data/openwebtext",
-                        help="Directory containing {split}.bin / {split}.idx")
+    parser.add_argument(
+        "--checkpoint", type=str, required=True, help="Path to checkpoint"
+    )
+    parser.add_argument(
+        "--hf_dir",
+        type=str,
+        default=None,
+        help="HuggingFace-format directory for lm-eval (auto-exported from "
+        "--checkpoint if omitted and the checkpoint is ModernGPT)",
+    )
+    parser.add_argument(
+        "--data_dir",
+        type=str,
+        default="data/openwebtext",
+        help="Directory containing {split}.bin / {split}.idx",
+    )
     parser.add_argument("--split", type=str, default="val", choices=["train", "val"])
     parser.add_argument("--batch_size", type=int, default=12)
     parser.add_argument("--block_size", type=int, default=1024)
-    parser.add_argument("--num_batches", type=int, default=None,
-                        help="Max batches to evaluate (default: all)")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--tasks", type=str, default="",
-                        help="Comma-separated lm-eval tasks (requires lm-eval package)")
+    parser.add_argument(
+        "--num_batches",
+        type=int,
+        default=None,
+        help="Max batches to evaluate (default: all)",
+    )
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
+    parser.add_argument(
+        "--tasks",
+        type=str,
+        default="",
+        help="Comma-separated lm-eval tasks (requires lm-eval package)",
+    )
     parser.add_argument("--output_json", type=str, default=None)
-    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
+    parser.add_argument(
+        "--config", type=str, default=None, help="Path to YAML config file"
+    )
     return parse_args_with_config(parser)
 
 
@@ -119,7 +142,9 @@ def _auto_export_hf(checkpoint_path, device):
         model_type = getattr(raw_config, "model_type", "modern")
 
     if model_type != "modern":
-        print(f"[INFO] Auto HF export only supports ModernGPT; checkpoint is '{model_type}'.")
+        print(
+            f"[INFO] Auto HF export only supports ModernGPT; checkpoint is '{model_type}'."
+        )
         return None
 
     tmp_dir = tempfile.mkdtemp(prefix="nanogpt_hf_")
@@ -177,8 +202,12 @@ def main():
     # than the checkpoint was trained with.
     block_size = getattr(model.config, "block_size", args.block_size)
     dataloader = get_dataloader(
-        args.data_dir, args.split, args.batch_size, block_size,
-        num_workers=4, use_packing=False,
+        args.data_dir,
+        args.split,
+        args.batch_size,
+        block_size,
+        num_workers=4,
+        use_packing=False,
     )
 
     ppl = evaluate_ppl(model, dataloader, device, args.num_batches)
