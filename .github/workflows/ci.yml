@@ -110,7 +110,8 @@ jobs:
           cfg = BaselineGPTConfig(n_layer=2, n_head=2, n_embd=128)
           m = BaselineGPT(cfg)
           os.makedirs('out/ci_smoke_sft', exist_ok=True)
-          torch.save({'model': m.state_dict(), 'config': cfg.to_dict(), 'iter_num': 0, 'best_val_loss': 999.0}, 'out/ci_smoke_sft/final.pt')
+          cfg_dict = cfg.to_dict(); cfg_dict['model_type'] = 'baseline'
+          torch.save({'model': m.state_dict(), 'config': cfg_dict, 'iter_num': 0, 'best_val_loss': 999.0}, 'out/ci_smoke_sft/final.pt')
           "
           python -m training.train_grpo \
             --init_from out/ci_smoke_sft/final.pt \
