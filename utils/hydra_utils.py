@@ -6,6 +6,7 @@ an attribute-accessible object that supports ``vars(args)`` and
 ``DictConfig`` into the existing :class:`utils.config.NestedNamespace` so that
 new Hydra entry points can reuse the old trainers without modification.
 """
+
 from __future__ import annotations
 
 from typing import Any, List, Optional, Set

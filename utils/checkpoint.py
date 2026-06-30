@@ -5,6 +5,7 @@ Supports full training-state checkpointing (model, optimizer, scheduler,
 scaler, EMA shadow weights, RNG state) while remaining backward compatible
 with older checkpoints that only store the minimal fields.
 """
+
 import os
 import torch
 
@@ -133,7 +134,9 @@ def get_rng_state():
 
     return {
         "torch": torch.get_rng_state(),
-        "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+        "torch_cuda": (
+            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
+        ),
         "numpy": np.random.get_state(),
         "random": random.getstate(),
     }
@@ -152,9 +155,7 @@ def set_rng_state(rng_state):
         torch.set_rng_state(torch_state)
     if "torch_cuda" in rng_state and torch.cuda.is_available():
         # set_rng_state_all accepts CPU ByteTensors and moves them to the GPU.
-        cuda_states = [
-            t.cpu().type(torch.ByteTensor) for t in rng_state["torch_cuda"]
-        ]
+        cuda_states = [t.cpu().type(torch.ByteTensor) for t in rng_state["torch_cuda"]]
         torch.cuda.set_rng_state_all(cuda_states)
     if "numpy" in rng_state:
         np.random.set_state(rng_state["numpy"])
@@ -162,7 +163,9 @@ def set_rng_state(rng_state):
         random.setstate(rng_state["random"])
 
 
-def save_checkpoint_raw(state_dict, optimizer, iter_num, best_val_loss, config, out_dir, filename):
+def save_checkpoint_raw(
+    state_dict, optimizer, iter_num, best_val_loss, config, out_dir, filename
+):
     """Backward-compatible wrapper that accepts a raw state_dict.
 
     Prefer :func:`save_checkpoint`; this wrapper exists for legacy callers

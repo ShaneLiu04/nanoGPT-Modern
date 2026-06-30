@@ -3,11 +3,11 @@
 This module provides numerically stable helpers used by both training and
 evaluation scripts so that metrics are computed with the same semantics.
 """
+
 from typing import Optional
 
 import torch
 import torch.nn.functional as F
-
 
 LOGPROB_CLIP_MIN: float = -20.0
 LOGPROB_CLIP_MAX: float = 0.0

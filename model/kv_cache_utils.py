@@ -23,6 +23,7 @@ incoming K/V tensors before writing them into the ring buffer, and
 This reduces peak memory by roughly 50 % (INT8) with minimal impact on
 generation quality for most models.
 """
+
 from __future__ import annotations
 
 import math
@@ -83,9 +84,9 @@ class KVCacheManager:
         self._device: Optional[torch.device] = None
         self._compute_dtype: Optional[torch.dtype] = None
 
-        self._cache_len = 0        # logical number of tokens in cache
-        self._write_pos = 0        # next physical position to write (0 .. max_cache_len)
-        self.start_pos = 0         # absolute position of logical first token
+        self._cache_len = 0  # logical number of tokens in cache
+        self._write_pos = 0  # next physical position to write (0 .. max_cache_len)
+        self.start_pos = 0  # absolute position of logical first token
 
     @classmethod
     def from_config(cls, config, cache_dtype: str = "bf16"):
@@ -172,9 +173,7 @@ class KVCacheManager:
         q = torch.clamp(torch.round(tensor / scale), -128, 127).to(torch.int8)
         return q, scale
 
-    def _dequantize_cache(
-        self, q: torch.Tensor, scale: torch.Tensor
-    ) -> torch.Tensor:
+    def _dequantize_cache(self, q: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
         """Dequantize a cached K or V tensor back to the compute dtype.
 
         Parameters
@@ -195,7 +194,9 @@ class KVCacheManager:
             return q.to(self._compute_dtype)
         return q.to(self._compute_dtype)
 
-    def init_cache(self, batch_size: int, device: torch.device, dtype: torch.dtype) -> None:
+    def init_cache(
+        self, batch_size: int, device: torch.device, dtype: torch.dtype
+    ) -> None:
         """Allocate empty cache tensors for each layer."""
         self._batch_size = batch_size
         self._device = device
@@ -208,30 +209,46 @@ class KVCacheManager:
 
         self._k = [
             torch.zeros(
-                batch_size, self.n_kv_heads, self.max_cache_len, self.head_dim,
-                device=device, dtype=storage_dtype,
+                batch_size,
+                self.n_kv_heads,
+                self.max_cache_len,
+                self.head_dim,
+                device=device,
+                dtype=storage_dtype,
             )
             for _ in range(self.n_layers)
         ]
         self._v = [
             torch.zeros(
-                batch_size, self.n_kv_heads, self.max_cache_len, self.head_dim,
-                device=device, dtype=storage_dtype,
+                batch_size,
+                self.n_kv_heads,
+                self.max_cache_len,
+                self.head_dim,
+                device=device,
+                dtype=storage_dtype,
             )
             for _ in range(self.n_layers)
         ]
         if is_quantized:
             self._k_scale = [
                 torch.ones(
-                    batch_size, self.n_kv_heads, self.max_cache_len, 1,
-                    device=device, dtype=torch.float32,
+                    batch_size,
+                    self.n_kv_heads,
+                    self.max_cache_len,
+                    1,
+                    device=device,
+                    dtype=torch.float32,
                 )
                 for _ in range(self.n_layers)
             ]
             self._v_scale = [
                 torch.ones(
-                    batch_size, self.n_kv_heads, self.max_cache_len, 1,
-                    device=device, dtype=torch.float32,
+                    batch_size,
+                    self.n_kv_heads,
+                    self.max_cache_len,
+                    1,
+                    device=device,
+                    dtype=torch.float32,
                 )
                 for _ in range(self.n_layers)
             ]
@@ -281,8 +298,8 @@ class KVCacheManager:
             # The incoming chunk is larger than the whole cache.  Keep only the
             # last ``max_cache_len`` tokens and reset the logical state so that
             # advance() can place them correctly.
-            new_k = new_k[:, :, -self.max_cache_len:, :]
-            new_v = new_v[:, :, -self.max_cache_len:, :]
+            new_k = new_k[:, :, -self.max_cache_len :, :]
+            new_v = new_v[:, :, -self.max_cache_len :, :]
             new_len = self.max_cache_len
             # Reset logical state; advance() will recompute start_pos/write_pos.
             self._cache_len = 0
@@ -301,26 +318,38 @@ class KVCacheManager:
         # Write with wrap-around.
         end_pos = self._write_pos + new_len
         if end_pos <= self.max_cache_len:
-            self._k[layer_idx][:, :, self._write_pos:end_pos, :] = q_k
-            self._v[layer_idx][:, :, self._write_pos:end_pos, :] = q_v
+            self._k[layer_idx][:, :, self._write_pos : end_pos, :] = q_k
+            self._v[layer_idx][:, :, self._write_pos : end_pos, :] = q_v
             if s_k is not None:
                 assert self._k_scale is not None and self._v_scale is not None
                 assert s_v is not None
-                self._k_scale[layer_idx][:, :, self._write_pos:end_pos, :] = s_k
-                self._v_scale[layer_idx][:, :, self._write_pos:end_pos, :] = s_v
+                self._k_scale[layer_idx][:, :, self._write_pos : end_pos, :] = s_k
+                self._v_scale[layer_idx][:, :, self._write_pos : end_pos, :] = s_v
         else:
             first_part = self.max_cache_len - self._write_pos
-            self._k[layer_idx][:, :, self._write_pos:, :] = q_k[:, :, :first_part, :]
-            self._k[layer_idx][:, :, :end_pos - self.max_cache_len, :] = q_k[:, :, first_part:, :]
-            self._v[layer_idx][:, :, self._write_pos:, :] = q_v[:, :, :first_part, :]
-            self._v[layer_idx][:, :, :end_pos - self.max_cache_len, :] = q_v[:, :, first_part:, :]
+            self._k[layer_idx][:, :, self._write_pos :, :] = q_k[:, :, :first_part, :]
+            self._k[layer_idx][:, :, : end_pos - self.max_cache_len, :] = q_k[
+                :, :, first_part:, :
+            ]
+            self._v[layer_idx][:, :, self._write_pos :, :] = q_v[:, :, :first_part, :]
+            self._v[layer_idx][:, :, : end_pos - self.max_cache_len, :] = q_v[
+                :, :, first_part:, :
+            ]
             if s_k is not None:
                 assert self._k_scale is not None and self._v_scale is not None
                 assert s_v is not None
-                self._k_scale[layer_idx][:, :, self._write_pos:, :] = s_k[:, :, :first_part, :]
-                self._k_scale[layer_idx][:, :, :end_pos - self.max_cache_len, :] = s_k[:, :, first_part:, :]
-                self._v_scale[layer_idx][:, :, self._write_pos:, :] = s_v[:, :, :first_part, :]
-                self._v_scale[layer_idx][:, :, :end_pos - self.max_cache_len, :] = s_v[:, :, first_part:, :]
+                self._k_scale[layer_idx][:, :, self._write_pos :, :] = s_k[
+                    :, :, :first_part, :
+                ]
+                self._k_scale[layer_idx][:, :, : end_pos - self.max_cache_len, :] = s_k[
+                    :, :, first_part:, :
+                ]
+                self._v_scale[layer_idx][:, :, self._write_pos :, :] = s_v[
+                    :, :, :first_part, :
+                ]
+                self._v_scale[layer_idx][:, :, : end_pos - self.max_cache_len, :] = s_v[
+                    :, :, first_part:, :
+                ]
 
     def advance(self, delta: int) -> None:
         """Advance the logical cache length after all layers are written.
@@ -369,7 +398,9 @@ class KVCacheManager:
 
         is_quantized = self._quantization_enabled()
 
-        def _dequant_layer(layer_idx: int, start: int, end: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        def _dequant_layer(
+            layer_idx: int, start: int, end: int
+        ) -> Tuple[torch.Tensor, torch.Tensor]:
             assert self._k is not None and self._v is not None
             k_q = self._k[layer_idx][:, :, start:end, :]
             v_q = self._v[layer_idx][:, :, start:end, :]
@@ -450,7 +481,9 @@ class KVCacheManager:
         drop = 0
         if total_len > capacity:
             drop = total_len - capacity
-            trimmed: List[List[Tuple[torch.Tensor, torch.Tensor]]] = [[] for _ in normalized]
+            trimmed: List[List[Tuple[torch.Tensor, torch.Tensor]]] = [
+                [] for _ in normalized
+            ]
             remaining = drop
             for block_idx, block in enumerate(normalized[0]):
                 L = block[0].shape[2]
@@ -485,18 +518,22 @@ class KVCacheManager:
                 if self._quantization_enabled():
                     q_k, s_k = self._quantize_cache(k_block)
                     q_v, s_v = self._quantize_cache(v_block)
-                    self._k[i][:, :, self._write_pos:self._write_pos + L, :] = q_k
-                    self._v[i][:, :, self._write_pos:self._write_pos + L, :] = q_v
+                    self._k[i][:, :, self._write_pos : self._write_pos + L, :] = q_k
+                    self._v[i][:, :, self._write_pos : self._write_pos + L, :] = q_v
                     if self._k_scale is not None:
                         assert self._v_scale is not None
-                        self._k_scale[i][:, :, self._write_pos:self._write_pos + L, :] = s_k
-                        self._v_scale[i][:, :, self._write_pos:self._write_pos + L, :] = s_v
+                        self._k_scale[i][
+                            :, :, self._write_pos : self._write_pos + L, :
+                        ] = s_k
+                        self._v_scale[i][
+                            :, :, self._write_pos : self._write_pos + L, :
+                        ] = s_v
                 else:
-                    self._k[i][:, :, self._write_pos:self._write_pos + L, :] = k_block.to(
-                        self._k[i].dtype
+                    self._k[i][:, :, self._write_pos : self._write_pos + L, :] = (
+                        k_block.to(self._k[i].dtype)
                     )
-                    self._v[i][:, :, self._write_pos:self._write_pos + L, :] = v_block.to(
-                        self._v[i].dtype
+                    self._v[i][:, :, self._write_pos : self._write_pos + L, :] = (
+                        v_block.to(self._v[i].dtype)
                     )
             self._write_pos += L
         self._cache_len = total_len
@@ -517,7 +554,9 @@ class KVCacheManager:
                 f"new_cache_len ({new_cache_len}) must be in [0, {self._cache_len}]"
             )
         if self.start_pos != 0:
-            raise RuntimeError("truncate() is only supported before ring-buffer wrap-around")
+            raise RuntimeError(
+                "truncate() is only supported before ring-buffer wrap-around"
+            )
         self._cache_len = new_cache_len
         self._write_pos = new_cache_len % self.max_cache_len
 
@@ -566,7 +605,9 @@ class QuantizedKVCacheManager(KVCacheManager):
         )
 
 
-def build_sliding_window_mask(seq_len: int, window_size: int, device: Union[str, torch.device]) -> torch.Tensor:
+def build_sliding_window_mask(
+    seq_len: int, window_size: int, device: Union[str, torch.device]
+) -> torch.Tensor:
     """Build a causal + sliding window mask for training or inference."""
     mask = torch.full((seq_len, seq_len), float("-inf"), device=device)
     for i in range(seq_len):

@@ -3,6 +3,7 @@
 Uses CUDA events for precise wall-time measurement and separates
 prefill (prompt encoding) from decode (token-by-token generation).
 """
+
 import os, time, argparse, json
 import torch
 from model.attention_utils import set_attention_backend, print_attention_backend
@@ -14,26 +15,47 @@ from utils.config import parse_args_with_config
 def get_args():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", type=str, required=True)
-    p.add_argument("--model", type=str, default="modern", choices=["baseline", "modern"])
-    p.add_argument("--prompt", type=str, default="The future of artificial intelligence is")
+    p.add_argument(
+        "--model", type=str, default="modern", choices=["baseline", "modern"]
+    )
+    p.add_argument(
+        "--prompt", type=str, default="The future of artificial intelligence is"
+    )
     p.add_argument("--max_new_tokens", type=int, nargs="+", default=[400, 500])
     p.add_argument("--num_samples", type=int, default=30)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--top_k", type=int, default=50)
-    p.add_argument("--top_p", type=float, default=None, help="Nucleus sampling threshold")
-    p.add_argument("--repetition_penalty", type=float, default=None,
-                   help="Penalty for repeated tokens (>1.0 discourages repetition)")
-    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument(
+        "--top_p", type=float, default=None, help="Nucleus sampling threshold"
+    )
+    p.add_argument(
+        "--repetition_penalty",
+        type=float,
+        default=None,
+        help="Penalty for repeated tokens (>1.0 discourages repetition)",
+    )
+    p.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
     p.add_argument("--output_json", type=str, default=None)
-    p.add_argument("--prompt_len", type=int, default=50, help="Pad/trim prompt to this many tokens")
+    p.add_argument(
+        "--prompt_len", type=int, default=50, help="Pad/trim prompt to this many tokens"
+    )
     p.add_argument("--config", type=str, default=None, help="Path to YAML config file")
-    p.add_argument("--attn_backend", type=str, default="auto",
-                   choices=["auto", "flash", "mem_efficient", "math", "default"],
-                   help="Force SDPA attention backend (auto lets PyTorch choose)")
-    p.add_argument("--compile", action="store_true",
-                   help="Compile the forward pass with torch.compile (reduce-overhead) "
-                        "to lower kernel launch overhead in the token-by-token loop. "
-                        "Only effective on CUDA; CPU falls back to eager.")
+    p.add_argument(
+        "--attn_backend",
+        type=str,
+        default="auto",
+        choices=["auto", "flash", "mem_efficient", "math", "default"],
+        help="Force SDPA attention backend (auto lets PyTorch choose)",
+    )
+    p.add_argument(
+        "--compile",
+        action="store_true",
+        help="Compile the forward pass with torch.compile (reduce-overhead) "
+        "to lower kernel launch overhead in the token-by-token loop. "
+        "Only effective on CUDA; CPU falls back to eager.",
+    )
     return parse_args_with_config(p)
 
 
@@ -65,9 +87,19 @@ def _make_prompt(tokenizer, text, prompt_len, device):
     return torch.tensor([toks], dtype=torch.long, device=device)
 
 
-def benchmark(model, prompt_ids, max_new_tokens, num_samples, device,
-              temperature=1.0, top_k=50, top_p=None, repetition_penalty=None,
-              use_cache=True, compile=False):
+def benchmark(
+    model,
+    prompt_ids,
+    max_new_tokens,
+    num_samples,
+    device,
+    temperature=1.0,
+    top_k=50,
+    top_p=None,
+    repetition_penalty=None,
+    use_cache=True,
+    compile=False,
+):
     """Returns a dict with prefill/decode/total timing and throughput.
 
     Parameters
@@ -81,9 +113,7 @@ def benchmark(model, prompt_ids, max_new_tokens, num_samples, device,
     is_cuda = "cuda" in str(device)
     sync = torch.cuda.synchronize if is_cuda else (lambda: None)
 
-    has_cache_api = (
-        "use_cache" in model.generate.__code__.co_varnames
-    )
+    has_cache_api = "use_cache" in model.generate.__code__.co_varnames
     use_cache = use_cache and has_cache_api
 
     # ---- optional torch.compile for the manual decode loop ----
@@ -164,7 +194,9 @@ def benchmark(model, prompt_ids, max_new_tokens, num_samples, device,
         else:
             gen_kwargs = dict(
                 max_new_tokens=max_new_tokens,
-                temperature=temperature, top_k=top_k, top_p=top_p,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
                 repetition_penalty=repetition_penalty,
                 use_cache=False,
             )
@@ -180,8 +212,8 @@ def benchmark(model, prompt_ids, max_new_tokens, num_samples, device,
 
         if is_cuda:
             t_prefill = ev0.elapsed_time(ev1)  # ms
-            t_decode  = ev1.elapsed_time(ev2)  # ms
-            t_total   = ev0.elapsed_time(ev2)
+            t_decode = ev1.elapsed_time(ev2)  # ms
+            t_total = ev0.elapsed_time(ev2)
         else:
             t_total = t_prefill = 0.0
 
@@ -197,14 +229,16 @@ def benchmark(model, prompt_ids, max_new_tokens, num_samples, device,
 
     def med(vals):
         s = sorted(vals)
-        return s[len(s)//2]
+        return s[len(s) // 2]
 
     return {
         "total_time_ms": med(total_ms),
         "prefill_ms": med(prefill_ms),
         "decode_ms": med(decode_ms),
         "decode_tok_s": med(decode_tok_s) if decode_tok_s else 0.0,
-        "total_tok_s": max_new_tokens / (med(total_ms) / 1000.0) if med(total_ms) > 0 else 0.0,
+        "total_tok_s": (
+            max_new_tokens / (med(total_ms) / 1000.0) if med(total_ms) > 0 else 0.0
+        ),
         "peak_mem_mb": round(peak_mem, 1),
         "prompt_len": prompt_ids.shape[1],
         "generated_len": max_new_tokens,
@@ -221,6 +255,7 @@ def main():
 
     try:
         import tiktoken
+
         tokenizer = tiktoken.get_encoding("gpt2")
     except Exception:
         tokenizer = None
@@ -229,23 +264,39 @@ def main():
         prompt_ids = _make_prompt(tokenizer, args.prompt, args.prompt_len, device)
     else:
         # fallback: ord(char)
-        s = args.prompt[:config.block_size]
-        prompt_ids = torch.tensor([[ord(c) for c in s]], dtype=torch.long, device=device)
+        s = args.prompt[: config.block_size]
+        prompt_ids = torch.tensor(
+            [[ord(c) for c in s]], dtype=torch.long, device=device
+        )
 
-    print(f"Model: {args.model} | params={sum(p.numel() for p in model.parameters()):,}")
+    print(
+        f"Model: {args.model} | params={sum(p.numel() for p in model.parameters()):,}"
+    )
     print(f"Prompt: {args.prompt!r}")
     print(f"Prompt tokens={prompt_ids.shape[1]} | samples={args.num_samples}")
     print()
 
     all_results = {"no_cache": None, "cache": None}
-    headers = ["config", "total_ms", "prefill_ms", "decode_ms", "decode_tok/s", "total_tok/s", "mem_MB"]
+    headers = [
+        "config",
+        "total_ms",
+        "prefill_ms",
+        "decode_ms",
+        "decode_tok/s",
+        "total_tok/s",
+        "mem_MB",
+    ]
 
     for use_cache in [False, True]:
         label = "cache" if use_cache else "no-cache"
         results = {}
         for nt in args.max_new_tokens:
             r = benchmark(
-                model, prompt_ids, nt, args.num_samples, device,
+                model,
+                prompt_ids,
+                nt,
+                args.num_samples,
+                device,
                 temperature=args.temperature,
                 top_k=args.top_k,
                 top_p=args.top_p,

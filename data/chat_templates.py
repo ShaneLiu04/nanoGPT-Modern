@@ -19,6 +19,7 @@ Usage
 ...     {"role": "user", "content": "Hello!"},
 ... ])
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -71,6 +72,7 @@ class ChatTemplate(ABC):
         text = self.apply_chat_template([system_message])
         try:
             import tiktoken
+
             tokenizer = tiktoken.get_encoding("gpt2")
             ids = tokenizer.encode(text)
         except Exception:
@@ -90,7 +92,9 @@ class ChatTemplate(ABC):
             "gemma": GemmaTemplate,
         }
         if name.lower() not in registry:
-            raise ValueError(f"Unknown chat template: {name}. Available: {list(registry.keys())}")
+            raise ValueError(
+                f"Unknown chat template: {name}. Available: {list(registry.keys())}"
+            )
         return registry[name.lower()]()  # type: ignore[abstract]
 
 
@@ -137,6 +141,7 @@ class ChatMLTemplate(ChatTemplate):
         text = self.apply_chat_template([system_message])
         try:
             import tiktoken
+
             tokenizer = tiktoken.get_encoding("gpt2")
             ids = tokenizer.encode(text)
         except Exception:
@@ -238,7 +243,9 @@ class GemmaTemplate(ChatTemplate):
         return [self.END_TURN]
 
 
-def apply_chat_template(messages: List[Dict[str, str]], template: str = "chatml") -> str:
+def apply_chat_template(
+    messages: List[Dict[str, str]], template: str = "chatml"
+) -> str:
     """Convenience function: format messages with a named template.
 
     Parameters

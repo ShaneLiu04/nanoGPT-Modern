@@ -1,6 +1,7 @@
 """OpenWebText streaming dataloader with memory-efficient loading and dynamic batching.
 Expects ~1M docs, ~1.13B tokens total.
 """
+
 import os
 import random
 import warnings
@@ -9,7 +10,15 @@ import torch
 from torch.utils.data import IterableDataset, DataLoader
 
 
-def get_openwebtext_dataset(data_dir="data/openwebtext", split="train", block_size=1024, resume_offset=0, use_packing=False, shuffle_buffer=None, shuffle_idx_path=None):
+def get_openwebtext_dataset(
+    data_dir="data/openwebtext",
+    split="train",
+    block_size=1024,
+    resume_offset=0,
+    use_packing=False,
+    shuffle_buffer=None,
+    shuffle_idx_path=None,
+):
     bin_path = os.path.join(data_dir, f"{split}.bin")
     if not os.path.exists(bin_path):
         raise FileNotFoundError(
@@ -17,8 +26,16 @@ def get_openwebtext_dataset(data_dir="data/openwebtext", split="train", block_si
             "Please run data preparation (prepare.py) to tokenize and shard the dataset."
         )
     if use_packing:
-        return PackingDataset(bin_path, block_size=block_size, resume_offset=resume_offset)
-    return MemmapDataset(bin_path, block_size=block_size, resume_offset=resume_offset, shuffle_buffer=shuffle_buffer, shuffle_idx_path=shuffle_idx_path)
+        return PackingDataset(
+            bin_path, block_size=block_size, resume_offset=resume_offset
+        )
+    return MemmapDataset(
+        bin_path,
+        block_size=block_size,
+        resume_offset=resume_offset,
+        shuffle_buffer=shuffle_buffer,
+        shuffle_idx_path=shuffle_idx_path,
+    )
 
 
 def _detect_dtype_from_index(bin_path):
@@ -81,7 +98,14 @@ def generate_shuffle_index(bin_path, seed=1337, block_size=None):
 
 
 class MemmapDataset(IterableDataset):
-    def __init__(self, bin_path, block_size=1024, resume_offset=0, shuffle_buffer=None, shuffle_idx_path=None):
+    def __init__(
+        self,
+        bin_path,
+        block_size=1024,
+        resume_offset=0,
+        shuffle_buffer=None,
+        shuffle_idx_path=None,
+    ):
         super().__init__()
         self.block_size = block_size
         self.resume_offset = resume_offset
@@ -96,7 +120,9 @@ class MemmapDataset(IterableDataset):
                 with open(shuffle_idx_path, "rb") as f:
                     self._shuffle_idx = np.load(f)
                 if len(self._shuffle_idx) != self.length:
-                    warnings.warn(f"Shuffle index length mismatch: {len(self._shuffle_idx)} != {self.length}")
+                    warnings.warn(
+                        f"Shuffle index length mismatch: {len(self._shuffle_idx)} != {self.length}"
+                    )
                     self._shuffle_idx = None
             else:
                 warnings.warn(f"Shuffle index not found: {shuffle_idx_path}")
@@ -117,7 +143,11 @@ class MemmapDataset(IterableDataset):
         else:
             per_worker = (self.length - self.resume_offset) // worker_info.num_workers
             start = self.resume_offset + worker_info.id * per_worker
-            end = start + per_worker if worker_info.id < worker_info.num_workers - 1 else self.length
+            end = (
+                start + per_worker
+                if worker_info.id < worker_info.num_workers - 1
+                else self.length
+            )
 
         if self._shuffle_idx is not None:
             # Global shuffle: use pre-computed permutation for this worker slice.
@@ -127,7 +157,11 @@ class MemmapDataset(IterableDataset):
 
         # Apply chunk-level shuffle only when no global shuffle index is available.
         if self._shuffle_idx is None:
-            buffer_size = self.shuffle_buffer if self.shuffle_buffer is not None else min(10000, end - start)
+            buffer_size = (
+                self.shuffle_buffer
+                if self.shuffle_buffer is not None
+                else min(10000, end - start)
+            )
             buffer_size = max(1, buffer_size)
             for buf_start in range(0, len(indices), buffer_size):
                 buf_end = min(buf_start + buffer_size, len(indices))
@@ -138,7 +172,9 @@ class MemmapDataset(IterableDataset):
         for i in indices:
             if i < 0 or i >= self.length:
                 continue
-            chunk = self.data[i * (self.block_size + 1) : (i + 1) * (self.block_size + 1)]
+            chunk = self.data[
+                i * (self.block_size + 1) : (i + 1) * (self.block_size + 1)
+            ]
             chunk_i64 = chunk.astype(np.int64)
             x = torch.from_numpy(chunk_i64[:-1])
             y = torch.from_numpy(chunk_i64[1:])
@@ -201,7 +237,11 @@ class DocBoundaryDataset(IterableDataset):
         else:
             per_worker = len(self.data) // worker_info.num_workers
             start = worker_info.id * per_worker
-            end = start + per_worker if worker_info.id < worker_info.num_workers - 1 else len(self.data)
+            end = (
+                start + per_worker
+                if worker_info.id < worker_info.num_workers - 1
+                else len(self.data)
+            )
 
         self._build_eot_index()
 
@@ -261,10 +301,14 @@ class PackingDataset(IterableDataset):
     positions with no in-document context.
     """
 
-    def __init__(self, bin_path, block_size=1024, eot_token=None, resume_offset=0, shuffle=True):
+    def __init__(
+        self, bin_path, block_size=1024, eot_token=None, resume_offset=0, shuffle=True
+    ):
         super().__init__()
         self.block_size = block_size
-        self.eot_token = eot_token if eot_token is not None else _detect_eot_from_index(bin_path)
+        self.eot_token = (
+            eot_token if eot_token is not None else _detect_eot_from_index(bin_path)
+        )
         self.resume_offset = resume_offset
         self.shuffle = shuffle
         dtype = _detect_dtype_from_index(bin_path)
@@ -414,7 +458,9 @@ class GlobalShuffledDataset(IterableDataset):
     already exist, and the underlying ``MemmapDataset`` reads from it.
     """
 
-    def __init__(self, bin_path, block_size=1024, resume_offset=0, shuffle_buffer=None, seed=1337):
+    def __init__(
+        self, bin_path, block_size=1024, resume_offset=0, shuffle_buffer=None, seed=1337
+    ):
         super().__init__()
         self.bin_path = bin_path
         self.block_size = block_size
@@ -445,12 +491,26 @@ class GlobalShuffledDataset(IterableDataset):
         self._dataset.load_state_dict(state)
 
 
-def get_dataloader(data_dir="data/openwebtext", split="train", batch_size=12, block_size=1024,
-                   num_workers=4, resume_offset=0, worker_init_fn=None, use_packing=False,
-                   shuffle_buffer=None, shuffle_idx_path=None):
+def get_dataloader(
+    data_dir="data/openwebtext",
+    split="train",
+    batch_size=12,
+    block_size=1024,
+    num_workers=4,
+    resume_offset=0,
+    worker_init_fn=None,
+    use_packing=False,
+    shuffle_buffer=None,
+    shuffle_idx_path=None,
+):
     dataset = get_openwebtext_dataset(
-        data_dir, split, block_size=block_size, resume_offset=resume_offset, use_packing=use_packing,
-        shuffle_buffer=shuffle_buffer, shuffle_idx_path=shuffle_idx_path,
+        data_dir,
+        split,
+        block_size=block_size,
+        resume_offset=resume_offset,
+        use_packing=use_packing,
+        shuffle_buffer=shuffle_buffer,
+        shuffle_idx_path=shuffle_idx_path,
     )
     loader = DataLoader(
         dataset,

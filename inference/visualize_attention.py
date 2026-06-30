@@ -12,6 +12,7 @@ matplotlib, seaborn, and (optional) jinja2 for HTML rendering.  These are
 soft-imported so that the module can be loaded in headless environments without
 GUI libraries.
 """
+
 from __future__ import annotations
 
 import json
@@ -54,6 +55,7 @@ class AttentionVisualizer:
             attn = getattr(block, "attn", None)
             if attn is None:
                 continue
+
             # Hook on the attention module to capture the attention matrix.
             def make_hook(layer_idx):
                 def hook(mod, inp, out):
@@ -62,7 +64,9 @@ class AttentionVisualizer:
                     # them manually in eager mode).  For SDPA backends the weights
                     # are not returned, so we fall back to computing Q@K^T.
                     self._attn_maps[layer_idx] = self._extract_attention(mod, inp, out)
+
                 return hook
+
             h = attn.register_forward_hook(make_hook(idx))
             self._hooks.append(h)
 
@@ -87,10 +91,12 @@ class AttentionVisualizer:
         if mod.n_kv_head < mod.n_head:
             n_rep = mod.n_head // mod.n_kv_head
             k = k.repeat_interleave(n_rep, dim=1)
-        scores = (q @ k.transpose(-2, -1)) / (mod.head_dim ** 0.5)
+        scores = (q @ k.transpose(-2, -1)) / (mod.head_dim**0.5)
         # Causal mask.
         causal_mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
-        scores = scores.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), float("-inf"))
+        scores = scores.masked_fill(
+            causal_mask.unsqueeze(0).unsqueeze(0), float("-inf")
+        )
         attn = F.softmax(scores, dim=-1)
         return attn.detach().cpu()  # [B, n_head, T, T]
 
@@ -131,12 +137,16 @@ class AttentionVisualizer:
             import matplotlib.pyplot as plt
             import seaborn as sns
         except ImportError as e:
-            raise ImportError("AttentionVisualizer.plot_heatmaps requires matplotlib and seaborn") from e
+            raise ImportError(
+                "AttentionVisualizer.plot_heatmaps requires matplotlib and seaborn"
+            ) from e
 
         if not self._attn_maps:
             raise RuntimeError("No attention maps captured. Run a forward pass first.")
 
-        layers = [layer_idx] if layer_idx is not None else sorted(self._attn_maps.keys())
+        layers = (
+            [layer_idx] if layer_idx is not None else sorted(self._attn_maps.keys())
+        )
         n_layers = len(layers)
         cols = min(4, n_layers)
         rows = math.ceil(n_layers / cols)
@@ -159,7 +169,13 @@ class AttentionVisualizer:
             # Truncate to token length.
             T = min(mat.shape[0], len(tokens))
             mat_np = mat[:T, :T].numpy()
-            sns.heatmap(mat_np, ax=ax, cmap="YlOrRd", xticklabels=tokens[:T], yticklabels=tokens[:T])
+            sns.heatmap(
+                mat_np,
+                ax=ax,
+                cmap="YlOrRd",
+                xticklabels=tokens[:T],
+                yticklabels=tokens[:T],
+            )
             ax.set_title(title)
             ax.tick_params(axis="both", labelsize=6)
 
@@ -186,7 +202,11 @@ class AttentionVisualizer:
         if not self._attn_maps:
             raise RuntimeError("No attention maps captured. Run a forward pass first.")
 
-        layers = layer_indices if layer_indices is not None else sorted(self._attn_maps.keys())
+        layers = (
+            layer_indices
+            if layer_indices is not None
+            else sorted(self._attn_maps.keys())
+        )
         data = {}
         for li in layers:
             attn = self._attn_maps[li][0].mean(dim=0).numpy().tolist()  # [T, T]
@@ -305,12 +325,15 @@ class LogitLens:
         if blocks is None:
             raise ValueError("Model does not have transformer.h blocks")
         for idx, block in enumerate(blocks):
+
             def make_hook(layer_idx):
                 def hook(mod, inp, out):
                     # out is (x, present_kv) or x depending on the path.
                     x = out[0] if isinstance(out, tuple) else out
                     self._record_layer(x, layer_idx)
+
                 return hook
+
             h = block.register_forward_hook(make_hook(idx))
             self._hooks.append(h)
 
@@ -324,12 +347,14 @@ class LogitLens:
             last_logits = logits[:, -1, :]  # [B, V]
             top_vals, top_ids = torch.topk(last_logits, self.top_k, dim=-1)
             top_probs = probs[:, -1, :].gather(-1, top_ids)
-            self._records.append({
-                "layer": layer_idx,
-                "tokens": top_ids.cpu().tolist(),
-                "logits": top_vals.cpu().tolist(),
-                "probs": top_probs.cpu().tolist(),
-            })
+            self._records.append(
+                {
+                    "layer": layer_idx,
+                    "tokens": top_ids.cpu().tolist(),
+                    "logits": top_vals.cpu().tolist(),
+                    "probs": top_probs.cpu().tolist(),
+                }
+            )
 
     def remove_hooks(self) -> None:
         for h in self._hooks:
@@ -365,12 +390,14 @@ class LogitLens:
                 except Exception:
                     t = str(tid)
                 texts.append(t)
-            decoded.append({
-                "layer": rec["layer"],
-                "tokens": ids,
-                "texts": texts,
-                "probs": rec["probs"][0],
-            })
+            decoded.append(
+                {
+                    "layer": rec["layer"],
+                    "tokens": ids,
+                    "texts": texts,
+                    "probs": rec["probs"][0],
+                }
+            )
         return decoded
 
     def print_during_generation(self, prompt: str, max_new_tokens: int = 10) -> None:
@@ -379,11 +406,14 @@ class LogitLens:
         # Encode prompt.
         try:
             import tiktoken
+
             enc = tiktoken.get_encoding("gpt2")
             ids = enc.encode(prompt)
         except Exception:
             ids = [ord(c) for c in prompt]
-        idx = torch.tensor([ids], dtype=torch.long, device=next(self.model.parameters()).device)
+        idx = torch.tensor(
+            [ids], dtype=torch.long, device=next(self.model.parameters()).device
+        )
 
         self.model.eval()
         with torch.no_grad():

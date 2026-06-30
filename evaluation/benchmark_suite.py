@@ -21,6 +21,7 @@ Usage
 ...     output_json="eval_results.json",
 ... )
 """
+
 from __future__ import annotations
 
 import json
@@ -35,7 +36,6 @@ import torch.nn as nn
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 
-
 TASK_ALIASES = {
     "mmlu": "mmlu",
     "arc": "arc_challenge",
@@ -48,19 +48,29 @@ TASK_ALIASES = {
     "gsm8k": "gsm8k",
 }
 
-DEFAULT_TASKS = ["mmlu", "arc_challenge", "hellaswag", "winogrande", "humaneval", "gsm8k"]
+DEFAULT_TASKS = [
+    "mmlu",
+    "arc_challenge",
+    "hellaswag",
+    "winogrande",
+    "humaneval",
+    "gsm8k",
+]
 
 
 def _lm_eval_available() -> bool:
     """Check whether ``lm-eval`` CLI is importable."""
     try:
         import lm_eval  # noqa: F401
+
         return True
     except ImportError:
         return False
 
 
-def _load_model_for_eval(checkpoint_path: str, device: Union[str, torch.device] = "cuda"):
+def _load_model_for_eval(
+    checkpoint_path: str, device: Union[str, torch.device] = "cuda"
+):
     """Load a nanoGPT-Modern checkpoint and return a HuggingFace-compatible wrapper.
 
     Returns
@@ -74,20 +84,33 @@ def _load_model_for_eval(checkpoint_path: str, device: Union[str, torch.device] 
     device = torch.device(device)
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     raw_config = ckpt.get("config")
-    model_type = raw_config.pop("model_type", "modern") if isinstance(raw_config, dict) else "modern"
+    model_type = (
+        raw_config.pop("model_type", "modern")
+        if isinstance(raw_config, dict)
+        else "modern"
+    )
     config: Union[BaselineGPTConfig, ModernGPTConfig]
     model: Union[BaselineGPT, ModernGPT]
     if model_type == "baseline":
-        config = BaselineGPTConfig.from_dict(raw_config) if isinstance(raw_config, dict) else BaselineGPTConfig()
+        config = (
+            BaselineGPTConfig.from_dict(raw_config)
+            if isinstance(raw_config, dict)
+            else BaselineGPTConfig()
+        )
         model = BaselineGPT(config)
     else:
-        config = ModernGPTConfig.from_dict(raw_config) if isinstance(raw_config, dict) else ModernGPTConfig()
+        config = (
+            ModernGPTConfig.from_dict(raw_config)
+            if isinstance(raw_config, dict)
+            else ModernGPTConfig()
+        )
         model = ModernGPT(config)
     model.load_state_dict(ckpt["model"])
     model.to(device).eval()
 
     try:
         import tiktoken
+
         tokenizer = tiktoken.get_encoding("gpt2")
     except Exception:
         tokenizer = None
@@ -152,12 +175,19 @@ def run_benchmark_suite(
 
     # Build lm-eval command line.
     cmd = [
-        sys.executable, "-m", "lm_eval",
-        "--model", "hf",
-        "--model_args", f"pretrained={checkpoint},dtype=auto",
-        "--tasks", ",".join(tasks),
-        "--batch_size", str(batch_size),
-        "--device", device,
+        sys.executable,
+        "-m",
+        "lm_eval",
+        "--model",
+        "hf",
+        "--model_args",
+        f"pretrained={checkpoint},dtype=auto",
+        "--tasks",
+        ",".join(tasks),
+        "--batch_size",
+        str(batch_size),
+        "--device",
+        device,
     ]
     if num_fewshot is not None:
         cmd += ["--num_fewshot", str(num_fewshot)]
@@ -219,7 +249,9 @@ class BenchmarkSuite:
     >>> print(suite.last_results)
     """
 
-    def __init__(self, checkpoint: str, device: str = "cuda", model_name: Optional[str] = None):
+    def __init__(
+        self, checkpoint: str, device: str = "cuda", model_name: Optional[str] = None
+    ):
         self.checkpoint = checkpoint
         self.device = device
         self.model_name = model_name

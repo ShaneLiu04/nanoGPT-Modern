@@ -14,6 +14,7 @@ Usage
 ...     --grpo_checkpoint out/grpo/best_grpo_g4.pt \
 ...     --out_dir out/dpo
 """
+
 from __future__ import annotations
 
 import argparse
@@ -48,8 +49,18 @@ from utils.lr_scheduler import LRScheduler
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--init_from", type=str, required=True, help="Policy checkpoint (SFT or previous DPO)")
-    parser.add_argument("--ref_from", type=str, default=None, help="Reference checkpoint; defaults to init_from if not provided")
+    parser.add_argument(
+        "--init_from",
+        type=str,
+        required=True,
+        help="Policy checkpoint (SFT or previous DPO)",
+    )
+    parser.add_argument(
+        "--ref_from",
+        type=str,
+        default=None,
+        help="Reference checkpoint; defaults to init_from if not provided",
+    )
     parser.add_argument("--out_dir", type=str, default="out/dpo")
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
@@ -57,44 +68,88 @@ def get_args():
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--learning_rate", type=float, default=1e-6)
     parser.add_argument("--min_lr", type=float, default=1e-7)
-    parser.add_argument("--lr_schedule", type=str, default="cosine", choices=["cosine", "linear", "wsd", "constant"])
-    parser.add_argument("--warmup_iters", type=int, default=0, help="Linear warmup steps (0 = none)")
+    parser.add_argument(
+        "--lr_schedule",
+        type=str,
+        default="cosine",
+        choices=["cosine", "linear", "wsd", "constant"],
+    )
+    parser.add_argument(
+        "--warmup_iters", type=int, default=0, help="Linear warmup steps (0 = none)"
+    )
     parser.add_argument("--weight_decay", type=float, default=0.1)
     parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--beta", type=float, default=0.1, help="DPO/IPO/KTO temperature")
-    parser.add_argument("--preference_loss", type=str, default="dpo", choices=["dpo", "ipo", "kto"])
-    parser.add_argument("--label_smoothing", type=float, default=0.0, help="DPO label smoothing")
+    parser.add_argument(
+        "--beta", type=float, default=0.1, help="DPO/IPO/KTO temperature"
+    )
+    parser.add_argument(
+        "--preference_loss", type=str, default="dpo", choices=["dpo", "ipo", "kto"]
+    )
+    parser.add_argument(
+        "--label_smoothing", type=float, default=0.0, help="DPO label smoothing"
+    )
     parser.add_argument("--eval_interval", type=int, default=50)
     parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--backend", type=str, default="nccl")
     parser.add_argument("--keep_last_n", type=int, default=0)
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--config", type=str, default=None)
-    parser.add_argument("--attn_backend", type=str, default="auto",
-                        choices=["auto", "flash", "mem_efficient", "math", "default"])
+    parser.add_argument(
+        "--attn_backend",
+        type=str,
+        default="auto",
+        choices=["auto", "flash", "mem_efficient", "math", "default"],
+    )
     # Dataset sources
-    parser.add_argument("--preference_source", type=str, default="synthetic",
-                        choices=["synthetic", "grpo", "jsonl"])
-    parser.add_argument("--grpo_checkpoint", type=str, default=None,
-                        help="GRPO checkpoint path used to load policy for GRPO-based preference generation")
-    parser.add_argument("--grpo_group_size", type=int, default=4,
-                        help="Group size for GRPO rollout when constructing preference pairs")
+    parser.add_argument(
+        "--preference_source",
+        type=str,
+        default="synthetic",
+        choices=["synthetic", "grpo", "jsonl"],
+    )
+    parser.add_argument(
+        "--grpo_checkpoint",
+        type=str,
+        default=None,
+        help="GRPO checkpoint path used to load policy for GRPO-based preference generation",
+    )
+    parser.add_argument(
+        "--grpo_group_size",
+        type=int,
+        default=4,
+        help="Group size for GRPO rollout when constructing preference pairs",
+    )
     parser.add_argument("--num_train", type=int, default=256)
     parser.add_argument("--num_val", type=int, default=64)
     parser.add_argument("--vocab_size", type=int, default=50257)
     # Win-rate evaluation
-    parser.add_argument("--win_rate_eval", action="store_true",
-                        help="Run win-rate evaluation against the reference model during training")
-    parser.add_argument("--win_rate_interval", type=int, default=100,
-                        help="Run win-rate evaluation every N steps")
-    parser.add_argument("--win_rate_samples", type=int, default=50,
-                        help="Number of prompts for win-rate evaluation")
+    parser.add_argument(
+        "--win_rate_eval",
+        action="store_true",
+        help="Run win-rate evaluation against the reference model during training",
+    )
+    parser.add_argument(
+        "--win_rate_interval",
+        type=int,
+        default=100,
+        help="Run win-rate evaluation every N steps",
+    )
+    parser.add_argument(
+        "--win_rate_samples",
+        type=int,
+        default=50,
+        help="Number of prompts for win-rate evaluation",
+    )
     return parse_args_with_config(parser)
 
 
-def _build_synthetic_preference_dataset(num_samples: int, seq_len: int, vocab_size: int, seed: int):
+def _build_synthetic_preference_dataset(
+    num_samples: int, seq_len: int, vocab_size: int, seed: int
+):
     """Create a synthetic preference dataset for testing/demonstration."""
     torch.manual_seed(seed)
     chosen = torch.randint(0, vocab_size, (num_samples, seq_len))
@@ -211,11 +266,16 @@ class DPOTrainer(BaseTrainer):
             )
         elif args.preference_source == "grpo":
             if args.grpo_checkpoint is None:
-                raise ValueError("--grpo_checkpoint is required when --preference_source=grpo")
+                raise ValueError(
+                    "--grpo_checkpoint is required when --preference_source=grpo"
+                )
             # Load GRPO trainer to generate preference pairs.
             from training.train_grpo import GRPOTrainer, get_args as grpo_get_args
+
             # Build a minimal GRPO args object from the loaded checkpoint.
-            grpo_ckpt = torch.load(args.grpo_checkpoint, map_location=self.device, weights_only=False)
+            grpo_ckpt = torch.load(
+                args.grpo_checkpoint, map_location=self.device, weights_only=False
+            )
             grpo_config = grpo_ckpt.get("config", {})
             # Build synthetic GRPO trainer for rollouts.
             grpo_args = grpo_get_args()
@@ -228,10 +288,16 @@ class DPOTrainer(BaseTrainer):
             # Load the checkpoint into the GRPO policy so rollouts use the trained policy.
             grpo_trainer.load_checkpoint(args.grpo_checkpoint)
             train_ds = _build_preference_dataset_from_grpo(
-                grpo_trainer, num_prompts=getattr(args, "num_train", 256), max_length=args.max_length, seed=args.seed
+                grpo_trainer,
+                num_prompts=getattr(args, "num_train", 256),
+                max_length=args.max_length,
+                seed=args.seed,
             )
             val_ds = _build_preference_dataset_from_grpo(
-                grpo_trainer, num_prompts=getattr(args, "num_val", 64), max_length=args.max_length, seed=args.seed + 1000
+                grpo_trainer,
+                num_prompts=getattr(args, "num_val", 64),
+                max_length=args.max_length,
+                seed=args.seed + 1000,
             )
         else:
             raise ValueError(f"Unknown preference_source: {args.preference_source}")
@@ -279,7 +345,9 @@ class DPOTrainer(BaseTrainer):
 
     def _build_scheduler(self):
         args = self.args
-        total_steps = len(self.train_loader) * args.epochs // args.gradient_accumulation_steps
+        total_steps = (
+            len(self.train_loader) * args.epochs // args.gradient_accumulation_steps
+        )
         self.scheduler = LRScheduler(
             schedule=args.lr_schedule,
             learning_rate=args.learning_rate,
@@ -341,10 +409,12 @@ class DPOTrainer(BaseTrainer):
         else:  # kto
             policy_logp = torch.cat([policy_chosen_logp, policy_rejected_logp])
             ref_logp = torch.cat([ref_chosen_logp, ref_rejected_logp])
-            is_desirable = torch.cat([
-                torch.ones_like(policy_chosen_logp, dtype=torch.bool),
-                torch.zeros_like(policy_rejected_logp, dtype=torch.bool),
-            ])
+            is_desirable = torch.cat(
+                [
+                    torch.ones_like(policy_chosen_logp, dtype=torch.bool),
+                    torch.zeros_like(policy_rejected_logp, dtype=torch.bool),
+                ]
+            )
             loss, metrics = compute_kto_loss(
                 policy_logp, ref_logp, is_desirable, beta=self.args.beta
             )
@@ -380,7 +450,9 @@ class DPOTrainer(BaseTrainer):
                 if (num_batches + 1) % self.args.gradient_accumulation_steps == 0:
                     if self.scaler is not None:
                         self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.grad_clip)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.args.grad_clip
+                    )
                     if self.scaler is not None:
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
@@ -400,13 +472,17 @@ class DPOTrainer(BaseTrainer):
                             self.log_scalars({"val/loss": val_loss}, self.global_step)
                             if val_loss < self.best_metric:
                                 self.best_metric = val_loss
-                                self.save_checkpoint("best_ckpt.pt", self.global_step, self.best_metric)
+                                self.save_checkpoint(
+                                    "best_ckpt.pt", self.global_step, self.best_metric
+                                )
 
             total_loss += loss.detach().item()
             num_batches += 1
 
             if self.master_process and is_train and num_batches % 10 == 0:
-                self.log_scalars({f"train/{k}": v for k, v in metrics.items()}, self.global_step)
+                self.log_scalars(
+                    {f"train/{k}": v for k, v in metrics.items()}, self.global_step
+                )
 
         return total_loss / max(num_batches, 1)
 
@@ -422,12 +498,14 @@ class DPOTrainer(BaseTrainer):
         """
         try:
             import tiktoken
+
             tokenizer = tiktoken.get_encoding("gpt2")
         except Exception:
             return {"error": "tiktoken not available for win-rate evaluation"}
 
         try:
             from evaluation.eval_win_rate import WinRateEvaluator, RuleJudge
+
             prompts = [f"What is {i} + {i+1}?" for i in range(num_samples)]
             evaluator = WinRateEvaluator(
                 policy_model=self.raw_model,
@@ -466,12 +544,25 @@ class DPOTrainer(BaseTrainer):
 
             # Win-rate evaluation at the end of each epoch or by interval.
             if self.master_process and args.win_rate_eval:
-                if (epoch + 1) % max(1, args.win_rate_interval // len(self.train_loader)) == 0 or epoch == args.epochs - 1:
-                    win_rate_metrics = self._evaluate_win_rate(num_samples=args.win_rate_samples)
+                if (epoch + 1) % max(
+                    1, args.win_rate_interval // len(self.train_loader)
+                ) == 0 or epoch == args.epochs - 1:
+                    win_rate_metrics = self._evaluate_win_rate(
+                        num_samples=args.win_rate_samples
+                    )
                     print(f"win_rate metrics: {win_rate_metrics}")
-                    self.log_scalars({f"win_rate/{k}": v for k, v in win_rate_metrics.items() if isinstance(v, (int, float))}, self.global_step)
+                    self.log_scalars(
+                        {
+                            f"win_rate/{k}": v
+                            for k, v in win_rate_metrics.items()
+                            if isinstance(v, (int, float))
+                        },
+                        self.global_step,
+                    )
                     # Save win-rate results to JSON.
-                    wr_path = os.path.join(args.out_dir, f"win_rate_step{self.global_step}.json")
+                    wr_path = os.path.join(
+                        args.out_dir, f"win_rate_step{self.global_step}.json"
+                    )
                     with open(wr_path, "w", encoding="utf-8") as f:
                         json.dump(win_rate_metrics, f, indent=2)
 

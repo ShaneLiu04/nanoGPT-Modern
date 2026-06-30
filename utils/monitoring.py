@@ -7,6 +7,7 @@ Provides:
   - ``MemoryProfiler``: peak-memory breakdown (params / activations / cache / fragmentation).
   - ``ThroughputMonitor``: real-time tokens/s and samples/s measurement.
 """
+
 from __future__ import annotations
 
 import logging
@@ -18,7 +19,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from numpy.typing import NDArray
-
 
 logger = logging.getLogger(__name__)
 
@@ -158,13 +158,14 @@ class GradientNormMonitor:
             if p.grad is not None:
                 param_norm = p.grad.data.norm(2).item()
                 norms[name] = param_norm
-                total_norm += param_norm ** 2
-        total_norm = total_norm ** 0.5
+                total_norm += param_norm**2
+        total_norm = total_norm**0.5
 
         if self.logger is not None:
             self.logger.log_scalar(f"{self.tag_prefix}/total_norm", total_norm, step)
             if norms:
                 import torch
+
                 layer_norms = torch.tensor(list(norms.values()), dtype=torch.float32)
                 self.logger.log_histogram(
                     f"{self.tag_prefix}/layer_norms", layer_norms, step
@@ -217,12 +218,12 @@ class MemoryProfiler:
         summary = torch.cuda.memory_summary(self.device, abbreviated=True)
 
         return {
-            "allocated_mb": round(alloc / (1024 ** 2), 2),
-            "reserved_mb": round(reserved / (1024 ** 2), 2),
-            "max_allocated_mb": round(max_alloc / (1024 ** 2), 2),
-            "max_reserved_mb": round(max_reserved / (1024 ** 2), 2),
-            "active_mb": round(active / (1024 ** 2), 2),
-            "inactive_mb": round(inactive / (1024 ** 2), 2),
+            "allocated_mb": round(alloc / (1024**2), 2),
+            "reserved_mb": round(reserved / (1024**2), 2),
+            "max_allocated_mb": round(max_alloc / (1024**2), 2),
+            "max_reserved_mb": round(max_reserved / (1024**2), 2),
+            "active_mb": round(active / (1024**2), 2),
+            "inactive_mb": round(inactive / (1024**2), 2),
             "pool_fraction": round(pool_fraction, 4),
             "summary": summary,
         }

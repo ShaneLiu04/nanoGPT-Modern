@@ -9,6 +9,7 @@ Provides:
   - A CheckpointManager that persists full training state
   - A lightweight BaseTrainer class that concrete trainers can subclass
 """
+
 import os
 import random
 import warnings
@@ -34,6 +35,7 @@ def save_run_config(args, out_dir, filename="config.yaml"):
     The saved file can be reused with ``--config`` to reproduce the run.
     """
     import yaml
+
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, filename)
     cfg = to_dict(args)
@@ -95,11 +97,13 @@ def make_worker_init_fn(base_seed=0, rank=0):
 
         DataLoader(..., worker_init_fn=make_worker_init_fn(args.seed, rank))
     """
+
     def _worker_init(worker_id):
         # In non-distributed mode ``rank`` is -1; treat it as 0 for seeding.
         effective_rank = rank if rank >= 0 else 0
         worker_seed = base_seed + effective_rank * 1000 + worker_id
         set_seed(worker_seed)
+
     return _worker_init
 
 
@@ -190,8 +194,18 @@ def build_amp_context(device, use_bf16=True):
 class CheckpointManager:
     """Thin wrapper around utils.checkpoint that tracks training state."""
 
-    def __init__(self, out_dir, model, optimizer, config, scaler=None,
-                 scheduler=None, ema_shadow=None, resume_offset=0, keep_last_n=0):
+    def __init__(
+        self,
+        out_dir,
+        model,
+        optimizer,
+        config,
+        scaler=None,
+        scheduler=None,
+        ema_shadow=None,
+        resume_offset=0,
+        keep_last_n=0,
+    ):
         self.out_dir = out_dir
         self.model = model
         self.optimizer = optimizer
@@ -211,7 +225,15 @@ class CheckpointManager:
         name = filename.lower()
         return name.startswith(("best_", "final_", "ema_"))
 
-    def save(self, filename, iter_num, best_metric, rng_state=None, resume_offset=None, ema_shadow=None):
+    def save(
+        self,
+        filename,
+        iter_num,
+        best_metric,
+        rng_state=None,
+        resume_offset=None,
+        ema_shadow=None,
+    ):
         """Save a checkpoint with full training state.
 
         Optional overrides for ``rng_state``, ``resume_offset`` and
@@ -224,8 +246,12 @@ class CheckpointManager:
             model_src = model_src.module
 
         # Inject model_type into the config dict so reloaders know which class to build.
-        config_data = self.config.to_dict() if hasattr(self.config, "to_dict") else self.config
-        model_type = "baseline" if type(model_src).__name__ == "BaselineGPT" else "modern"
+        config_data = (
+            self.config.to_dict() if hasattr(self.config, "to_dict") else self.config
+        )
+        model_type = (
+            "baseline" if type(model_src).__name__ == "BaselineGPT" else "modern"
+        )
         if isinstance(config_data, dict):
             config_data = dict(config_data)
             config_data["model_type"] = model_type
@@ -249,7 +275,9 @@ class CheckpointManager:
             scheduler=self.scheduler,
             ema_shadow=ema_shadow if ema_shadow is not None else self.ema_shadow,
             rng_state=rng_state if rng_state is not None else get_rng_state(),
-            resume_offset=resume_offset if resume_offset is not None else self.resume_offset,
+            resume_offset=(
+                resume_offset if resume_offset is not None else self.resume_offset
+            ),
         )
 
         if self.keep_last_n > 0 and not self._is_protected(filename):
@@ -274,13 +302,21 @@ class CheckpointManager:
         if isinstance(model_src, DDP):
             model_src = model_src.module
 
-        extra = load_checkpoint(path, model_src, self.optimizer,
-                                device=next(model_src.parameters()).device,
-                                strict=strict)
+        extra = load_checkpoint(
+            path,
+            model_src,
+            self.optimizer,
+            device=next(model_src.parameters()).device,
+            strict=strict,
+        )
 
         if "scaler" in extra and self.scaler is not None:
             self.scaler.load_state_dict(extra["scaler"])
-        if "scheduler" in extra and self.scheduler is not None and hasattr(self.scheduler, "load_state_dict"):
+        if (
+            "scheduler" in extra
+            and self.scheduler is not None
+            and hasattr(self.scheduler, "load_state_dict")
+        ):
             self.scheduler.load_state_dict(extra["scheduler"])
         if "ema_shadow" in extra and self.ema_shadow is not None:
             # If the caller keeps a reference to the dict, update in place.
@@ -301,8 +337,8 @@ class BaseTrainer(ABC):
 
     def __init__(self, args):
         self.args = args
-        self.rank, self.local_rank, self.world_size, self.distributed = setup_distributed(
-            backend=getattr(args, "backend", "nccl")
+        self.rank, self.local_rank, self.world_size, self.distributed = (
+            setup_distributed(backend=getattr(args, "backend", "nccl"))
         )
         self.master_process = self.rank <= 0
         self.device = infer_device(args.device, self.local_rank)
@@ -376,7 +412,9 @@ class BaseTrainer(ABC):
 
     def setup_amp(self, use_bf16=True):
         """Initialize mixed precision context and GradScaler."""
-        self.ctx, self.scaler, self.amp_dtype = build_amp_context(self.device, use_bf16=use_bf16)
+        self.ctx, self.scaler, self.amp_dtype = build_amp_context(
+            self.device, use_bf16=use_bf16
+        )
 
     def build_logger(self, project_name, run_name, config=None):
         """Create a Logger (only on master process)."""
@@ -411,21 +449,34 @@ class BaseTrainer(ABC):
                     ShardingStrategy,
                     MixedPrecision,
                 )
+
                 shard_map = {
                     "full": ShardingStrategy.FULL_SHARD,
                     "grad": ShardingStrategy.SHARD_GRAD_OP,
                     "no": ShardingStrategy.NO_SHARD,
                 }
                 mp_policy = MixedPrecision(
-                    param_dtype=torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16,
+                    param_dtype=(
+                        torch.bfloat16
+                        if (
+                            torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+                        )
+                        else torch.float16
+                    ),
                     reduce_dtype=torch.float32,
                     buffer_dtype=torch.float32,
                 )
                 model = FSDP(
                     model,
-                    sharding_strategy=shard_map[getattr(self.args, "fsdp_sharding_strategy", "full")],
+                    sharding_strategy=shard_map[
+                        getattr(self.args, "fsdp_sharding_strategy", "full")
+                    ],
                     mixed_precision=mp_policy,
-                    device_id=torch.cuda.current_device() if torch.cuda.is_available() else None,
+                    device_id=(
+                        torch.cuda.current_device()
+                        if torch.cuda.is_available()
+                        else None
+                    ),
                 )
                 self.raw_model = model.module
             else:
@@ -473,12 +524,16 @@ class BaseTrainer(ABC):
 
     def save_checkpoint(self, filename, step, best_metric):
         if self.ckpt_manager is None:
-            raise RuntimeError("configure_checkpointing() must be called before save_checkpoint()")
+            raise RuntimeError(
+                "configure_checkpointing() must be called before save_checkpoint()"
+            )
         return self.ckpt_manager.save(filename, step, best_metric)
 
     def load_checkpoint(self, path, strict=True):
         if self.ckpt_manager is None:
-            raise RuntimeError("configure_checkpointing() must be called before load_checkpoint()")
+            raise RuntimeError(
+                "configure_checkpointing() must be called before load_checkpoint()"
+            )
         return self.ckpt_manager.load(path, strict=strict)
 
     @abstractmethod

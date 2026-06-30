@@ -81,6 +81,9 @@ module = [
     "api_server",
 ]
 disable_error_code = ["union-attr", "operator", "arg-type", "misc", "return-value", "assignment"]
+[tool.black]
+target-version = ["py39"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["model*", "data*", "training*", "inference*", "evaluation*", "rewards*", "utils*", "config*"]

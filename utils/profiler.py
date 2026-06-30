@@ -12,6 +12,7 @@ Example
 >>> prof.export_chrome_trace("profiles/trace.json")
 >>> prof.export_memory_summary("profiles/memory.txt")
 """
+
 from __future__ import annotations
 
 import os
@@ -97,7 +98,7 @@ class Profiler:
             self.prof.__exit__(exc_type, exc_val, exc_tb)
         if torch.cuda.is_available() and self.memory_summary:
             peak = torch.cuda.max_memory_allocated()
-            self._peak_mem_mb = (peak - (self._start_mem or 0)) / 1024 ** 2
+            self._peak_mem_mb = (peak - (self._start_mem or 0)) / 1024**2
         return False
 
     def export_chrome_trace(self, filename: str = "chrome_trace.json") -> str:
@@ -123,6 +124,7 @@ class Profiler:
             raise RuntimeError("Profiler not enabled")
         path = os.path.join(self.output_dir, filename)
         import json
+
         stats = self.prof.key_averages().table(sort_by="cuda_time_total", row_limit=10)
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"top_events_table": stats}, f, indent=2)
@@ -162,7 +164,7 @@ class InferenceProfiler:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if torch.cuda.is_available() and str(self.device).startswith("cuda"):
-            self.peak_mem_mb = torch.cuda.max_memory_allocated() / 1024 ** 2
+            self.peak_mem_mb = torch.cuda.max_memory_allocated() / 1024**2
         return False
 
     def summary(self) -> dict:
@@ -187,6 +189,7 @@ class InferenceProfiler:
     def export(self, filename: str = "inference_profile.json") -> str:
         """Save summary to JSON."""
         import json
+
         path = os.path.join(self.output_dir, filename)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.summary(), f, indent=2)

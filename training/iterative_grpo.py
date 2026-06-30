@@ -11,6 +11,7 @@ Builds on the optimized GRPOTrainer in ``training/train_grpo.py`` and adds:
 All GRPO optimizations are preserved: batched rollouts, batched logprobs,
 mixed precision, gradient accumulation, and LR scheduling.
 """
+
 import os
 import argparse
 
@@ -18,8 +19,11 @@ import torch
 
 
 from data.arithmetic import (
-    generate_easy, generate_medium, generate_hard,
-    ArithmeticDataset, collate_fn,
+    generate_easy,
+    generate_medium,
+    generate_hard,
+    ArithmeticDataset,
+    collate_fn,
 )
 from rewards.rule_reward import compute_reward_batch
 from training.train_grpo import GRPOTrainer
@@ -29,53 +33,106 @@ from utils.config import parse_args_with_config
 def get_args():
     parser = argparse.ArgumentParser()
     # Base GRPO arguments
-    parser.add_argument("--init_from", type=str, required=True, help="SFT checkpoint path")
-    parser.add_argument("--ref_from", type=str, required=True, help="Reference (frozen SFT) checkpoint path")
+    parser.add_argument(
+        "--init_from", type=str, required=True, help="SFT checkpoint path"
+    )
+    parser.add_argument(
+        "--ref_from",
+        type=str,
+        required=True,
+        help="Reference (frozen SFT) checkpoint path",
+    )
     parser.add_argument("--out_dir", type=str, default="out/iterative_grpo")
     parser.add_argument("--group_size", type=int, default=4)
     parser.add_argument("--num_steps", type=int, default=1000)
     parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
-                        help="Number of group rollouts before one optimizer step")
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=1,
+        help="Number of group rollouts before one optimizer step",
+    )
     parser.add_argument("--max_prompt_len", type=int, default=128)
     parser.add_argument("--max_response_len", type=int, default=128)
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--min_lr", type=float, default=1e-6)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--beta", type=float, default=0.04, help="KL penalty coefficient")
+    parser.add_argument(
+        "--beta", type=float, default=0.04, help="KL penalty coefficient"
+    )
     parser.add_argument("--eps", type=float, default=0.2, help="PPO clipping epsilon")
-    parser.add_argument("--lr_schedule", type=str, default="cosine",
-                        choices=["cosine", "linear", "wsd", "constant"])
+    parser.add_argument(
+        "--lr_schedule",
+        type=str,
+        default="cosine",
+        choices=["cosine", "linear", "wsd", "constant"],
+    )
     parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
     parser.add_argument("--backend", type=str, default="nccl")
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--eval_interval", type=int, default=100)
     parser.add_argument("--num_train", type=int, default=2000)
     parser.add_argument("--num_val", type=int, default=300)
     parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
+    parser.add_argument(
+        "--config", type=str, default=None, help="Path to YAML config file"
+    )
 
     # Iterative RLHF args
-    parser.add_argument("--ref_update_interval", type=int, default=250,
-                        help="Steps between reference model updates (0 = disable)")
-    parser.add_argument("--ref_update_ratio", type=float, default=0.5,
-                        help="EMA mixing ratio for ref update: ref = ratio*policy + (1-ratio)*ref")
+    parser.add_argument(
+        "--ref_update_interval",
+        type=int,
+        default=250,
+        help="Steps between reference model updates (0 = disable)",
+    )
+    parser.add_argument(
+        "--ref_update_ratio",
+        type=float,
+        default=0.5,
+        help="EMA mixing ratio for ref update: ref = ratio*policy + (1-ratio)*ref",
+    )
 
     # Rejection sampling args
-    parser.add_argument("--rejection_interval", type=int, default=200,
-                        help="Steps between rejection sampling rounds (0 = disable)")
-    parser.add_argument("--rejection_samples", type=int, default=64,
-                        help="Number of samples per prompt during rejection sampling")
-    parser.add_argument("--rejection_top_k", type=int, default=8,
-                        help="Number of top-K high-reward responses to keep per prompt")
-    parser.add_argument("--rejection_sft_steps", type=int, default=50,
-                        help="SFT fine-tuning steps on rejection-sampled data")
-    parser.add_argument("--rejection_sft_lr", type=float, default=1e-4,
-                        help="Learning rate for rejection sampling SFT phase")
-    parser.add_argument("--rejection_batch_size", type=int, default=None,
-                        help="Batch size for rejection SFT (defaults to batch_size)")
+    parser.add_argument(
+        "--rejection_interval",
+        type=int,
+        default=200,
+        help="Steps between rejection sampling rounds (0 = disable)",
+    )
+    parser.add_argument(
+        "--rejection_samples",
+        type=int,
+        default=64,
+        help="Number of samples per prompt during rejection sampling",
+    )
+    parser.add_argument(
+        "--rejection_top_k",
+        type=int,
+        default=8,
+        help="Number of top-K high-reward responses to keep per prompt",
+    )
+    parser.add_argument(
+        "--rejection_sft_steps",
+        type=int,
+        default=50,
+        help="SFT fine-tuning steps on rejection-sampled data",
+    )
+    parser.add_argument(
+        "--rejection_sft_lr",
+        type=float,
+        default=1e-4,
+        help="Learning rate for rejection sampling SFT phase",
+    )
+    parser.add_argument(
+        "--rejection_batch_size",
+        type=int,
+        default=None,
+        help="Batch size for rejection SFT (defaults to batch_size)",
+    )
 
     return parse_args_with_config(parser)
 
@@ -143,8 +200,10 @@ class IterativeGRPOTrainer(GRPOTrainer):
         tokenizer = self.tokenizer
         sft_batch_size = args.rejection_batch_size or args.batch_size
 
-        print(f"\n--- Rejection Sampling: sampling {args.rejection_samples}x per prompt, "
-              f"keeping top-{args.rejection_top_k} ---")
+        print(
+            f"\n--- Rejection Sampling: sampling {args.rejection_samples}x per prompt, "
+            f"keeping top-{args.rejection_top_k} ---"
+        )
 
         # Phase 1: Sample a large batch per prompt using batched generation.
         sft_data = []
@@ -165,14 +224,18 @@ class IterativeGRPOTrainer(GRPOTrainer):
                     gen_batch_size=min(sft_batch_size, args.rejection_samples),
                 )
 
-                rewards, _, _, _ = compute_reward_batch(responses, [answer] * len(responses))
+                rewards, _, _, _ = compute_reward_batch(
+                    responses, [answer] * len(responses)
+                )
                 samples = list(zip(responses, rewards, response_ids_list))
                 samples.sort(key=lambda x: x[1], reverse=True)
-                top_samples = samples[:args.rejection_top_k]
+                top_samples = samples[: args.rejection_top_k]
 
                 for resp_text, r, _ in top_samples:
                     if r > 0:
-                        sft_data.append({"prompt": prompt, "response": resp_text, "reward": r})
+                        sft_data.append(
+                            {"prompt": prompt, "response": resp_text, "reward": r}
+                        )
 
         if len(sft_data) == 0:
             print("  No high-reward samples found, skipping SFT phase.")
@@ -182,18 +245,25 @@ class IterativeGRPOTrainer(GRPOTrainer):
 
         # Phase 2: SFT fine-tuning on rejection-sampled data.
         sft_dataset = ArithmeticDataset(
-            sft_data, tokenizer,
+            sft_data,
+            tokenizer,
             max_length=args.max_prompt_len + args.max_response_len,
             pre_tokenize=True,
         )
         sft_loader = torch.utils.data.DataLoader(
-            sft_dataset, batch_size=sft_batch_size, shuffle=True,
-            collate_fn=collate_fn, num_workers=0, pin_memory=True,
+            sft_dataset,
+            batch_size=sft_batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=0,
+            pin_memory=True,
         )
 
         sft_optimizer = self.raw_model.configure_optimizers(
-            args.weight_decay, args.rejection_sft_lr, (0.9, 0.95),
-            device_type="cuda" if "cuda" in str(device) else "cpu"
+            args.weight_decay,
+            args.rejection_sft_lr,
+            (0.9, 0.95),
+            device_type="cuda" if "cuda" in str(device) else "cpu",
         )
 
         self.policy.train()
@@ -217,7 +287,9 @@ class IterativeGRPOTrainer(GRPOTrainer):
             else:
                 loss.backward()
                 if args.grad_clip > 0:
-                    torch.nn.utils.clip_grad_norm_(self.policy.parameters(), args.grad_clip)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.policy.parameters(), args.grad_clip
+                    )
                 sft_optimizer.step()
 
             total_sft_loss += loss.item()
@@ -235,15 +307,27 @@ class IterativeGRPOTrainer(GRPOTrainer):
         args = self.args
         extra_metrics = {}
 
-        if args.ref_update_interval > 0 and step > 0 and step % args.ref_update_interval == 0:
+        if (
+            args.ref_update_interval > 0
+            and step > 0
+            and step % args.ref_update_interval == 0
+        ):
             self.ref_updates_done += 1
-            print(f"\n--- Updating reference model (round {self.ref_updates_done}, step {step}) ---")
+            print(
+                f"\n--- Updating reference model (round {self.ref_updates_done}, step {step}) ---"
+            )
             self.update_reference_model()
             extra_metrics["iter/ref_updates"] = self.ref_updates_done
 
-        if args.rejection_interval > 0 and step > 0 and step % args.rejection_interval == 0:
+        if (
+            args.rejection_interval > 0
+            and step > 0
+            and step % args.rejection_interval == 0
+        ):
             self.rejection_rounds_done += 1
-            print(f"\n--- Rejection sampling round {self.rejection_rounds_done} (step {step}) ---")
+            print(
+                f"\n--- Rejection sampling round {self.rejection_rounds_done} (step {step}) ---"
+            )
             sft_loss = self.rejection_sampling_sft(self.rejection_pool)
             extra_metrics["rejection/sft_loss"] = sft_loss
             extra_metrics["rejection/rounds"] = self.rejection_rounds_done

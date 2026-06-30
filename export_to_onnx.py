@@ -11,6 +11,7 @@ Usage
 -----
     python export_to_onnx.py --checkpoint out/pretrain/best_ckpt.pt --model modern
 """
+
 from __future__ import annotations
 
 import argparse
@@ -152,15 +153,15 @@ class _OnnxCacheWrapper(nn.Module):
         # Reconstruct nested list from flat args
         n_layers = self.n_layers
         assert len(past_kvs) == 2 * n_layers
-        past_kv_list = [
-            (past_kvs[2 * i], past_kvs[2 * i + 1]) for i in range(n_layers)
-        ]
+        past_kv_list = [(past_kvs[2 * i], past_kvs[2 * i + 1]) for i in range(n_layers)]
 
         logits, _, new_past_kvs = self.model(
             idx, past_kvs=past_kv_list, use_cache=True, start_pos=0
         )
         # Flatten new KV pairs into a tuple
-        flat = cast(Tuple[torch.Tensor, ...], tuple(t for pair in new_past_kvs for t in pair))
+        flat = cast(
+            Tuple[torch.Tensor, ...], tuple(t for pair in new_past_kvs for t in pair)
+        )
         return logits, flat
 
 
@@ -220,12 +221,16 @@ def export_to_onnx(
 
         # Build dynamic axes for each input and output
         n_layers = model.config.n_layer
-        input_names = ["input_ids"] + [
-            f"past_k_{i}" for i in range(n_layers)
-        ] + [f"past_v_{i}" for i in range(n_layers)]
-        output_names = ["logits"] + [
-            f"present_k_{i}" for i in range(n_layers)
-        ] + [f"present_v_{i}" for i in range(n_layers)]
+        input_names = (
+            ["input_ids"]
+            + [f"past_k_{i}" for i in range(n_layers)]
+            + [f"past_v_{i}" for i in range(n_layers)]
+        )
+        output_names = (
+            ["logits"]
+            + [f"present_k_{i}" for i in range(n_layers)]
+            + [f"present_v_{i}" for i in range(n_layers)]
+        )
         dynamic_axes: Dict[str, Dict[int, str]] = {}
         dynamic_axes["input_ids"] = {0: "batch_size", 1: "seq_len"}
         for i in range(n_layers):

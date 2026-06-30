@@ -6,6 +6,7 @@ callers can simply do::
 
     from model import ModernGPT, ModernGPTConfig, KVCacheManager
 """
+
 from .attention_utils import (
     print_attention_backend,
     probe_gqa_sdpa_support,

@@ -4,6 +4,7 @@ This script mirrors ``train_pretrain.py`` but uses Hydra/OmegaConf for
 configuration composition.  The legacy argparse-based entry point remains
 available for backward compatibility.
 """
+
 from __future__ import annotations
 
 import os

@@ -3,6 +3,7 @@
 Supports loading from local source files or HuggingFace ``bigcode/the-stack``.
 Includes AST-based syntax filtering and language-group sampling.
 """
+
 from __future__ import annotations
 
 import ast
@@ -16,10 +17,10 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Union
 import torch
 from torch.utils.data import IterableDataset
 
-
 # ---------------------------------------------------------------------------
 # AST filtering
 # ---------------------------------------------------------------------------
+
 
 def _is_valid_python(source: str) -> bool:
     """Return ``True`` if *source* is syntactically valid Python."""
@@ -37,7 +38,7 @@ def _is_valid_javascript(source: str) -> bool:
     in_string: Optional[str] = None
     for ch in source:
         if in_string is None:
-            if ch in '"\'':
+            if ch in "\"'":
                 in_string = ch
             elif ch in braces:
                 braces[ch] += 1
@@ -46,7 +47,9 @@ def _is_valid_javascript(source: str) -> bool:
                 if braces[closers[ch]] < 0:
                     return False
         else:
-            if ch == in_string and (len(source) == 1 or source[source.index(ch) - 1] != "\\"):
+            if ch == in_string and (
+                len(source) == 1 or source[source.index(ch) - 1] != "\\"
+            ):
                 in_string = None
     return all(v == 0 for v in braces.values())
 
@@ -132,6 +135,7 @@ def _read_local_files(
 # HuggingFace The Stack loader
 # ---------------------------------------------------------------------------
 
+
 def _load_hf_stack(
     language: str,
     split: str = "train",
@@ -144,7 +148,12 @@ def _load_hf_stack(
     except Exception as exc:
         raise ImportError(f"datasets library is required for HF loading: {exc}")
 
-    ds = load_dataset("bigcode/the-stack", data_dir=f"data/{language}", split=split, streaming=streaming)
+    ds = load_dataset(
+        "bigcode/the-stack",
+        data_dir=f"data/{language}",
+        split=split,
+        streaming=streaming,
+    )
     count = 0
     for row in ds:
         source = row.get("content", "")
@@ -165,6 +174,7 @@ def _load_hf_stack(
 # ---------------------------------------------------------------------------
 # CodeDataset
 # ---------------------------------------------------------------------------
+
 
 class CodeDataset(IterableDataset):
     """Iterable dataset for code pre-training.
@@ -287,6 +297,7 @@ class GroupedCodeSampler:
     def __iter__(self) -> Iterator[Dict[str, Any]]:
         # Lazy import to avoid circular dependency.
         from data.mixer import MixedIterableDataset
+
         return iter(
             MixedIterableDataset(
                 sources=self.datasets,
@@ -304,6 +315,7 @@ class GroupedCodeSampler:
 def _test_code_dataset():
     # Create a temporary directory with a valid Python file.
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         py_file = Path(tmpdir) / "test.py"
         py_file.write_text("def foo():\n    return 42\n", encoding="utf-8")
@@ -317,12 +329,15 @@ def _test_code_dataset():
 
 def _test_grouped_sampler():
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         py_file = Path(tmpdir) / "a.py"
         py_file.write_text("x = 1", encoding="utf-8")
         js_file = Path(tmpdir) / "b.js"
         js_file.write_text("var x = 1;", encoding="utf-8")
-        ds_py = CodeDataset(source="local", path_or_language=tmpdir, languages=["python"])
+        ds_py = CodeDataset(
+            source="local", path_or_language=tmpdir, languages=["python"]
+        )
         ds_js = CodeDataset(source="local", path_or_language=tmpdir, languages=["js"])
         sampler = GroupedCodeSampler(
             datasets={"python": ds_py, "js": ds_js},

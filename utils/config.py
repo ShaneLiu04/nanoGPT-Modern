@@ -12,6 +12,7 @@ structured, runtime-validated config layer that mirrors ``BaselineGPTConfig``
 and ``ModernGPTConfig``.  It is **opt-in** — the legacy argparse pipeline
 works unchanged when Pydantic is not installed or when validation is not called.
 """
+
 import argparse
 import os
 from pathlib import Path
@@ -33,6 +34,7 @@ try:
         DataConfig,
         FullConfig,
     )
+
     _PydanticModels = {
         "baseline": BaselineGPTModelConfig,
         "modern": ModernGPTModelConfig,
@@ -58,6 +60,7 @@ def _expand_env(value):
 def load_yaml_config(path):
     """Load a YAML config file, stripping a leading BOM if present."""
     import yaml
+
     text = Path(path).read_text(encoding="utf-8-sig")
     cfg = yaml.safe_load(text) or {}
     return _expand_env(cfg)
@@ -277,7 +280,11 @@ def validate_keys(args, required, sep="."):
     """Raise ValueError if any required dotted key is missing or None."""
     missing = []
     for key in required:
-        value = args.get(key, sep=sep) if hasattr(args, "get") else _unflatten(vars(args), sep=sep).get(key)
+        value = (
+            args.get(key, sep=sep)
+            if hasattr(args, "get")
+            else _unflatten(vars(args), sep=sep).get(key)
+        )
         if value is None:
             missing.append(key)
     if missing:

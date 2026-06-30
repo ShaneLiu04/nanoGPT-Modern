@@ -6,6 +6,7 @@ position bookkeeping.  The no-cache path is used to avoid KV-cache complexity
 with padding; it is intended for short prompts (e.g. arithmetic evaluation and
 GRPO rollouts).
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -90,8 +91,8 @@ def batched_generate(
     model.eval()
     with torch.no_grad():
         for start in range(0, len(prompt_tokens), batch_size):
-            batch_prompts = prompt_tokens[start:start + batch_size]
-            batch_lens = prompt_lens[start:start + batch_size]
+            batch_prompts = prompt_tokens[start : start + batch_size]
+            batch_lens = prompt_lens[start : start + batch_size]
             B = len(batch_prompts)
 
             sequences = [list(toks) for toks in batch_prompts]
@@ -102,15 +103,25 @@ def batched_generate(
                     break
 
                 max_len = max(len(s) for s in sequences)
-                input_ids = torch.full((B, max_len), eos_token_id, dtype=torch.long, device=device)
-                attention_mask = torch.zeros((B, max_len), dtype=torch.bool, device=device)
+                input_ids = torch.full(
+                    (B, max_len), eos_token_id, dtype=torch.long, device=device
+                )
+                attention_mask = torch.zeros(
+                    (B, max_len), dtype=torch.bool, device=device
+                )
                 for b, seq in enumerate(sequences):
-                    input_ids[b, :len(seq)] = torch.tensor(seq, dtype=torch.long, device=device)
-                    attention_mask[b, :len(seq)] = True
+                    input_ids[b, : len(seq)] = torch.tensor(
+                        seq, dtype=torch.long, device=device
+                    )
+                    attention_mask[b, : len(seq)] = True
 
-                logits, _, _ = model(input_ids, attention_mask=attention_mask, use_cache=False)
+                logits, _, _ = model(
+                    input_ids, attention_mask=attention_mask, use_cache=False
+                )
                 # Gather the logit at the last real token of each sequence.
-                logits_last = torch.stack([logits[b, len(sequences[b]) - 1] for b in range(B)])
+                logits_last = torch.stack(
+                    [logits[b, len(sequences[b]) - 1] for b in range(B)]
+                )
                 next_tokens = _sample_logits(logits_last, temperature, top_k, top_p)
 
                 for b in range(B):
@@ -123,7 +134,7 @@ def batched_generate(
             for seq, plen in zip(sequences, batch_lens):
                 resp_ids = seq[plen:]
                 if eos_token_id in resp_ids:
-                    resp_ids = resp_ids[:resp_ids.index(eos_token_id)]
+                    resp_ids = resp_ids[: resp_ids.index(eos_token_id)]
                 all_response_ids.append(resp_ids)
                 all_responses.append(tokenizer.decode(resp_ids))
 
@@ -167,7 +178,7 @@ def generate_by_length(
     with torch.no_grad():
         for length, items in by_length.items():
             for start in range(0, len(items), batch_size):
-                batch_items = items[start:start + batch_size]
+                batch_items = items[start : start + batch_size]
                 idx = torch.tensor(
                     [toks for _, toks in batch_items],
                     dtype=torch.long,
@@ -183,9 +194,9 @@ def generate_by_length(
                     eos_token_id=eos_token_id,
                 )
                 for j, (orig_i, toks) in enumerate(batch_items):
-                    resp = generated[j, len(toks):].tolist()
+                    resp = generated[j, len(toks) :].tolist()
                     if eos_token_id in resp:
-                        resp = resp[:resp.index(eos_token_id)]
+                        resp = resp[: resp.index(eos_token_id)]
                     response_ids[orig_i] = resp
 
     responses = [tokenizer.decode(r) for r in response_ids]

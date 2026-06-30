@@ -1,4 +1,5 @@
 """Hydra entry point for text generation / inference benchmarking."""
+
 from __future__ import annotations
 
 import json
@@ -26,6 +27,7 @@ def main(cfg: DictConfig) -> None:
 
     try:
         import tiktoken
+
         tokenizer = tiktoken.get_encoding("gpt2")
     except Exception:
         tokenizer = None
@@ -38,13 +40,23 @@ def main(cfg: DictConfig) -> None:
             [[ord(c) for c in s]], dtype=torch.long, device=device
         )
 
-    print(f"Model: {args.model} | params={sum(p.numel() for p in model.parameters()):,}")
+    print(
+        f"Model: {args.model} | params={sum(p.numel() for p in model.parameters()):,}"
+    )
     print(f"Prompt: {args.prompt!r}")
     print(f"Prompt tokens={prompt_ids.shape[1]} | samples={args.num_samples}")
     print()
 
     all_results: Dict[str, Optional[Dict[int, Any]]] = {"no_cache": None, "cache": None}
-    headers = ["config", "total_ms", "prefill_ms", "decode_ms", "decode_tok/s", "total_tok/s", "mem_MB"]
+    headers = [
+        "config",
+        "total_ms",
+        "prefill_ms",
+        "decode_ms",
+        "decode_tok/s",
+        "total_tok/s",
+        "mem_MB",
+    ]
 
     for use_cache in [False, True]:
         label = "cache" if use_cache else "no-cache"

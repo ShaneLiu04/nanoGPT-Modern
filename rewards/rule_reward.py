@@ -9,11 +9,11 @@ Provides continuous, fine-grained rewards:
 
 The total reward is the sum of the three components and lies in ``[0.0, 2.0]``.
 """
+
 import math
 import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
-
 
 # Regex for <answer>...</answer> blocks (non-greedy, dotall).
 _ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)

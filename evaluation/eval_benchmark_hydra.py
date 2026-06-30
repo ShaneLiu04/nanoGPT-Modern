@@ -1,4 +1,5 @@
 """Hydra entry point for standardized benchmark evaluation."""
+
 from __future__ import annotations
 
 import os
@@ -14,7 +15,9 @@ from training.trainer_base import load_model_from_checkpoint
 from utils.hydra_utils import to_namespace
 
 
-@hydra.main(config_path="../config/hydra", config_name="eval_benchmark", version_base=None)
+@hydra.main(
+    config_path="../config/hydra", config_name="eval_benchmark", version_base=None
+)
 def main(cfg: DictConfig) -> None:
     args: Any = to_namespace(cfg)
     device = args.device
@@ -43,6 +46,7 @@ def main(cfg: DictConfig) -> None:
         os.makedirs(os.path.dirname(args.output_json) or ".", exist_ok=True)
         with open(args.output_json, "w", encoding="utf-8") as f:
             import json
+
             json.dump(results, f, indent=2)
         print(f"[Eval] results saved to {args.output_json}")
 

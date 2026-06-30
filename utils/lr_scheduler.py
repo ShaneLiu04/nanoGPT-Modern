@@ -7,6 +7,7 @@ All schedulers implement the same interface:
 
 so they can be dropped into any training loop.
 """
+
 import math
 
 
@@ -31,8 +32,15 @@ class LRScheduler:
         Total training steps.  Only used by `"wsd"`.
     """
 
-    def __init__(self, schedule, learning_rate, min_lr, warmup_iters,
-                 lr_decay_iters, max_iters=None):
+    def __init__(
+        self,
+        schedule,
+        learning_rate,
+        min_lr,
+        warmup_iters,
+        lr_decay_iters,
+        max_iters=None,
+    ):
         schedule = schedule.lower()
         if schedule not in ("cosine", "linear", "wsd", "constant"):
             raise ValueError(f"Unknown schedule: {schedule}")
@@ -69,7 +77,9 @@ class LRScheduler:
             return self.min_lr
 
         # --- decay phase ---
-        ratio = (step - self.warmup_iters) / max(self.decay_iters - self.warmup_iters, 1)
+        ratio = (step - self.warmup_iters) / max(
+            self.decay_iters - self.warmup_iters, 1
+        )
         if self.schedule == "cosine":
             coeff = 0.5 * (1.0 + math.cos(math.pi * ratio))
         elif self.schedule == "linear":

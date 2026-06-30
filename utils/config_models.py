@@ -6,6 +6,7 @@ models are **optional** — the existing YAML + argparse pipeline remains
 unchanged; validation is only applied when explicitly requested via
 ``validate_with_pydantic`` in :mod:`utils.config`.
 """
+
 from __future__ import annotations
 
 from typing import Literal, Optional
@@ -109,7 +110,9 @@ class ModernGPTModelConfig(ModelConfig):
         if self.intermediate_size is None:
             raw = int(8 / 3 * self.n_embd)
             multiple_of = 128
-            self.intermediate_size = ((raw + multiple_of - 1) // multiple_of) * multiple_of
+            self.intermediate_size = (
+                (raw + multiple_of - 1) // multiple_of
+            ) * multiple_of
         return self
 
 
@@ -178,8 +181,16 @@ class FullConfig(BaseModel):
     @model_validator(mode="after")
     def _model_type_matches(self) -> FullConfig:
         """Ensure model type matches the instantiated model config."""
-        if self.model_type == "baseline" and not isinstance(self.model, BaselineGPTModelConfig):
-            raise ValueError("model_type='baseline' but model config is not BaselineGPTModelConfig")
-        if self.model_type == "modern" and not isinstance(self.model, ModernGPTModelConfig):
-            raise ValueError("model_type='modern' but model config is not ModernGPTModelConfig")
+        if self.model_type == "baseline" and not isinstance(
+            self.model, BaselineGPTModelConfig
+        ):
+            raise ValueError(
+                "model_type='baseline' but model config is not BaselineGPTModelConfig"
+            )
+        if self.model_type == "modern" and not isinstance(
+            self.model, ModernGPTModelConfig
+        ):
+            raise ValueError(
+                "model_type='modern' but model config is not ModernGPTModelConfig"
+            )
         return self

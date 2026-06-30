@@ -4,6 +4,7 @@ Unified evaluation for alignment experiments.
 Metrics: accuracy, reward, format_pass_rate, invalid_rate, KL divergence.
 KL is computed only over response tokens (prompt tokens are masked out).
 """
+
 import os
 import argparse
 import re
@@ -25,14 +26,28 @@ import tiktoken
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, required=True)
-    parser.add_argument("--ref_checkpoint", type=str, default=None, help="Reference model for KL")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--ref_checkpoint", type=str, default=None, help="Reference model for KL"
+    )
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
     parser.add_argument("--num_samples", type=int, default=300)
     parser.add_argument("--max_response_len", type=int, default=128)
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size for logprob/KL computation")
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=16,
+        help="Batch size for logprob/KL computation",
+    )
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--levels", nargs="+", default=["easy", "medium", "hard"])
-    parser.add_argument("--save_failures", type=int, default=10, help="Number of failure examples to save")
+    parser.add_argument(
+        "--save_failures",
+        type=int,
+        default=10,
+        help="Number of failure examples to save",
+    )
     return parser.parse_args()
 
 
@@ -65,9 +80,9 @@ def _batch_logprobs(model, sequences, response_masks, device, ctx):
 
     for i, seq in enumerate(sequences):
         L = len(seq)
-        input_ids[i, :L - 1] = torch.tensor(seq[:-1], dtype=torch.long, device=device)
-        targets[i, :L - 1] = torch.tensor(seq[1:], dtype=torch.long, device=device)
-        attention_mask[i, :L - 1] = True
+        input_ids[i, : L - 1] = torch.tensor(seq[:-1], dtype=torch.long, device=device)
+        targets[i, : L - 1] = torch.tensor(seq[1:], dtype=torch.long, device=device)
+        attention_mask[i, : L - 1] = True
 
     with torch.no_grad():
         with ctx:
@@ -78,18 +93,22 @@ def _batch_logprobs(model, sequences, response_masks, device, ctx):
     for i, mask in enumerate(response_masks):
         mask_t = torch.tensor(mask, dtype=torch.bool, device=device)
         # token_logprobs is padded to max_len; slice to the actual target length.
-        result.append(token_logprobs[i, :len(mask_t)][mask_t])
+        result.append(token_logprobs[i, : len(mask_t)][mask_t])
     return result
 
 
-def evaluate(model, ref_model, data, tokenizer, device, max_response_len, batch_size, ctx):
+def evaluate(
+    model, ref_model, data, tokenizer, device, max_response_len, batch_size, ctx
+):
     prompts = [d["prompt"] for d in data]
     references = [d["answer"] for d in data]
 
     prompt_lens = [len(tokenizer.encode(p)) for p in prompts]
 
     responses, response_ids_list = generate_by_length(
-        model, prompts, tokenizer,
+        model,
+        prompts,
+        tokenizer,
         max_new_tokens=max_response_len,
         device=device,
         batch_size=batch_size,
@@ -99,7 +118,9 @@ def evaluate(model, ref_model, data, tokenizer, device, max_response_len, batch_
         return_ids=True,
     )
 
-    rewards, fmt_scores, proc_scores, acc_scores = compute_reward_batch(responses, references)
+    rewards, fmt_scores, proc_scores, acc_scores = compute_reward_batch(
+        responses, references
+    )
 
     # Compute KL divergence only over response tokens, batched.
     kl_sum = 0.0
@@ -133,17 +154,19 @@ def evaluate(model, ref_model, data, tokenizer, device, max_response_len, batch_
         all_policy_logp = []
         all_ref_logp = []
         for i in range(0, len(sequences), batch_size):
-            batch_seqs = sequences[i:i + batch_size]
-            batch_masks = masks[i:i + batch_size]
-            all_policy_logp.extend(_batch_logprobs(model, batch_seqs, batch_masks, device, ctx))
-            all_ref_logp.extend(_batch_logprobs(ref_model, batch_seqs, batch_masks, device, ctx))
+            batch_seqs = sequences[i : i + batch_size]
+            batch_masks = masks[i : i + batch_size]
+            all_policy_logp.extend(
+                _batch_logprobs(model, batch_seqs, batch_masks, device, ctx)
+            )
+            all_ref_logp.extend(
+                _batch_logprobs(ref_model, batch_seqs, batch_masks, device, ctx)
+            )
 
         for p_logp, r_logp in zip(all_policy_logp, all_ref_logp):
             # Use the same reverse-KL form as GRPO training:
             # KL(ref || policy) = ref_logp - policy_logp
-            kl_sum += compute_kl_divergence(
-                r_logp, p_logp, reduction="sum"
-            ).item()
+            kl_sum += compute_kl_divergence(r_logp, p_logp, reduction="sum").item()
             kl_count += p_logp.shape[0]
 
     total = len(data)
@@ -159,14 +182,16 @@ def evaluate(model, ref_model, data, tokenizer, device, max_response_len, batch_
         if not parsed or not parsed.group(1).strip():
             invalid += 1
         if acc_scores[i] < 1.0 and len(failure_examples) < args.save_failures:
-            failure_examples.append({
-                "prompt": prompts[i],
-                "reference": references[i],
-                "response": r,
-                "reward": rewards[i],
-                "format": fmt_scores[i],
-                "accuracy": acc_scores[i],
-            })
+            failure_examples.append(
+                {
+                    "prompt": prompts[i],
+                    "reference": references[i],
+                    "response": r,
+                    "reward": rewards[i],
+                    "format": fmt_scores[i],
+                    "accuracy": acc_scores[i],
+                }
+            )
 
     invalid_rate = invalid / total
     avg_kl = kl_sum / max(kl_count, 1)
@@ -200,10 +225,17 @@ def main():
         ref_model, _ = load_model_from_checkpoint(args.ref_checkpoint, device=device)
         ref_model.eval()
 
-    ctx = torch.amp.autocast(device_type="cuda" if device.startswith("cuda") else "cpu", dtype=torch.bfloat16) \
-        if device.startswith("cuda") and torch.cuda.is_bf16_supported() else None
+    ctx = (
+        torch.amp.autocast(
+            device_type="cuda" if device.startswith("cuda") else "cpu",
+            dtype=torch.bfloat16,
+        )
+        if device.startswith("cuda") and torch.cuda.is_bf16_supported()
+        else None
+    )
     if ctx is None:
         from contextlib import nullcontext
+
         ctx = nullcontext()
 
     generators = {
@@ -218,7 +250,16 @@ def main():
             args.num_samples,
             args.seed + {"easy": 0, "medium": 1, "hard": 2}[level],
         )
-        res = evaluate(model, ref_model, data, tokenizer, device, args.max_response_len, args.batch_size, ctx)
+        res = evaluate(
+            model,
+            ref_model,
+            data,
+            tokenizer,
+            device,
+            args.max_response_len,
+            args.batch_size,
+            ctx,
+        )
         results[level] = res
         print(f"\n=== {level.upper()} ===")
         print(f"  accuracy        : {res['accuracy']:.3f}")

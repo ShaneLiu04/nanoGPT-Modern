@@ -2,6 +2,7 @@
 ModernGPT: RMSNorm + SwiGLU FFN + RoPE (Rotary Position Embedding).
 Supports KV Cache for efficient autoregressive generation.
 """
+
 from __future__ import annotations
 
 import math
@@ -74,7 +75,9 @@ class RotaryEmbedding(nn.Module):
         self._cos_cached: Optional[torch.Tensor] = None
         self._sin_cached: Optional[torch.Tensor] = None
 
-    def _ensure_cache(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> None:
+    def _ensure_cache(
+        self, seq_len: int, device: torch.device, dtype: torch.dtype
+    ) -> None:
         """Build the full cos/sin table up to ``seq_len`` if not already cached."""
         cache_len = self._cos_cached.shape[0] if self._cos_cached is not None else 0
         if cache_len >= seq_len:
@@ -104,10 +107,10 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
     memory by one full hidden-dim tensor per call.
     """
     # Reshape [..., D] -> [..., 2, D//2], flip pair dim, negate first half, reshape back
-    x_pair = x.unflatten(-1, (2, -1))          # [..., 2, D//2]
-    x_rot = x_pair.flip(-2)                     # swap the two halves
+    x_pair = x.unflatten(-1, (2, -1))  # [..., 2, D//2]
+    x_rot = x_pair.flip(-2)  # swap the two halves
     x_rot = torch.stack([-x_rot[..., 0, :], x_rot[..., 1, :]], dim=-2)  # neg first half
-    return x_rot.flatten(-2)                     # [..., D]
+    return x_rot.flatten(-2)  # [..., D]
 
 
 def apply_rotary_pos_emb_single(
@@ -190,7 +193,9 @@ def _gqa_grouped_sdpa(
         # [B, 1, X, Y] -> [B, 1, 1, X, Y]
         attn_mask = attn_mask.unsqueeze(1)
     out_g = F.scaled_dot_product_attention(
-        q_g, k_g, v_g,
+        q_g,
+        k_g,
+        v_g,
         attn_mask=attn_mask,
         is_causal=is_causal,
         dropout_p=dropout_p,
@@ -198,6 +203,7 @@ def _gqa_grouped_sdpa(
     )
     # Merge the grouped head dims back: [B, n_kv, rep, T, D] -> [B, n_head, T, D]
     return out_g.reshape(B, n_head, T, D)
+
 
 class CausalSelfAttention(nn.Module):
     """Multi-Head / Grouped Query Attention with RoPE and KV Cache.
@@ -223,9 +229,9 @@ class CausalSelfAttention(nn.Module):
 
     def __init__(self, config: ModernGPTConfig):
         super().__init__()
-        assert config.n_embd % config.n_head == 0, (
-            f"n_embd ({config.n_embd}) must be divisible by n_head ({config.n_head})"
-        )
+        assert (
+            config.n_embd % config.n_head == 0
+        ), f"n_embd ({config.n_embd}) must be divisible by n_head ({config.n_head})"
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.head_dim = config.n_embd // config.n_head
@@ -305,14 +311,20 @@ class CausalSelfAttention(nn.Module):
         # This enables packed sequences with multiple documents per sample.
 
         # --- project to Q / K / V ---
-        q = self.q_proj(x)          # [B, T, n_embd]
-        k = self.k_proj(x)          # [B, T, n_kv_head * head_dim]  -- narrower when GQA
-        v = self.v_proj(x)          # [B, T, n_kv_head * head_dim]
+        q = self.q_proj(x)  # [B, T, n_embd]
+        k = self.k_proj(x)  # [B, T, n_kv_head * head_dim]  -- narrower when GQA
+        v = self.v_proj(x)  # [B, T, n_kv_head * head_dim]
 
         # --- reshape to multi-head ---
-        q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)       # [B, n_head,   T, hd]
-        k = k.view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)    # [B, n_kv_head,T, hd]
-        v = v.view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)    # [B, n_kv_head,T, hd]
+        q = q.view(B, T, self.n_head, self.head_dim).transpose(
+            1, 2
+        )  # [B, n_head,   T, hd]
+        k = k.view(B, T, self.n_kv_head, self.head_dim).transpose(
+            1, 2
+        )  # [B, n_kv_head,T, hd]
+        v = v.view(B, T, self.n_kv_head, self.head_dim).transpose(
+            1, 2
+        )  # [B, n_kv_head,T, hd]
 
         # --- QK-Norm (per-head, before RoPE) ---
         if self.use_qk_norm:
@@ -353,7 +365,9 @@ class CausalSelfAttention(nn.Module):
                     for pk, pv in reversed(past_kv):
                         L = pk.shape[2]
                         if L >= remaining:
-                            trimmed.insert(0, (pk[:, :, -remaining:, :], pv[:, :, -remaining:, :]))
+                            trimmed.insert(
+                                0, (pk[:, :, -remaining:, :], pv[:, :, -remaining:, :])
+                            )
                             remaining = 0
                             break
                         else:
@@ -377,7 +391,9 @@ class CausalSelfAttention(nn.Module):
 
         # Return only the K/V corresponding to the current input tokens so that
         # callers can append them to a KV cache without duplicating past tokens.
-        present_kv = (k_embed[:, :, past_len:, :], v[:, :, past_len:, :]) if use_cache else None
+        present_kv = (
+            (k_embed[:, :, past_len:, :], v[:, :, past_len:, :]) if use_cache else None
+        )
 
         # --- attention ---
         attn_scale = None
@@ -432,12 +448,19 @@ class CausalSelfAttention(nn.Module):
 
             if hasattr(F, "scaled_dot_product_attention"):
                 # When using cache, q positions are always >= k positions, so no causal mask needed.
-                is_causal = (past_kv is None and T > 1 and document_ids is None and not window_active)
+                is_causal = (
+                    past_kv is None
+                    and T > 1
+                    and document_ids is None
+                    and not window_active
+                )
                 # Build an additive mask that combines causal + padding + document boundary + sliding window masking.
                 attn_mask = None
                 if window_active:
                     assert self.sliding_window_size is not None
-                    attn_mask = build_sliding_window_mask(T, self.sliding_window_size, x.device).to(q_embed.dtype)
+                    attn_mask = build_sliding_window_mask(
+                        T, self.sliding_window_size, x.device
+                    ).to(q_embed.dtype)
                     attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, T, T]
                 if attention_mask is not None or document_ids is not None:
                     if document_ids is not None:
@@ -445,13 +468,21 @@ class CausalSelfAttention(nn.Module):
                         # if both belong to the same document and j <= i (causal inside doc).
                         doc_ids = document_ids.unsqueeze(2)  # [B, T, 1]
                         same_doc = doc_ids == doc_ids.transpose(1, 2)  # [B, T, T]
-                        causal_doc = torch.tril(torch.ones(T, T, device=x.device, dtype=torch.bool))
+                        causal_doc = torch.tril(
+                            torch.ones(T, T, device=x.device, dtype=torch.bool)
+                        )
                         doc_mask = same_doc & causal_doc  # [B, T, T]
-                        additive_mask = torch.zeros((B, 1, T, T), device=x.device, dtype=q_embed.dtype)
-                        additive_mask.masked_fill_(~doc_mask.unsqueeze(1), float("-inf"))
+                        additive_mask = torch.zeros(
+                            (B, 1, T, T), device=x.device, dtype=q_embed.dtype
+                        )
+                        additive_mask.masked_fill_(
+                            ~doc_mask.unsqueeze(1), float("-inf")
+                        )
                         if attention_mask is not None:
                             # attention_mask: True = attend, False = ignore.
-                            pad_mask = attention_mask.unsqueeze(1).unsqueeze(2)  # [B, 1, 1, T]
+                            pad_mask = attention_mask.unsqueeze(1).unsqueeze(
+                                2
+                            )  # [B, 1, 1, T]
                             additive_mask.masked_fill_(~pad_mask, float("-inf"))
                         if window_active:
                             additive_mask = additive_mask + attn_mask
@@ -462,13 +493,17 @@ class CausalSelfAttention(nn.Module):
                         # [B, 1, 1, T] instead of [B, 1, T, T] to save memory.
                         # This reduces memory from O(B*T^2) to O(B*T), critical for
                         # long sequences (e.g. T=8192 dense mask = 256MB per sample).
-                        pad_mask = attention_mask.unsqueeze(1).unsqueeze(2)  # [B, 1, 1, T]
+                        pad_mask = attention_mask.unsqueeze(1).unsqueeze(
+                            2
+                        )  # [B, 1, 1, T]
                         additive_mask = torch.zeros(
                             (B, 1, 1, T), device=x.device, dtype=q_embed.dtype
                         )
                         additive_mask.masked_fill_(~pad_mask, float("-inf"))
                         if window_active:
-                            additive_mask = additive_mask.expand(-1, -1, T, -1) + attn_mask
+                            additive_mask = (
+                                additive_mask.expand(-1, -1, T, -1) + attn_mask
+                            )
                         attn_mask = additive_mask
 
                 # GQA: resolve broadcast strategy.
@@ -486,10 +521,14 @@ class CausalSelfAttention(nn.Module):
                     if self._gqa_mode == "repeat" and self.gqa_broadcast == "auto":
                         # Lazy probe: resolve once per instance.
                         from .attention_utils import probe_gqa_sdpa_support
+
                         raw_ok, grouped_ok = probe_gqa_sdpa_support(
-                            q_embed.device, q_embed.dtype,
-                            n_head=self.n_head, n_kv_head=self.n_kv_head,
-                            seq_len=min(T, 16), head_dim=self.head_dim,
+                            q_embed.device,
+                            q_embed.dtype,
+                            n_head=self.n_head,
+                            n_kv_head=self.n_kv_head,
+                            seq_len=min(T, 16),
+                            head_dim=self.head_dim,
                         )
                         if raw_ok:
                             self._gqa_mode = "raw"
@@ -500,15 +539,23 @@ class CausalSelfAttention(nn.Module):
                     if self._gqa_mode == "raw":
                         # Pass KV with fewer heads directly; SDPA handles it.
                         y = F.scaled_dot_product_attention(
-                            q_embed, k_embed, v, attn_mask=attn_mask, is_causal=is_causal,
+                            q_embed,
+                            k_embed,
+                            v,
+                            attn_mask=attn_mask,
+                            is_causal=is_causal,
                             dropout_p=self.attn_dropout.p if self.training else 0.0,
                             scale=attn_scale,
                         )
                     elif self._gqa_mode == "grouped":
                         y = _gqa_grouped_sdpa(
-                            q_embed, k_embed, v,
-                            self.n_kv_head, self.n_rep,
-                            attn_mask=attn_mask, is_causal=is_causal,
+                            q_embed,
+                            k_embed,
+                            v,
+                            self.n_kv_head,
+                            self.n_rep,
+                            attn_mask=attn_mask,
+                            is_causal=is_causal,
                             dropout_p=self.attn_dropout.p if self.training else 0.0,
                             scale=attn_scale,
                         )
@@ -517,13 +564,21 @@ class CausalSelfAttention(nn.Module):
                         k_exp = k_embed.repeat_interleave(self.n_rep, dim=1)
                         v_exp = v.repeat_interleave(self.n_rep, dim=1)
                         y = F.scaled_dot_product_attention(
-                            q_embed, k_exp, v_exp, attn_mask=attn_mask, is_causal=is_causal,
+                            q_embed,
+                            k_exp,
+                            v_exp,
+                            attn_mask=attn_mask,
+                            is_causal=is_causal,
                             dropout_p=self.attn_dropout.p if self.training else 0.0,
                             scale=attn_scale,
                         )
                 else:
                     y = F.scaled_dot_product_attention(
-                        q_embed, k_embed, v, attn_mask=attn_mask, is_causal=is_causal,
+                        q_embed,
+                        k_embed,
+                        v,
+                        attn_mask=attn_mask,
+                        is_causal=is_causal,
                         dropout_p=self.attn_dropout.p if self.training else 0.0,
                         scale=attn_scale,
                     )
@@ -533,19 +588,29 @@ class CausalSelfAttention(nn.Module):
                 if self.use_gqa:
                     k_eager = k_embed.repeat_interleave(self.n_rep, dim=1)
                     v_eager = v.repeat_interleave(self.n_rep, dim=1)
-                att = (q_embed @ k_eager.transpose(-2, -1)) * (self.attn_temperature / math.sqrt(self.head_dim))
+                att = (q_embed @ k_eager.transpose(-2, -1)) * (
+                    self.attn_temperature / math.sqrt(self.head_dim)
+                )
                 if T > 1 and past_kv is None:
                     if window_active:
                         assert self.sliding_window_size is not None
-                        window_mask = build_sliding_window_mask(T, self.sliding_window_size, x.device)
+                        window_mask = build_sliding_window_mask(
+                            T, self.sliding_window_size, x.device
+                        )
                         att = att + window_mask.unsqueeze(0).unsqueeze(0)
                     elif document_ids is not None:
                         doc_ids = document_ids.unsqueeze(2)
                         same_doc = doc_ids == doc_ids.transpose(1, 2)
-                        causal_doc = torch.tril(torch.ones(T, T, device=x.device, dtype=torch.bool))
-                        att = att.masked_fill(~(same_doc & causal_doc).unsqueeze(1), float("-inf"))
+                        causal_doc = torch.tril(
+                            torch.ones(T, T, device=x.device, dtype=torch.bool)
+                        )
+                        att = att.masked_fill(
+                            ~(same_doc & causal_doc).unsqueeze(1), float("-inf")
+                        )
                     else:
-                        causal_mask = torch.tril(torch.ones(T, T, device=x.device)).view(1, 1, T, T)
+                        causal_mask = torch.tril(
+                            torch.ones(T, T, device=x.device)
+                        ).view(1, 1, T, T)
                         att = att.masked_fill(causal_mask == 0, float("-inf"))
                 if attention_mask is not None:
                     pad_mask = attention_mask.unsqueeze(1).unsqueeze(2)  # [B, 1, 1, T]
@@ -589,19 +654,28 @@ class SwiGLU(nn.Module):
         if self.num_experts <= 1:
             # dense SwiGLU
             self.gate_proj: nn.Module = nn.Linear(config.n_embd, hidden, bias=False)
-            self.up_proj: nn.Module   = nn.Linear(config.n_embd, hidden, bias=False)
+            self.up_proj: nn.Module = nn.Linear(config.n_embd, hidden, bias=False)
             self.down_proj: nn.Module = nn.Linear(hidden, config.n_embd, bias=False)
         else:
             # MoE: each expert has its own gate/up/down projection
-            self.gate_proj = nn.ModuleList([
-                nn.Linear(config.n_embd, hidden, bias=False) for _ in range(self.num_experts)
-            ])
-            self.up_proj = nn.ModuleList([
-                nn.Linear(config.n_embd, hidden, bias=False) for _ in range(self.num_experts)
-            ])
-            self.down_proj = nn.ModuleList([
-                nn.Linear(hidden, config.n_embd, bias=False) for _ in range(self.num_experts)
-            ])
+            self.gate_proj = nn.ModuleList(
+                [
+                    nn.Linear(config.n_embd, hidden, bias=False)
+                    for _ in range(self.num_experts)
+                ]
+            )
+            self.up_proj = nn.ModuleList(
+                [
+                    nn.Linear(config.n_embd, hidden, bias=False)
+                    for _ in range(self.num_experts)
+                ]
+            )
+            self.down_proj = nn.ModuleList(
+                [
+                    nn.Linear(hidden, config.n_embd, bias=False)
+                    for _ in range(self.num_experts)
+                ]
+            )
             # router: learns per-expert logits from the input
             self.router = nn.Linear(config.n_embd, self.num_experts, bias=False)
 
@@ -616,22 +690,24 @@ class SwiGLU(nn.Module):
 
         # --- MoE: top-1 gating with grouped-GEMM, load-balancing aux loss ---
         B, T, C = x.shape
-        x_flat = x.view(B * T, C)                    # [B*T, C]
+        x_flat = x.view(B * T, C)  # [B*T, C]
 
         # routing scores
-        router_logits = self.router(x_flat)           # [B*T, num_experts]
+        router_logits = self.router(x_flat)  # [B*T, num_experts]
         router_probs = F.softmax(router_logits, dim=-1)
 
         # top-1 selection: choose best expert per token
-        _, selected = torch.topk(router_probs, 1, dim=-1)   # [B*T, 1]
-        selected = selected.squeeze(-1)                      # [B*T]
+        _, selected = torch.topk(router_probs, 1, dim=-1)  # [B*T, 1]
+        selected = selected.squeeze(-1)  # [B*T]
 
         # Load-balancing aux loss: vectorized (no Python loop).
         # f_i = fraction of tokens routed to expert i
         # P_i = mean router probability assigned to expert i
-        token_counts = torch.bincount(
-            selected, minlength=self.num_experts
-        ).float().to(router_probs.device)
+        token_counts = (
+            torch.bincount(selected, minlength=self.num_experts)
+            .float()
+            .to(router_probs.device)
+        )
         f = token_counts / (B * T)
         P = router_probs.mean(dim=0)
         aux_loss = self.moe_aux_loss_factor * self.num_experts * (f * P).sum()
@@ -645,9 +721,9 @@ class SwiGLU(nn.Module):
         gate_proj_list: nn.ModuleList = self.gate_proj  # type: ignore[assignment]
         up_proj_list: nn.ModuleList = self.up_proj  # type: ignore[assignment]
         down_proj_list: nn.ModuleList = self.down_proj  # type: ignore[assignment]
-        gate_w = torch.stack([w.weight for w in gate_proj_list], dim=0)   # [E, H, C]
-        up_w = torch.stack([w.weight for w in up_proj_list], dim=0)       # [E, H, C]
-        down_w = torch.stack([w.weight for w in down_proj_list], dim=0) # [E, C, H]
+        gate_w = torch.stack([w.weight for w in gate_proj_list], dim=0)  # [E, H, C]
+        up_w = torch.stack([w.weight for w in up_proj_list], dim=0)  # [E, H, C]
+        down_w = torch.stack([w.weight for w in down_proj_list], dim=0)  # [E, C, H]
 
         out_flat = torch.zeros_like(x_flat)
         for e in range(self.num_experts):
@@ -657,15 +733,21 @@ class SwiGLU(nn.Module):
             # Drop tokens beyond the per-expert capacity (Switch Transformer style).
             if idx.numel() > capacity:
                 idx = idx[:capacity]
-            xe = x_flat.index_select(0, idx)                 # [n_e, C]
+            xe = x_flat.index_select(0, idx)  # [n_e, C]
             # Use bmm to compute all tokens for this expert in one kernel call.
             # xe: [n_e, C] -> [n_e, 1, C];  weight: [H, C] -> [C, H] -> [n_e, C, H]
-            xe_3d = xe.unsqueeze(1)                          # [n_e, 1, C]
-            gw = gate_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)   # [n_e, C, H]
-            uw = up_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)       # [n_e, C, H]
-            dw = down_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)    # [n_e, H, C]
-            ge = F.silu(torch.bmm(xe_3d, gw).squeeze(1))     # [n_e, H]
-            ue = torch.bmm(xe_3d, uw).squeeze(1)            # [n_e, H]
+            xe_3d = xe.unsqueeze(1)  # [n_e, 1, C]
+            gw = (
+                gate_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)
+            )  # [n_e, C, H]
+            uw = (
+                up_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)
+            )  # [n_e, C, H]
+            dw = (
+                down_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)
+            )  # [n_e, H, C]
+            ge = F.silu(torch.bmm(xe_3d, gw).squeeze(1))  # [n_e, H]
+            ue = torch.bmm(xe_3d, uw).squeeze(1)  # [n_e, H]
             de = torch.bmm((ge * ue).unsqueeze(1), dw).squeeze(1)  # [n_e, C]
             # weight by routing probability for gradient flow
             weight = router_probs.index_select(0, idx)[:, e].unsqueeze(-1)  # [n_e, 1]
@@ -693,7 +775,9 @@ class Block(nn.Module):
         self.config = config
         self.norm_pos = getattr(config, "norm_position", "pre")
         if self.norm_pos not in ("pre", "post"):
-            raise ValueError(f"norm_position must be 'pre' or 'post', got '{self.norm_pos}'")
+            raise ValueError(
+                f"norm_position must be 'pre' or 'post', got '{self.norm_pos}'"
+            )
 
         self.ln_1 = RMSNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
@@ -713,9 +797,8 @@ class Block(nn.Module):
         Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]],
         Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], torch.Tensor],
     ]:
-        gc_enabled = (
-            self.training
-            and getattr(self.config, "gradient_checkpointing", False)
+        gc_enabled = self.training and getattr(
+            self.config, "gradient_checkpointing", False
         )
 
         aux_loss = torch.zeros((), device=x.device, dtype=x.dtype)
@@ -745,8 +828,12 @@ class Block(nn.Module):
                 return x, None
 
             attn_out, present_kv = self.attn(
-                self.ln_1(x), past_kv=past_kv, use_cache=use_cache, start_pos=start_pos,
-                attention_mask=attention_mask, document_ids=document_ids,
+                self.ln_1(x),
+                past_kv=past_kv,
+                use_cache=use_cache,
+                start_pos=start_pos,
+                attention_mask=attention_mask,
+                document_ids=document_ids,
             )
             x = x + attn_out
             mlp_out, mlp_aux = self.mlp(self.ln_2(x))
@@ -777,8 +864,12 @@ class Block(nn.Module):
 
             residual = x
             attn_out, present_kv = self.attn(
-                x, past_kv=past_kv, use_cache=use_cache, start_pos=start_pos,
-                attention_mask=attention_mask, document_ids=document_ids,
+                x,
+                past_kv=past_kv,
+                use_cache=use_cache,
+                start_pos=start_pos,
+                attention_mask=attention_mask,
+                document_ids=document_ids,
             )
             x = self.ln_1(residual + attn_out)
             mlp_out, mlp_aux = self.mlp(x)
@@ -851,9 +942,7 @@ class ModernGPTConfig:
                 f"n_head ({n_head}) must be divisible by n_kv_head ({n_kv_head})"
             )
         if n_kv_head > n_head:
-            raise ValueError(
-                f"n_kv_head ({n_kv_head}) cannot exceed n_head ({n_head})"
-            )
+            raise ValueError(f"n_kv_head ({n_kv_head}) cannot exceed n_head ({n_head})")
         self.n_kv_head = n_kv_head
         self._n_rep = n_head // n_kv_head
 
@@ -903,7 +992,9 @@ class ModernGPTConfig:
         self.gqa_broadcast = gqa_broadcast
 
         # --- memory-efficient training ---
-        self.gradient_checkpointing = gradient_checkpointing  # set > 1 to enable MoE FFN (top-1 gating)
+        self.gradient_checkpointing = (
+            gradient_checkpointing  # set > 1 to enable MoE FFN (top-1 gating)
+        )
 
         # --- attention stabilization ---
         self.qk_norm = qk_norm
@@ -941,7 +1032,9 @@ class ModernGPTConfig:
             "n_embd": self.n_embd,
             "n_kv_head": self.n_kv_head,
             "n_rep": self.n_rep,
-            "intermediate_size": getattr(self, "intermediate_size", int(8 / 3 * self.n_embd)),
+            "intermediate_size": getattr(
+                self, "intermediate_size", int(8 / 3 * self.n_embd)
+            ),
             "dropout": self.dropout,
             "norm_position": getattr(self, "norm_position", "pre"),
             "num_experts": getattr(self, "num_experts", 1),
@@ -970,7 +1063,9 @@ class ModernGPTConfig:
     def from_dict(cls, d: dict) -> ModernGPTConfig:
         """Deserialize from dict.  Backward-compatible with old checkpoints that
         may not include `n_kv_head`."""
-        return cls(**{k: v for k, v in d.items() if k in cls.__init__.__code__.co_varnames})
+        return cls(
+            **{k: v for k, v in d.items() if k in cls.__init__.__code__.co_varnames}
+        )
 
     @property
     def gqa_ratio(self) -> float:
@@ -1018,6 +1113,7 @@ class ModernGPTConfig:
             f"kv_cache={kv_bytes}B/tok)"
         )
 
+
 class ModernGPT(nn.Module):
     def __init__(self, config: ModernGPTConfig):
         super().__init__()
@@ -1038,10 +1134,12 @@ class ModernGPT(nn.Module):
         self.n_future = config.n_future
         self.mtp_weight = config.mtp_weight
         if self.n_future > 0:
-            self.future_heads = nn.ModuleList([
-                nn.Linear(config.n_embd, config.vocab_size, bias=False)
-                for _ in range(self.n_future)
-            ])
+            self.future_heads = nn.ModuleList(
+                [
+                    nn.Linear(config.n_embd, config.vocab_size, bias=False)
+                    for _ in range(self.n_future)
+                ]
+            )
             # Tie future head weights with the main lm_head to limit param growth.
             for head in self.future_heads:
                 head.weight = self.lm_head.weight
@@ -1052,7 +1150,9 @@ class ModernGPT(nn.Module):
         self._log_attention_backend()
         for pn, p in self.named_parameters():
             if pn.endswith("o_proj.weight") or pn.endswith("down_proj.weight"):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
+                torch.nn.init.normal_(
+                    p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
+                )
 
     @staticmethod
     def _log_attention_backend():
@@ -1071,6 +1171,7 @@ class ModernGPT(nn.Module):
                 math_sdp_enabled,
                 mem_efficient_sdp_enabled,
             )
+
             ctx_info = {
                 "enable_flash": flash_sdp_enabled(),
                 "enable_math": math_sdp_enabled(),
@@ -1082,6 +1183,7 @@ class ModernGPT(nn.Module):
                 return  # CPU-only or PyTorch < 2.0
             try:
                 import warnings
+
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", FutureWarning)
                     ctx = torch.backends.cuda.sdp_kernel()
@@ -1096,9 +1198,13 @@ class ModernGPT(nn.Module):
         try:
             # Determine which backend will be used by priority:
             # Flash > MemEfficient > Math
-            device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
-            backend = "FlashAttention" if ctx_info["enable_flash"] else (
-                "MemEfficient" if ctx_info["enable_mem_efficient"] else "Math"
+            device_name = (
+                torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
+            )
+            backend = (
+                "FlashAttention"
+                if ctx_info["enable_flash"]
+                else ("MemEfficient" if ctx_info["enable_mem_efficient"] else "Math")
             )
             print(f"[Attention] backend={backend} | device={device_name} | {ctx_info}")
         except Exception:
@@ -1129,7 +1235,9 @@ class ModernGPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         max_len = self.config.effective_block_size
-        assert t <= max_len, f"Cannot forward sequence of length {t}, effective block size is {max_len}"
+        assert (
+            t <= max_len
+        ), f"Cannot forward sequence of length {t}, effective block size is {max_len}"
 
         tok_emb = self.transformer.wte(idx)
         x = self.transformer.drop(tok_emb)
@@ -1141,15 +1249,23 @@ class ModernGPT(nn.Module):
             past_kv = past_kvs[i] if past_kvs is not None else None
             if moe_enabled:
                 x, present_kv, block_aux = block(
-                    x, past_kv=past_kv, use_cache=use_cache, start_pos=start_pos,
-                    attention_mask=attention_mask, document_ids=document_ids,
+                    x,
+                    past_kv=past_kv,
+                    use_cache=use_cache,
+                    start_pos=start_pos,
+                    attention_mask=attention_mask,
+                    document_ids=document_ids,
                     return_aux_loss=True,
                 )
                 total_aux_loss = total_aux_loss + block_aux
             else:
                 x, present_kv = block(
-                    x, past_kv=past_kv, use_cache=use_cache, start_pos=start_pos,
-                    attention_mask=attention_mask, document_ids=document_ids,
+                    x,
+                    past_kv=past_kv,
+                    use_cache=use_cache,
+                    start_pos=start_pos,
+                    attention_mask=attention_mask,
+                    document_ids=document_ids,
                 )
             if use_cache:
                 assert new_past_kvs is not None
@@ -1167,7 +1283,9 @@ class ModernGPT(nn.Module):
         loss = None
         mtp_loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
+            )
             if future_logits:
                 mtp = torch.zeros((), device=device, dtype=torch.float32)
                 T = logits.shape[1]
@@ -1191,11 +1309,17 @@ class ModernGPT(nn.Module):
         self.config.block_size = block_size
 
     def configure_optimizers(
-        self, weight_decay: float, learning_rate: float, betas: Tuple[float, float], device_type: str
+        self,
+        weight_decay: float,
+        learning_rate: float,
+        betas: Tuple[float, float],
+        device_type: str,
     ) -> torch.optim.Optimizer:
         # Deduplicate parameters by tensor id.  wte and lm_head share the same
         # weight tensor, so without deduplication AdamW would update it twice.
-        param_dict = {id(p): (n, p) for n, p in self.named_parameters() if p.requires_grad}
+        param_dict = {
+            id(p): (n, p) for n, p in self.named_parameters() if p.requires_grad
+        }
         decay_params = [p for n, p in param_dict.values() if p.dim() >= 2]
         nodecay_params = [p for n, p in param_dict.values() if p.dim() < 2]
         optim_groups = [
@@ -1203,10 +1327,13 @@ class ModernGPT(nn.Module):
             {"params": nodecay_params, "weight_decay": 0.0},
         ]
         import inspect
+
         fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == "cuda"
         extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        optimizer = torch.optim.AdamW(
+            optim_groups, lr=learning_rate, betas=betas, **extra_args
+        )
         return optimizer
 
     @torch.no_grad()
@@ -1329,6 +1456,7 @@ class ModernGPT(nn.Module):
         # CUDA Graph style optimization: compile is only meaningful on CUDA.
         if compile_enabled and idx.device.type != "cuda":
             import warnings
+
             warnings.warn(
                 "generate(compile=...) is only supported on CUDA; "
                 "falling back to eager mode."
@@ -1356,6 +1484,7 @@ class ModernGPT(nn.Module):
                     eos_token_id=eos_token_id,
                 )
             import warnings
+
             warnings.warn(
                 "generate(compile='fullgraph') requirements not met "
                 "(use_cache=True, no repetition_penalty/sliding-window/paged-cache, "
@@ -1374,6 +1503,7 @@ class ModernGPT(nn.Module):
                     )
                 except Exception as e:
                     import warnings
+
                     warnings.warn(
                         f"torch.compile failed for generate() ({e}); "
                         "falling back to eager mode."
@@ -1391,6 +1521,7 @@ class ModernGPT(nn.Module):
             except Exception as e:
                 if compile_enabled and mod is not self:
                     import warnings
+
                     warnings.warn(
                         f"Compiled forward failed at generate() step ({e}); "
                         "falling back to eager mode for the remaining tokens."
@@ -1403,6 +1534,7 @@ class ModernGPT(nn.Module):
         # ---- per-sequence finished mask ----
         if eos_token_id is not None:
             finished = torch.zeros(B, dtype=torch.bool, device=idx.device)
+
         def _all_done():
             return eos_token_id is not None and finished.all().item()
 
@@ -1415,7 +1547,9 @@ class ModernGPT(nn.Module):
                 v, _ = torch.topk(logits, k, dim=-1)
                 logits[logits < v[:, [-1]]] = -float("Inf")
             if top_p is not None and top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+                sorted_logits, sorted_indices = torch.sort(
+                    logits, descending=True, dim=-1
+                )
                 sorted_probs = F.softmax(sorted_logits, dim=-1)
                 cum_probs = torch.cumsum(sorted_probs, dim=-1)
                 sorted_mask = cum_probs > top_p
@@ -1456,7 +1590,11 @@ class ModernGPT(nn.Module):
             for _ in range(max_new_tokens):
                 if _all_done():
                     break
-                idx_cond = idx_out if idx_out.size(1) <= max_cache_len else idx_out[:, -max_cache_len:]
+                idx_cond = (
+                    idx_out
+                    if idx_out.size(1) <= max_cache_len
+                    else idx_out[:, -max_cache_len:]
+                )
                 # Use absolute positions so the cropped context matches the
                 # KV-cache path, which keeps absolute positions across evictions.
                 start_pos = max(0, idx_out.size(1) - max_cache_len)
@@ -1476,6 +1614,7 @@ class ModernGPT(nn.Module):
         cache: Any
         if getattr(self.config, "use_paged_kv_cache", False):
             from model.paged_kv_cache import PagedKVCacheManager
+
             cache = PagedKVCacheManager(
                 n_layers=self.config.n_layer,
                 n_heads=self.config.n_head,
@@ -1486,6 +1625,7 @@ class ModernGPT(nn.Module):
             )
         else:
             from model.kv_cache_utils import KVCacheManager, QuantizedKVCacheManager
+
             cache_dtype = getattr(self.config, "kv_cache_dtype", "bf16")
             if cache_dtype == "int8":
                 cache = QuantizedKVCacheManager(
@@ -1517,9 +1657,9 @@ class ModernGPT(nn.Module):
         # --- first generated token ---
         logits = logits[:, -1, :]
         _rep_penalty(logits, idx)
-        idx_next = _sample(logits)                      # [B, 1]
+        idx_next = _sample(logits)  # [B, 1]
         _mark_finished(idx_next)
-        idx_out = torch.cat([idx, idx_next], dim=1)     # [B, prompt_len + 1]
+        idx_out = torch.cat([idx, idx_next], dim=1)  # [B, prompt_len + 1]
 
         # --- decode loop ---
         for _ in range(max_new_tokens - 1):
@@ -1537,7 +1677,10 @@ class ModernGPT(nn.Module):
                 )
 
             logits, _, next_kv = _forward(
-                inp, past_kvs=cache.get_cache(), use_cache=True, start_pos=cache.start_pos
+                inp,
+                past_kvs=cache.get_cache(),
+                use_cache=True,
+                start_pos=cache.start_pos,
             )
             for li in range(self.config.n_layer):
                 cache.update(li, next_kv[li][0], next_kv[li][1])
@@ -1545,7 +1688,7 @@ class ModernGPT(nn.Module):
 
             logits = logits[:, -1, :]
             _rep_penalty(logits, idx_out)
-            idx_next = _sample(logits)                  # [B, 1]
+            idx_next = _sample(logits)  # [B, 1]
             _mark_finished(idx_next)
             idx_next = _apply_finish(idx_next)
 
@@ -1587,7 +1730,9 @@ class ModernGPT(nn.Module):
                 v, _ = torch.topk(logits, k, dim=-1)
                 logits[logits < v[:, [-1]]] = -float("Inf")
             if top_p is not None and top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+                sorted_logits, sorted_indices = torch.sort(
+                    logits, descending=True, dim=-1
+                )
                 sorted_probs = F.softmax(sorted_logits, dim=-1)
                 cum_probs = torch.cumsum(sorted_probs, dim=-1)
                 sorted_mask = cum_probs > top_p
@@ -1757,7 +1902,9 @@ class ModernGPT(nn.Module):
                 "Speculative decoding requires prompt_len + max_new_tokens <= block_size - 1"
             )
 
-        def _sample(logits: torch.Tensor, temp: float, k: Optional[int], p: Optional[float]) -> torch.Tensor:
+        def _sample(
+            logits: torch.Tensor, temp: float, k: Optional[int], p: Optional[float]
+        ) -> torch.Tensor:
             if temp > 0 and temp != 1.0:
                 logits = logits / temp
             if k is not None and k > 0:
@@ -1765,7 +1912,9 @@ class ModernGPT(nn.Module):
                 v, _ = torch.topk(logits, kk, dim=-1)
                 logits[logits < v[:, [-1]]] = -float("Inf")
             if p is not None and p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+                sorted_logits, sorted_indices = torch.sort(
+                    logits, descending=True, dim=-1
+                )
                 sorted_probs = F.softmax(sorted_logits, dim=-1)
                 cum_probs = torch.cumsum(sorted_probs, dim=-1)
                 sorted_mask = cum_probs > p
@@ -1783,7 +1932,11 @@ class ModernGPT(nn.Module):
             (before top-k masking) so that the speculative acceptance ratio is
             mathematically correct.
             """
-            if draft_temperature is not None and draft_temperature > 0 and draft_temperature != 1.0:
+            if (
+                draft_temperature is not None
+                and draft_temperature > 0
+                and draft_temperature != 1.0
+            ):
                 logits = logits / draft_temperature
             # Original probabilities used for the acceptance ratio.
             orig_probs = F.softmax(logits, dim=-1)
@@ -1809,8 +1962,13 @@ class ModernGPT(nn.Module):
         draft_cache: Any
         if cache_dtype == "int8":
             from model.kv_cache_utils import QuantizedKVCacheManager
+
             target_cache = QuantizedKVCacheManager(
-                self.config.n_layer, self.config.n_head, self.config.n_kv_head, head_dim, max_cache_len
+                self.config.n_layer,
+                self.config.n_head,
+                self.config.n_kv_head,
+                head_dim,
+                max_cache_len,
             )
             draft_cache = QuantizedKVCacheManager(
                 draft_model.config.n_layer,
@@ -1821,7 +1979,11 @@ class ModernGPT(nn.Module):
             )
         else:
             target_cache = KVCacheManager(
-                self.config.n_layer, self.config.n_head, self.config.n_kv_head, head_dim, max_cache_len,
+                self.config.n_layer,
+                self.config.n_head,
+                self.config.n_kv_head,
+                head_dim,
+                max_cache_len,
                 cache_dtype=cache_dtype,
             )
             draft_cache = KVCacheManager(
@@ -1848,7 +2010,7 @@ class ModernGPT(nn.Module):
         # ``current_*_logits`` is the distribution for the *next* token at the
         # current context boundary, produced by the last forward call.
         current_target_logits = logits_t_prefill[:, -1, :]  # [B, V]
-        current_draft_logits = logits_d_prefill[:, -1, :]   # [B, V]
+        current_draft_logits = logits_d_prefill[:, -1, :]  # [B, V]
 
         idx_out = idx
         generated = 0
@@ -2041,7 +2203,9 @@ class ModernGPT(nn.Module):
                 "Speculative decoding requires prompt_len + max_new_tokens <= block_size - 1"
             )
 
-        def _sample(logits: torch.Tensor, temp: float, k: Optional[int], p: Optional[float]) -> torch.Tensor:
+        def _sample(
+            logits: torch.Tensor, temp: float, k: Optional[int], p: Optional[float]
+        ) -> torch.Tensor:
             if temp > 0 and temp != 1.0:
                 logits = logits / temp
             if k is not None and k > 0:
@@ -2049,7 +2213,9 @@ class ModernGPT(nn.Module):
                 v, _ = torch.topk(logits, kk, dim=-1)
                 logits[logits < v[:, [-1]]] = -float("Inf")
             if p is not None and p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+                sorted_logits, sorted_indices = torch.sort(
+                    logits, descending=True, dim=-1
+                )
                 sorted_probs = F.softmax(sorted_logits, dim=-1)
                 cum_probs = torch.cumsum(sorted_probs, dim=-1)
                 sorted_mask = cum_probs > p
@@ -2061,7 +2227,11 @@ class ModernGPT(nn.Module):
             return torch.multinomial(probs, num_samples=1)
 
         def _draft_sample(logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-            if draft_temperature is not None and draft_temperature > 0 and draft_temperature != 1.0:
+            if (
+                draft_temperature is not None
+                and draft_temperature > 0
+                and draft_temperature != 1.0
+            ):
                 logits = logits / draft_temperature
             orig_probs = F.softmax(logits, dim=-1)
             sample_logits = logits
@@ -2094,7 +2264,11 @@ class ModernGPT(nn.Module):
             dc: Any
             if cache_dtype == "int8":
                 tc = QuantizedKVCacheManager(
-                    self.config.n_layer, self.config.n_head, self.config.n_kv_head, head_dim, max_cache_len
+                    self.config.n_layer,
+                    self.config.n_head,
+                    self.config.n_kv_head,
+                    head_dim,
+                    max_cache_len,
                 )
                 dc = QuantizedKVCacheManager(
                     draft_model.config.n_layer,
@@ -2105,7 +2279,11 @@ class ModernGPT(nn.Module):
                 )
             else:
                 tc = KVCacheManager(
-                    self.config.n_layer, self.config.n_head, self.config.n_kv_head, head_dim, max_cache_len,
+                    self.config.n_layer,
+                    self.config.n_head,
+                    self.config.n_kv_head,
+                    head_dim,
+                    max_cache_len,
                     cache_dtype=cache_dtype,
                 )
                 dc = KVCacheManager(
@@ -2119,23 +2297,23 @@ class ModernGPT(nn.Module):
             tc.init_cache(1, device, dtype)
             dc.init_cache(1, device, dtype)
             for li in range(self.config.n_layer):
-                tc.update(li, raw_kvs_t[li][0][b:b + 1], raw_kvs_t[li][1][b:b + 1])
+                tc.update(li, raw_kvs_t[li][0][b : b + 1], raw_kvs_t[li][1][b : b + 1])
             tc.advance(prompt_len)
             for li in range(draft_model.config.n_layer):
-                dc.update(li, raw_kvs_d[li][0][b:b + 1], raw_kvs_d[li][1][b:b + 1])
+                dc.update(li, raw_kvs_d[li][0][b : b + 1], raw_kvs_d[li][1][b : b + 1])
             dc.advance(prompt_len)
             target_caches.append(tc)
             draft_caches.append(dc)
 
         # Per-sequence state
-        idx_out = [idx[b:b + 1] for b in range(B)]
+        idx_out = [idx[b : b + 1] for b in range(B)]
         generated = [0] * B
         accepted_total = [0] * B
         drafted_total = [0] * B
         fallback = [False] * B
         finished = [False] * B
-        current_target_logits = [logits_t_prefill[b:b + 1, -1, :] for b in range(B)]
-        current_draft_logits = [logits_d_prefill[b:b + 1, -1, :] for b in range(B)]
+        current_target_logits = [logits_t_prefill[b : b + 1, -1, :] for b in range(B)]
+        current_draft_logits = [logits_d_prefill[b : b + 1, -1, :] for b in range(B)]
 
         while any(g < max_new_tokens and not f for g, f in zip(generated, finished)):
             # --- Draft + verify for each active sequence independently ---
@@ -2228,7 +2406,9 @@ class ModernGPT(nn.Module):
                         start_pos=target_caches[b].start_pos,
                     )
                     for li in range(self.config.n_layer):
-                        target_caches[b].update(li, replace_kv_t[li][0], replace_kv_t[li][1])
+                        target_caches[b].update(
+                            li, replace_kv_t[li][0], replace_kv_t[li][1]
+                        )
                     target_caches[b].advance(1)
                     current_target_logits[b] = logits_replace[:, -1, :]
                 else:
@@ -2245,7 +2425,9 @@ class ModernGPT(nn.Module):
                             start_pos=target_caches[b].start_pos,
                         )
                         for li in range(self.config.n_layer):
-                            target_caches[b].update(li, extra_kv_t[li][0], extra_kv_t[li][1])
+                            target_caches[b].update(
+                                li, extra_kv_t[li][0], extra_kv_t[li][1]
+                            )
                         target_caches[b].advance(1)
                         current_target_logits[b] = logits_extra[:, -1, :]
 
@@ -2299,9 +2481,11 @@ class ModernGPT(nn.Module):
 
         # Reassemble batch with right-padding
         max_len = max(x.shape[1] for x in idx_out)
-        padded = torch.full((B, max_len), eos_token_id or 0, dtype=torch.long, device=device)
+        padded = torch.full(
+            (B, max_len), eos_token_id or 0, dtype=torch.long, device=device
+        )
         for b in range(B):
-            padded[b, :idx_out[b].shape[1]] = idx_out[b][0]
+            padded[b, : idx_out[b].shape[1]] = idx_out[b][0]
         return padded
 
     # ------------------------------------------------------------------
