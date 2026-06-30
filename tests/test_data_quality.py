@@ -1,10 +1,10 @@
 """Tests for data quality pipeline: filtering, dedup, mixing."""
+
 import argparse
 import os
 import tempfile
 
 import numpy as np
-import pytest
 
 from data.filter import (
     CompositeFilter,
@@ -40,10 +40,12 @@ def test_regex_filter():
 
 
 def test_composite_filter_counts():
-    f = CompositeFilter([
-        LengthFilter(min_chars=5),
-        RepetitionFilter(n=2, max_repetition_ratio=0.5),
-    ])
+    f = CompositeFilter(
+        [
+            LengthFilter(min_chars=5),
+            RepetitionFilter(n=2, max_repetition_ratio=0.5),
+        ]
+    )
     assert f("hello world") is True
     assert f("hi") is False
     texts = ["hello world", "hi", "foo bar baz", "abcabcabc"]
@@ -82,7 +84,9 @@ def test_lsh_finds_candidates():
 
 def test_minhash_deduplicator():
     docs = ["hello world", "hello world", "completely different"]
-    dedup = MinHashDeduplicator(threshold=0.85, num_hashes=64, num_bands=8, rows_per_band=8)
+    dedup = MinHashDeduplicator(
+        threshold=0.85, num_hashes=64, num_bands=8, rows_per_band=8
+    )
     mask = dedup.fit(docs).duplicate_mask()
     assert mask[0] is True
     assert mask[1] is False
@@ -120,17 +124,22 @@ def test_mixed_iterable_dataset_state_dict():
     ds = MixedIterableDataset(sources, {"a": 0.5, "b": 0.5}, total_examples=10, seed=42)
     # Consume a few items.
     it = iter(ds)
-    first = [next(it) for _ in range(3)]
+    for _ in range(3):
+        next(it)
     state = ds.state_dict()
     assert state["yielded"] == 3
     assert "rng_state" in state
 
     # Resume and verify the remaining examples are produced.
-    ds2 = MixedIterableDataset(sources, {"a": 0.5, "b": 0.5}, total_examples=10, seed=42)
+    ds2 = MixedIterableDataset(
+        sources, {"a": 0.5, "b": 0.5}, total_examples=10, seed=42
+    )
     ds2.load_state_dict(state)
     resumed = list(ds2)
 
-    ds3 = MixedIterableDataset(sources, {"a": 0.5, "b": 0.5}, total_examples=10, seed=42)
+    ds3 = MixedIterableDataset(
+        sources, {"a": 0.5, "b": 0.5}, total_examples=10, seed=42
+    )
     full = list(ds3)
     # The resumed stream must contain exactly the examples not seen in ``first``.
     assert sorted(resumed) == sorted(full[3:])
@@ -218,4 +227,5 @@ def test_shard_writer_cleans_stale_shards():
         assert arr.tolist() == [1, 2, 3, 4, 5]
     finally:
         import shutil
+
         shutil.rmtree(tmpdir, ignore_errors=True)

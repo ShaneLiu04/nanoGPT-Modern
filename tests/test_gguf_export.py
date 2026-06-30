@@ -1,11 +1,11 @@
 """Tests for the GGUF export path and the in-tree GGUF writer."""
+
 import os
 import subprocess
 import sys
 import tempfile
 
 import numpy as np
-import pytest
 import torch
 
 
@@ -92,7 +92,16 @@ def test_export_gguf_cli_q8_0():
         out = os.path.join(tmpdir, "model.q8_0.gguf")
 
         result = subprocess.run(
-            [sys.executable, "export_gguf.py", "--checkpoint", ckpt, "--out", out, "--quant", "q8_0"],
+            [
+                sys.executable,
+                "export_gguf.py",
+                "--checkpoint",
+                ckpt,
+                "--out",
+                out,
+                "--quant",
+                "q8_0",
+            ],
             capture_output=True,
             text=True,
         )
@@ -116,7 +125,16 @@ def test_export_gguf_cli_f16():
         out = os.path.join(tmpdir, "model.f16.gguf")
 
         result = subprocess.run(
-            [sys.executable, "export_gguf.py", "--checkpoint", ckpt, "--out", out, "--quant", "f16"],
+            [
+                sys.executable,
+                "export_gguf.py",
+                "--checkpoint",
+                ckpt,
+                "--out",
+                out,
+                "--quant",
+                "f16",
+            ],
             capture_output=True,
             text=True,
         )

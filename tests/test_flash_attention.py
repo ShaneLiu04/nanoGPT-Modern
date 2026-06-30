@@ -8,16 +8,16 @@ Covers:
 - Model-level integration with ``use_flash_attn=True``
 - Graceful fallback when ``flash-attn`` is not installed
 """
-import pytest
+
 import torch
 
 from model import ModernGPT, ModernGPTConfig
 from model import flash_attention as flash_attn_module
 
-
 # ---------------------------------------------------------------------------
 #  Availability introspection
 # ---------------------------------------------------------------------------
+
 
 def test_flash_attention_reports_availability():
     available = flash_attn_module.is_available()
@@ -41,6 +41,7 @@ def test_has_kvcache_returns_bool():
 #  Standard flash_attention wrapper
 # ---------------------------------------------------------------------------
 
+
 def test_flash_attention_returns_none_when_unavailable():
     q = torch.randn(1, 2, 4, 8)
     k = torch.randn(1, 2, 4, 8)
@@ -57,6 +58,7 @@ def test_flash_attention_returns_none_when_unavailable():
 #  Varlen wrapper
 # ---------------------------------------------------------------------------
 
+
 def test_flash_attention_varlen_returns_none_when_unavailable():
     # Total tokens = 4, n_heads = 2, head_dim = 8
     q = torch.randn(4, 2, 8)
@@ -64,9 +66,13 @@ def test_flash_attention_varlen_returns_none_when_unavailable():
     v = torch.randn(4, 2, 8)
     cu = torch.tensor([0, 2, 4], dtype=torch.int32)
     out = flash_attn_module.flash_attention_varlen(
-        q, k, v,
-        cu_seqlens_q=cu, cu_seqlens_k=cu,
-        max_seqlen_q=2, max_seqlen_k=2,
+        q,
+        k,
+        v,
+        cu_seqlens_q=cu,
+        cu_seqlens_k=cu,
+        max_seqlen_q=2,
+        max_seqlen_k=2,
         causal=True,
     )
     if flash_attn_module.has_varlen():
@@ -80,6 +86,7 @@ def test_flash_attention_varlen_returns_none_when_unavailable():
 #  KV-cache decode wrapper
 # ---------------------------------------------------------------------------
 
+
 def test_flash_attention_with_cache_returns_none_when_unavailable():
     B, H, D = 1, 2, 8
     S = 4
@@ -89,7 +96,11 @@ def test_flash_attention_with_cache_returns_none_when_unavailable():
     k_new = torch.randn(B, 1, H, D)
     v_new = torch.randn(B, 1, H, D)
     out = flash_attn_module.flash_attention_with_cache(
-        q, k_cache, v_cache, k_new, v_new,
+        q,
+        k_cache,
+        v_cache,
+        k_new,
+        v_new,
         cache_seqlens=torch.tensor([S], dtype=torch.int32),
         causal=True,
     )
@@ -103,6 +114,7 @@ def test_flash_attention_with_cache_returns_none_when_unavailable():
 # ---------------------------------------------------------------------------
 #  Model-level integration
 # ---------------------------------------------------------------------------
+
 
 def test_model_runs_with_flash_flag_when_unavailable():
     cfg = ModernGPTConfig(
@@ -128,8 +140,12 @@ def test_flash_flag_config_serialization():
 def test_flash_attn_with_gqa_model_forward():
     """GQA + use_flash_attn should work (falls back gracefully)."""
     cfg = ModernGPTConfig(
-        n_layer=1, n_head=4, n_embd=32, block_size=8,
-        n_kv_head=2, use_flash_attn=True,
+        n_layer=1,
+        n_head=4,
+        n_embd=32,
+        block_size=8,
+        n_kv_head=2,
+        use_flash_attn=True,
     )
     model = ModernGPT(cfg)
     x = torch.randint(0, cfg.vocab_size, (1, 8))
@@ -140,8 +156,12 @@ def test_flash_attn_with_gqa_model_forward():
 def test_flash_attn_with_gqa_model_generate():
     """GQA + use_flash_attn generate() should work (falls back gracefully)."""
     cfg = ModernGPTConfig(
-        n_layer=1, n_head=4, n_embd=32, block_size=16,
-        n_kv_head=2, use_flash_attn=True,
+        n_layer=1,
+        n_head=4,
+        n_embd=32,
+        block_size=16,
+        n_kv_head=2,
+        use_flash_attn=True,
     )
     model = ModernGPT(cfg)
     model.eval()

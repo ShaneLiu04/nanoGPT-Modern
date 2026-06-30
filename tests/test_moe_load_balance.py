@@ -1,5 +1,5 @@
 """Tests for MoE load balancing aux loss and capacity limiting."""
-import pytest
+
 import torch
 
 from model import ModernGPT, ModernGPTConfig

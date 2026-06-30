@@ -1,6 +1,4 @@
 """Determinism regression tests for training."""
-import os
-import tempfile
 
 import pytest
 import torch
@@ -12,8 +10,13 @@ from training.trainer_base import set_seed
 
 def _build_tiny_model():
     config = ModernGPTConfig(
-        n_layer=2, n_head=4, n_embd=128, block_size=64,
-        vocab_size=100, dropout=0.0, n_kv_head=2,
+        n_layer=2,
+        n_head=4,
+        n_embd=128,
+        block_size=64,
+        vocab_size=100,
+        dropout=0.0,
+        n_kv_head=2,
         gqa_broadcast="repeat",  # avoid lazy probe side-effects in determinism test
     )
     return ModernGPT(config)

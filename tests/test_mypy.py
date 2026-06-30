@@ -1,9 +1,7 @@
 """Static type-check regression test for core modules."""
+
 import subprocess
 import sys
-
-import pytest
-
 
 CORE_MODULES = [
     "model/modern_gpt.py",

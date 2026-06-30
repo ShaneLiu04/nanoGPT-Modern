@@ -1,5 +1,5 @@
 """Tests for HuggingFace Transformers compatibility wrapper."""
-import os
+
 import tempfile
 
 import pytest
@@ -14,24 +14,41 @@ from model.modern_gpt import ModernGPT, ModernGPTConfig
 def test_hf_config_round_trip():
     """``NanoGPTModernConfig`` must round-trip to ``ModernGPTConfig``."""
     original = ModernGPTConfig(
-        n_layer=2, n_head=2, n_embd=32, block_size=64,
-        vocab_size=100, dropout=0.0,
+        n_layer=2,
+        n_head=2,
+        n_embd=32,
+        block_size=64,
+        vocab_size=100,
+        dropout=0.0,
         rope_scaling={"type": "ntk", "factor": 2.0},
         qk_norm=True,
     )
     hf_config = NanoGPTModernConfig.from_nanogpt_config(original)
     recovered = hf_config.to_nanogpt_config()
 
-    for key in ["vocab_size", "block_size", "n_layer", "n_head", "n_embd",
-                "n_kv_head", "dropout", "qk_norm", "rope_scaling"]:
+    for key in [
+        "vocab_size",
+        "block_size",
+        "n_layer",
+        "n_head",
+        "n_embd",
+        "n_kv_head",
+        "dropout",
+        "qk_norm",
+        "rope_scaling",
+    ]:
         assert getattr(recovered, key) == getattr(original, key), key
 
 
 def test_hf_save_load_state_dict():
     """Saving and loading via HF format must preserve weights."""
     config = ModernGPTConfig(
-        n_layer=2, n_head=2, n_embd=32, block_size=64,
-        vocab_size=100, dropout=0.0,
+        n_layer=2,
+        n_head=2,
+        n_embd=32,
+        block_size=64,
+        vocab_size=100,
+        dropout=0.0,
     )
     model = ModernGPT(config).eval()
     original_sd = model.state_dict()
@@ -53,8 +70,12 @@ def test_hf_save_load_state_dict():
 def test_hf_forward_matches_native():
     """The HF wrapper forward must match the native model forward."""
     config = ModernGPTConfig(
-        n_layer=2, n_head=2, n_embd=32, block_size=64,
-        vocab_size=100, dropout=0.0,
+        n_layer=2,
+        n_head=2,
+        n_embd=32,
+        block_size=64,
+        vocab_size=100,
+        dropout=0.0,
     )
     model = ModernGPT(config).eval()
     hf_config = NanoGPTModernConfig.from_nanogpt_config(config)
@@ -76,8 +97,12 @@ def test_hf_forward_matches_native():
 def test_hf_generate_matches_native():
     """``generate`` through the wrapper must match native ``generate``."""
     config = ModernGPTConfig(
-        n_layer=2, n_head=2, n_embd=32, block_size=64,
-        vocab_size=100, dropout=0.0,
+        n_layer=2,
+        n_head=2,
+        n_embd=32,
+        block_size=64,
+        vocab_size=100,
+        dropout=0.0,
     )
     model = ModernGPT(config).eval()
     hf_config = NanoGPTModernConfig.from_nanogpt_config(config)

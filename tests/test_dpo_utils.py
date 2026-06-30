@@ -1,5 +1,5 @@
 """Tests for DPO/IPO/KTO preference-learning utilities."""
-import pytest
+
 import torch
 
 from utils.dpo_utils import (
@@ -56,7 +56,9 @@ def test_ipo_loss_is_finite():
     policy_rejected = torch.tensor([-1.0, 0.0])
     ref_chosen = torch.tensor([0.0, 0.0])
     ref_rejected = torch.tensor([0.0, 0.0])
-    loss, metrics = compute_ipo_loss(policy_chosen, policy_rejected, ref_chosen, ref_rejected, beta=0.1)
+    loss, metrics = compute_ipo_loss(
+        policy_chosen, policy_rejected, ref_chosen, ref_rejected, beta=0.1
+    )
     assert torch.isfinite(loss)
     assert "logits" in metrics
 

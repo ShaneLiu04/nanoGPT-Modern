@@ -12,7 +12,6 @@ All GRPO optimizations are preserved: batched rollouts, batched logprobs,
 mixed precision, gradient accumulation, and LR scheduling.
 """
 
-import os
 import argparse
 
 import torch

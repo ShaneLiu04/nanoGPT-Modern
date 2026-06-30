@@ -1,17 +1,15 @@
 """Regression tests for training.trainer_base helpers."""
+
 import argparse
-import os
 import tempfile
 from pathlib import Path
 
 import pytest
 import torch
-import torch.nn as nn
 
 
 from training.trainer_base import (
     setup_distributed,
-    cleanup_distributed,
     set_seed,
     infer_device,
     build_amp_context,

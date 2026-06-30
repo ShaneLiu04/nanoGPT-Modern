@@ -1,5 +1,4 @@
 """Tests for GRPO advantage normalization and clipping."""
-import os
 
 import pytest
 import torch

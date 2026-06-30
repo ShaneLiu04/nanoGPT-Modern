@@ -1,5 +1,5 @@
 """Tests for diverse prompt template system in data/arithmetic.py."""
-import os
+
 import random
 
 
@@ -37,7 +37,7 @@ class TestSelectPromptTemplates:
 class TestFormatPrompt:
     def test_zero_diversity_uses_original(self):
         prompt = format_prompt("3 + 5", diversity=0)
-        assert prompt == f"Solve: 3 + 5\nWrap your final answer in <answer>...</answer>."
+        assert prompt == "Solve: 3 + 5\nWrap your final answer in <answer>...</answer>."
 
     def test_all_contain_answer_tag(self):
         for t in PROMPT_TEMPLATES:
@@ -86,7 +86,11 @@ class TestGenerateWithDiversity:
         assert len(prompts) > 1
 
     def test_all_levels_have_answer_field(self):
-        for gen, seed in [(generate_easy, 42), (generate_medium, 43), (generate_hard, 44)]:
+        for gen, seed in [
+            (generate_easy, 42),
+            (generate_medium, 43),
+            (generate_hard, 44),
+        ]:
             data = gen(5, seed=seed, prompt_diversity=1)
             for item in data:
                 assert "answer" in item
