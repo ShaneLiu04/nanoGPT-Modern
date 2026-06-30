@@ -289,6 +289,154 @@ class ArithmeticDataset(Dataset):
         return self._encode_item(self.data[idx])
 
 
+# ---------------------------------------------------------------------------
+# Chain-of-Thought (CoT) extensions
+# ---------------------------------------------------------------------------
+
+def generate_cot_problems(num_samples=1000, seed=42, difficulty="easy"):
+    """Generate arithmetic problems with chain-of-thought reasoning.
+
+    Each problem includes a natural-language prompt, a step-by-step reasoning
+    chain, and a final numeric answer.  The format follows GSM8K-style
+    multi-step arithmetic.
+
+    Parameters
+    ----------
+    num_samples : int
+        Number of problems to generate.
+    seed : int
+        Random seed for reproducibility.
+    difficulty : {"easy", "medium", "hard"}
+        Controls the number of operations per problem.
+
+    Returns
+    -------
+    list[dict]
+        Each dict has keys ``prompt``, ``reasoning``, and ``answer``.
+    """
+    random.seed(seed)
+    problems: list[dict[str, Any]] = []
+
+    for _ in range(num_samples):
+        if difficulty == "easy":
+            # 2-step problem: (a op b) op c
+            a = random.randint(1, 100)
+            b = random.randint(1, 100)
+            c = random.randint(1, 100)
+            op1 = random.choice(["+", "-", "*"])
+            op2 = random.choice(["+", "-", "*"])
+            expr1 = f"{a} {op1} {b}"
+            val1, err = _safe_eval(expr1)
+            if err or val1 is None:
+                continue
+            expr2 = f"{val1} {op2} {c}"
+            val2, err = _safe_eval(expr2)
+            if err or val2 is None:
+                continue
+            reasoning = f"Step 1: {expr1} = {val1}\nStep 2: {expr2} = {val2}"
+            prompt = f"Calculate {a} {op1} {b} {op2} {c}. Show your reasoning."
+            answer = str(val2)
+        elif difficulty == "medium":
+            # 3-step with parentheses
+            a = random.randint(1, 50)
+            b = random.randint(1, 50)
+            c = random.randint(1, 50)
+            d = random.randint(1, 50)
+            op1 = random.choice(["+", "-", "*", "/"])
+            op2 = random.choice(["+", "-", "*"])
+            expr1 = f"({a} {op1} {b}) {op2} {c}"
+            val1, err = _safe_eval(expr1)
+            if err or val1 is None:
+                continue
+            expr2 = f"{val1} + {d}"
+            val2, err = _safe_eval(expr2)
+            if err or val2 is None:
+                continue
+            reasoning = f"Step 1: {expr1} = {val1}\nStep 2: {val1} + {d} = {val2}"
+            prompt = f"Calculate ({a} {op1} {b}) {op2} {c} + {d}. Show your reasoning."
+            answer = str(val2)
+        else:
+            # hard: nested expressions
+            a = random.randint(1, 20)
+            b = random.randint(1, 20)
+            c = random.randint(1, 20)
+            d = random.randint(1, 20)
+            expr1 = f"({a} + {b}) * {c}"
+            val1, err = _safe_eval(expr1)
+            if err or val1 is None:
+                continue
+            expr2 = f"{val1} / {d}"
+            val2, err = _safe_eval(expr2)
+            if err or val2 is None:
+                continue
+            reasoning = f"Step 1: {expr1} = {val1}\nStep 2: {val1} / {d} = {val2}"
+            prompt = f"Calculate ({a} + {b}) * {c} / {d}. Show your reasoning."
+            answer = str(val2)
+
+        problems.append({
+            "prompt": prompt,
+            "reasoning": reasoning,
+            "answer": answer,
+        })
+
+    return problems
+
+
+class ChainOfThoughtDataset(Dataset):
+    """Arithmetic dataset with chain-of-thought reasoning tokens.
+
+    Each sample is formatted as::
+
+        <reasoning>step1
+        step2
+        ...</reasoning><answer>final_answer</answer>
+
+    Parameters
+    ----------
+    data : list[dict]
+        Output of ``generate_cot_problems``.
+    tokenizer : tiktoken.Encoding
+    max_length : int
+    pre_tokenize : bool
+        If True (default), encode all samples in ``__init__``.
+    """
+
+    def __init__(self, data, tokenizer, max_length=512, pre_tokenize=True):
+        self.data = data
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.pre_tokenize = pre_tokenize
+
+        if pre_tokenize:
+            self.samples = [self._encode_item(item) for item in data]
+        else:
+            self.samples = None
+
+    def _encode_item(self, item):
+        reasoning = item["reasoning"]
+        answer = item["answer"]
+        full_text = f"<reasoning>{reasoning}</reasoning><answer>{answer}</answer>"
+        tokens = self.tokenizer.encode(full_text)
+        if len(tokens) > self.max_length:
+            tokens = tokens[: self.max_length]
+        input_ids = torch.tensor(tokens[:-1], dtype=torch.long)
+        labels = torch.tensor(tokens[1:], dtype=torch.long)
+        return {
+            "input_ids": input_ids,
+            "labels": labels,
+            "reasoning": reasoning,
+            "answer": answer,
+        }
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        if self.samples is not None:
+            return self.samples[idx]
+        return self._encode_item(self.data[idx])
+
+
 def collate_fn(batch, pad_token_id=50256):
     max_len = max(len(b["input_ids"]) for b in batch)
     input_ids = []
@@ -302,9 +450,41 @@ def collate_fn(batch, pad_token_id=50256):
             lab = torch.cat([lab, torch.full((pad_len,), -1, dtype=torch.long)])
         input_ids.append(inp)
         labels.append(lab)
-    return {
+    result = {
         "input_ids": torch.stack(input_ids),
         "labels": torch.stack(labels),
-        "prompts": [b["prompt"] for b in batch],
-        "answers": [b["answer"] for b in batch],
     }
+    if "prompt" in batch[0]:
+        result["prompts"] = [b["prompt"] for b in batch]
+    if "answer" in batch[0]:
+        result["answers"] = [b["answer"] for b in batch]
+    if "reasoning" in batch[0]:
+        result["reasonings"] = [b["reasoning"] for b in batch]
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Unit-test stubs
+# ---------------------------------------------------------------------------
+def _test_cot_generation():
+    data = generate_cot_problems(num_samples=5, seed=42, difficulty="easy")
+    assert len(data) == 5
+    assert all("prompt" in item and "reasoning" in item and "answer" in item for item in data)
+    print("generate_cot_problems smoke test passed")
+
+
+def _test_chain_of_thought_dataset():
+    import tiktoken
+    tokenizer = tiktoken.get_encoding("gpt2")
+    data = generate_cot_problems(num_samples=3, seed=42, difficulty="easy")
+    ds = ChainOfThoughtDataset(data, tokenizer, max_length=256)
+    assert len(ds) == 3
+    sample = ds[0]
+    assert "input_ids" in sample
+    assert "reasoning" in sample
+    print("ChainOfThoughtDataset smoke test passed")
+
+
+if __name__ == "__main__":
+    _test_cot_generation()
+    _test_chain_of_thought_dataset()

@@ -3,12 +3,13 @@ Expects ~1M docs, ~1.13B tokens total.
 """
 import os
 import random
+import warnings
 import numpy as np
 import torch
 from torch.utils.data import IterableDataset, DataLoader
 
 
-def get_openwebtext_dataset(data_dir="data/openwebtext", split="train", block_size=1024, resume_offset=0, use_packing=False):
+def get_openwebtext_dataset(data_dir="data/openwebtext", split="train", block_size=1024, resume_offset=0, use_packing=False, shuffle_buffer=None, shuffle_idx_path=None):
     bin_path = os.path.join(data_dir, f"{split}.bin")
     if not os.path.exists(bin_path):
         raise FileNotFoundError(
@@ -17,7 +18,7 @@ def get_openwebtext_dataset(data_dir="data/openwebtext", split="train", block_si
         )
     if use_packing:
         return PackingDataset(bin_path, block_size=block_size, resume_offset=resume_offset)
-    return MemmapDataset(bin_path, block_size=block_size, resume_offset=resume_offset)
+    return MemmapDataset(bin_path, block_size=block_size, resume_offset=resume_offset, shuffle_buffer=shuffle_buffer, shuffle_idx_path=shuffle_idx_path)
 
 
 def _detect_dtype_from_index(bin_path):
@@ -46,15 +47,59 @@ def _detect_eot_from_index(bin_path):
     return 50256  # GPT-2 default
 
 
+def _detect_block_size_from_index(bin_path):
+    """Read the block_size recorded in the index file."""
+    idx_path = bin_path.replace(".bin", ".idx")
+    block_size = 1024
+    if os.path.exists(idx_path):
+        with open(idx_path, "r") as f:
+            for line in f:
+                if line.startswith("block_size="):
+                    block_size = int(line.strip().split("=")[1])
+                    break
+    return block_size
+
+
+def generate_shuffle_index(bin_path, seed=1337, block_size=None):
+    """Generate a global random chunk index file for *bin_path*.
+
+    The output file is named ``<bin_path>.shuffle.idx`` and contains a
+    NumPy array of shuffled chunk indices.  When *block_size* is not
+    provided, the function attempts to read it from the companion ``.idx``
+    metadata file.
+    """
+    if block_size is None:
+        block_size = _detect_block_size_from_index(bin_path)
+    dtype = _detect_dtype_from_index(bin_path)
+    data = np.memmap(bin_path, dtype=dtype, mode="r")
+    length = len(data) // (block_size + 1)
+    rng = np.random.default_rng(seed)
+    shuffle_idx = rng.permutation(length)
+    idx_path = bin_path + ".shuffle.idx"
+    with open(idx_path, "wb") as f:
+        np.save(f, shuffle_idx)
+
+
 class MemmapDataset(IterableDataset):
-    def __init__(self, bin_path, block_size=1024, resume_offset=0, shuffle_buffer=None):
+    def __init__(self, bin_path, block_size=1024, resume_offset=0, shuffle_buffer=None, shuffle_idx_path=None):
         super().__init__()
         self.block_size = block_size
         self.resume_offset = resume_offset
         self.shuffle_buffer = shuffle_buffer
+        self.shuffle_idx_path = shuffle_idx_path
         dtype = _detect_dtype_from_index(bin_path)
         self.data = np.memmap(bin_path, dtype=dtype, mode="r")
         self.length = len(self.data) // (block_size + 1)
+        self._shuffle_idx = None
+        if shuffle_idx_path is not None:
+            if os.path.exists(shuffle_idx_path):
+                with open(shuffle_idx_path, "rb") as f:
+                    self._shuffle_idx = np.load(f)
+                if len(self._shuffle_idx) != self.length:
+                    warnings.warn(f"Shuffle index length mismatch: {len(self._shuffle_idx)} != {self.length}")
+                    self._shuffle_idx = None
+            else:
+                warnings.warn(f"Shuffle index not found: {shuffle_idx_path}")
 
     def state_dict(self):
         """Return a serializable state for resumable training."""
@@ -74,21 +119,25 @@ class MemmapDataset(IterableDataset):
             start = self.resume_offset + worker_info.id * per_worker
             end = start + per_worker if worker_info.id < worker_info.num_workers - 1 else self.length
 
-        # --- buffer shuffle to break up sequential chunk ordering ---
-        # Shuffle chunks in groups of buffer_size to add randomness without
-        # loading everything into memory.  Each epoch traverses the same
-        # chunks but in a different order (when used with per-epoch
-        # re-instantiation via DataLoader).
-        indices = list(range(start, end))
-        buffer_size = self.shuffle_buffer if self.shuffle_buffer is not None else min(10000, end - start)
-        buffer_size = max(1, buffer_size)
-        for buf_start in range(0, len(indices), buffer_size):
-            buf_end = min(buf_start + buffer_size, len(indices))
-            buf = indices[buf_start:buf_end]
-            random.shuffle(buf)
-            indices[buf_start:buf_end] = buf
+        if self._shuffle_idx is not None:
+            # Global shuffle: use pre-computed permutation for this worker slice.
+            indices = self._shuffle_idx[start:end].tolist()
+        else:
+            indices = list(range(start, end))
+
+        # Apply chunk-level shuffle only when no global shuffle index is available.
+        if self._shuffle_idx is None:
+            buffer_size = self.shuffle_buffer if self.shuffle_buffer is not None else min(10000, end - start)
+            buffer_size = max(1, buffer_size)
+            for buf_start in range(0, len(indices), buffer_size):
+                buf_end = min(buf_start + buffer_size, len(indices))
+                buf = indices[buf_start:buf_end]
+                random.shuffle(buf)
+                indices[buf_start:buf_end] = buf
 
         for i in indices:
+            if i < 0 or i >= self.length:
+                continue
             chunk = self.data[i * (self.block_size + 1) : (i + 1) * (self.block_size + 1)]
             chunk_i64 = chunk.astype(np.int64)
             x = torch.from_numpy(chunk_i64[:-1])
@@ -358,12 +407,50 @@ class PackingDataset(IterableDataset):
         return len(self._samples)
 
 
+class GlobalShuffledDataset(IterableDataset):
+    """Compatibility wrapper that always applies global shuffle.
+
+    On first iteration, a ``.shuffle.idx`` file is generated if it does not
+    already exist, and the underlying ``MemmapDataset`` reads from it.
+    """
+
+    def __init__(self, bin_path, block_size=1024, resume_offset=0, shuffle_buffer=None, seed=1337):
+        super().__init__()
+        self.bin_path = bin_path
+        self.block_size = block_size
+        self.resume_offset = resume_offset
+        self.shuffle_buffer = shuffle_buffer
+        self.seed = seed
+        idx_path = bin_path + ".shuffle.idx"
+        if not os.path.exists(idx_path):
+            generate_shuffle_index(bin_path, seed=seed, block_size=block_size)
+        self._dataset = MemmapDataset(
+            bin_path,
+            block_size=block_size,
+            resume_offset=resume_offset,
+            shuffle_buffer=shuffle_buffer,
+            shuffle_idx_path=idx_path,
+        )
+
+    def __iter__(self):
+        return iter(self._dataset)
+
+    def __len__(self):
+        return len(self._dataset)
+
+    def state_dict(self):
+        return self._dataset.state_dict()
+
+    def load_state_dict(self, state):
+        self._dataset.load_state_dict(state)
+
+
 def get_dataloader(data_dir="data/openwebtext", split="train", batch_size=12, block_size=1024,
                    num_workers=4, resume_offset=0, worker_init_fn=None, use_packing=False,
-                   shuffle_buffer=None):
+                   shuffle_buffer=None, shuffle_idx_path=None):
     dataset = get_openwebtext_dataset(
         data_dir, split, block_size=block_size, resume_offset=resume_offset, use_packing=use_packing,
-        shuffle_buffer=shuffle_buffer,
+        shuffle_buffer=shuffle_buffer, shuffle_idx_path=shuffle_idx_path,
     )
     loader = DataLoader(
         dataset,

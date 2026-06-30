@@ -1,0 +1,70 @@
+version: "3.8"
+
+services:
+  # Training container with GPU access
+  train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    image: nanogpt-modern:dev
+    container_name: nanogpt-train
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ./data:/workspace/data:ro
+      - ./config:/workspace/config:ro
+      - ./out:/workspace/out
+    command: >
+      python -m training.train_pretrain
+      --config config/pretrain.yaml
+      --device cuda
+      --compile true
+    stdin_open: true
+    tty: true
+
+  # TensorBoard service
+  tensorboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    image: nanogpt-modern:dev
+    container_name: nanogpt-tensorboard
+    ports:
+      - "6006:6006"
+    volumes:
+      - ./out:/workspace/out:ro
+    command: >
+      tensorboard
+      --logdir /workspace/out
+      --host 0.0.0.0
+      --port 6006
+    depends_on:
+      - train
+
+  # Production inference / API server (optional)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: prod
+    image: nanogpt-modern:prod
+    container_name: nanogpt-api
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./out:/workspace/out:ro
+    command: >
+      python api_server.py
+      --checkpoint /workspace/out/pretrain/best_ckpt.pt
+      --model modern
+      --device cuda
+      --port 8000
+    profiles:
+      - api

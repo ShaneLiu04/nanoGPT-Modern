@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}-${{ matrix.python-version }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,eval,quant]"
+
+      - name: Run pytest (full regression, 234 tests)
+        run: pytest -xvs --tb=short
+
+      - name: Run mypy type checking
+        run: mypy model/ training/ inference/ evaluation/ utils/ data/ rewards/ export_to_hf.py export_to_onnx.py api_server.py
+
+      - name: Run black format check
+        run: black --check model/ training/ inference/ evaluation/ utils/ data/ rewards/ export_to_hf.py export_to_onnx.py api_server.py
+
+      - name: Run ruff lint check
+        run: ruff check model/ training/ inference/ evaluation/ utils/ data/ rewards/ export_to_hf.py export_to_onnx.py api_server.py
+
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-smoke-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-smoke-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Short pretraining smoke test (50 steps, CPU)
+        run: |
+          python -m training.train_pretrain \
+            --out_dir out/ci_smoke_pretrain \
+            --batch_size 2 \
+            --max_iters 50 \
+            --eval_interval 25 \
+            --eval_iters 5 \
+            --log_interval 10 \
+            --device cpu \
+            --compile false \
+            --model baseline \
+            --n_layer 2 --n_head 2 --n_embd 128 \
+            --data_dir data/openwebtext \
+            --seed 42
+        timeout-minutes: 5
+
+      - name: Short GRPO smoke test (10 steps, CPU)
+        run: |
+          # Prepare a tiny SFT checkpoint for GRPO init
+          python -c "
+          import torch, os
+          from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
+          cfg = BaselineGPTConfig(n_layer=2, n_head=2, n_embd=128)
+          m = BaselineGPT(cfg)
+          os.makedirs('out/ci_smoke_sft', exist_ok=True)
+          torch.save({'model': m.state_dict(), 'config': cfg.to_dict(), 'iter_num': 0, 'best_val_loss': 999.0}, 'out/ci_smoke_sft/final.pt')
+          "
+          python -m training.train_grpo \
+            --init_from out/ci_smoke_sft/final.pt \
+            --ref_from out/ci_smoke_sft/final.pt \
+            --out_dir out/ci_smoke_grpo \
+            --num_steps 10 \
+            --batch_size 2 \
+            --group_size 2 \
+            --max_prompt_len 8 \
+            --max_response_len 8 \
+            --device cpu \
+            --seed 42
+        timeout-minutes: 5
+
+      - name: Upload smoke test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-logs
+          path: out/ci_smoke_*/

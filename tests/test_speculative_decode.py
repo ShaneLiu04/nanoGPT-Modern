@@ -81,8 +81,8 @@ def test_speculative_eos_stops():
         assert generated[-1] == eos_token_id
 
 
-def test_speculative_rejects_batch():
-    """Speculative decoding currently only supports batch size 1."""
+def test_speculative_batched():
+    """Speculative decoding supports batch size > 1 via _generate_speculative_batched."""
     config = ModernGPTConfig(
         n_layer=1, n_head=2, n_embd=16, block_size=32,
         vocab_size=50, dropout=0.0,
@@ -92,8 +92,9 @@ def test_speculative_rejects_batch():
     idx = torch.randint(0, config.vocab_size, (2, 4), device=device)
 
     with torch.no_grad():
-        with pytest.raises(ValueError):
-            model.generate(
-                idx, max_new_tokens=5, use_cache=True,
-                draft_model=model, draft_tokens=2,
-            )
+        out = model.generate(
+            idx, max_new_tokens=5, use_cache=True,
+            draft_model=model, draft_tokens=2,
+        )
+    assert out.shape[0] == 2
+    assert out.shape[1] == 4 + 5

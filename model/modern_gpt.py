@@ -436,6 +436,7 @@ class CausalSelfAttention(nn.Module):
                 # Build an additive mask that combines causal + padding + document boundary + sliding window masking.
                 attn_mask = None
                 if window_active:
+                    assert self.sliding_window_size is not None
                     attn_mask = build_sliding_window_mask(T, self.sliding_window_size, x.device).to(q_embed.dtype)
                     attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, T, T]
                 if attention_mask is not None or document_ids is not None:
@@ -535,6 +536,7 @@ class CausalSelfAttention(nn.Module):
                 att = (q_embed @ k_eager.transpose(-2, -1)) * (self.attn_temperature / math.sqrt(self.head_dim))
                 if T > 1 and past_kv is None:
                     if window_active:
+                        assert self.sliding_window_size is not None
                         window_mask = build_sliding_window_mask(T, self.sliding_window_size, x.device)
                         att = att + window_mask.unsqueeze(0).unsqueeze(0)
                     elif document_ids is not None:
@@ -612,7 +614,7 @@ class SwiGLU(nn.Module):
             out = self.down_proj(gate * up)
             return self.dropout(out), torch.zeros((), device=x.device, dtype=x.dtype)
 
-        # --- MoE: top-1 gating with load-balancing aux loss and capacity limit ---
+        # --- MoE: top-1 gating with grouped-GEMM, load-balancing aux loss ---
         B, T, C = x.shape
         x_flat = x.view(B * T, C)                    # [B*T, C]
 
@@ -624,10 +626,13 @@ class SwiGLU(nn.Module):
         _, selected = torch.topk(router_probs, 1, dim=-1)   # [B*T, 1]
         selected = selected.squeeze(-1)                      # [B*T]
 
-        # Load-balancing aux loss: encourage uniform expert utilization.
+        # Load-balancing aux loss: vectorized (no Python loop).
         # f_i = fraction of tokens routed to expert i
         # P_i = mean router probability assigned to expert i
-        f = torch.stack([(selected == e).float().mean() for e in range(self.num_experts)])
+        token_counts = torch.bincount(
+            selected, minlength=self.num_experts
+        ).float().to(router_probs.device)
+        f = token_counts / (B * T)
         P = router_probs.mean(dim=0)
         aux_loss = self.moe_aux_loss_factor * self.num_experts * (f * P).sum()
 
@@ -635,18 +640,33 @@ class SwiGLU(nn.Module):
         total_tokens = B * T
         capacity = int(self.moe_capacity_factor * total_tokens / self.num_experts)
 
+        # Grouped-GEMM: stack expert weights for bmm dispatch.
+        # gate_proj: [num_experts, hidden, C]  up_proj: [num_experts, hidden, C]  down_proj: [num_experts, C, hidden]
+        gate_proj_list: nn.ModuleList = self.gate_proj  # type: ignore[assignment]
+        up_proj_list: nn.ModuleList = self.up_proj  # type: ignore[assignment]
+        down_proj_list: nn.ModuleList = self.down_proj  # type: ignore[assignment]
+        gate_w = torch.stack([w.weight for w in gate_proj_list], dim=0)   # [E, H, C]
+        up_w = torch.stack([w.weight for w in up_proj_list], dim=0)       # [E, H, C]
+        down_w = torch.stack([w.weight for w in down_proj_list], dim=0) # [E, C, H]
+
         out_flat = torch.zeros_like(x_flat)
         for e in range(self.num_experts):
             idx = (selected == e).nonzero(as_tuple=False).flatten()
             if idx.numel() == 0:
                 continue
-            # Drop tokens beyond the per-expert capacity (common in Switch Transformer).
+            # Drop tokens beyond the per-expert capacity (Switch Transformer style).
             if idx.numel() > capacity:
                 idx = idx[:capacity]
             xe = x_flat.index_select(0, idx)                 # [n_e, C]
-            ge = F.silu(self.gate_proj[e](xe))  # type: ignore[index]
-            ue = self.up_proj[e](xe)              # type: ignore[index]
-            de = self.down_proj[e](ge * ue)       # type: ignore[index]
+            # Use bmm to compute all tokens for this expert in one kernel call.
+            # xe: [n_e, C] -> [n_e, 1, C];  weight: [H, C] -> [C, H] -> [n_e, C, H]
+            xe_3d = xe.unsqueeze(1)                          # [n_e, 1, C]
+            gw = gate_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)   # [n_e, C, H]
+            uw = up_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)       # [n_e, C, H]
+            dw = down_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)    # [n_e, H, C]
+            ge = F.silu(torch.bmm(xe_3d, gw).squeeze(1))     # [n_e, H]
+            ue = torch.bmm(xe_3d, uw).squeeze(1)            # [n_e, H]
+            de = torch.bmm((ge * ue).unsqueeze(1), dw).squeeze(1)  # [n_e, C]
             # weight by routing probability for gradient flow
             weight = router_probs.index_select(0, idx)[:, e].unsqueeze(-1)  # [n_e, 1]
             out_flat.index_copy_(0, idx, de * weight)
@@ -813,6 +833,7 @@ class ModernGPTConfig:
         sliding_window_size: Optional[int] = None,
         use_paged_kv_cache: bool = False,
         kv_cache_block_size: int = 16,
+        kv_cache_dtype: str = "bf16",
         gqa_broadcast: str = "auto",
     ):
         # --- architecture ---
@@ -871,6 +892,7 @@ class ModernGPTConfig:
         # --- KV Cache backend ---
         self.use_paged_kv_cache = use_paged_kv_cache
         self.kv_cache_block_size = kv_cache_block_size
+        self.kv_cache_dtype = kv_cache_dtype
 
         # --- GQA broadcast strategy ---
         if gqa_broadcast not in ("auto", "raw", "grouped", "repeat"):
@@ -940,6 +962,7 @@ class ModernGPTConfig:
             "sliding_window_size": getattr(self, "sliding_window_size", None),
             "use_paged_kv_cache": getattr(self, "use_paged_kv_cache", False),
             "kv_cache_block_size": getattr(self, "kv_cache_block_size", 16),
+            "kv_cache_dtype": getattr(self, "kv_cache_dtype", "bf16"),
             "gqa_broadcast": getattr(self, "gqa_broadcast", "auto"),
         }
 
@@ -1262,18 +1285,32 @@ class ModernGPT(nn.Module):
 
         # ---- speculative decoding path ----
         if draft_model is not None:
-            return self._generate_speculative(
-                idx,
-                max_new_tokens=max_new_tokens,
-                draft_model=draft_model,
-                draft_tokens=draft_tokens,
-                draft_temperature=draft_temperature,
-                draft_top_k=draft_top_k,
-                temperature=temperature,
-                top_k=top_k,
-                top_p=top_p,
-                eos_token_id=eos_token_id,
-            )
+            if B == 1:
+                return self._generate_speculative(
+                    idx,
+                    max_new_tokens=max_new_tokens,
+                    draft_model=draft_model,
+                    draft_tokens=draft_tokens,
+                    draft_temperature=draft_temperature,
+                    draft_top_k=draft_top_k,
+                    temperature=temperature,
+                    top_k=top_k,
+                    top_p=top_p,
+                    eos_token_id=eos_token_id,
+                )
+            else:
+                return self._generate_speculative_batched(
+                    idx,
+                    max_new_tokens=max_new_tokens,
+                    draft_model=draft_model,
+                    draft_tokens=draft_tokens,
+                    draft_temperature=draft_temperature,
+                    draft_top_k=draft_top_k,
+                    temperature=temperature,
+                    top_k=top_k,
+                    top_p=top_p,
+                    eos_token_id=eos_token_id,
+                )
 
         # ---- normalize compile flag ----
         compile_fullgraph = False
@@ -1448,14 +1485,25 @@ class ModernGPT(nn.Module):
                 block_size=getattr(self.config, "kv_cache_block_size", 16),
             )
         else:
-            from model.kv_cache_utils import KVCacheManager
-            cache = KVCacheManager(
-                n_layers=self.config.n_layer,
-                n_heads=self.config.n_head,
-                n_kv_heads=self.config.n_kv_head,
-                head_dim=head_dim,
-                max_cache_len=max_cache_len,
-            )
+            from model.kv_cache_utils import KVCacheManager, QuantizedKVCacheManager
+            cache_dtype = getattr(self.config, "kv_cache_dtype", "bf16")
+            if cache_dtype == "int8":
+                cache = QuantizedKVCacheManager(
+                    n_layers=self.config.n_layer,
+                    n_heads=self.config.n_head,
+                    n_kv_heads=self.config.n_kv_head,
+                    head_dim=head_dim,
+                    max_cache_len=max_cache_len,
+                )
+            else:
+                cache = KVCacheManager(
+                    n_layers=self.config.n_layer,
+                    n_heads=self.config.n_head,
+                    n_kv_heads=self.config.n_kv_head,
+                    head_dim=head_dim,
+                    max_cache_len=max_cache_len,
+                    cache_dtype=cache_dtype,
+                )
         # KV cache should use the model's activation dtype, not the token-id dtype.
         cache_dtype = next(self.parameters()).dtype
         cache.init_cache(B, idx.device, cache_dtype)
@@ -1756,17 +1804,34 @@ class ModernGPT(nn.Module):
 
         head_dim = self.config.n_embd // self.config.n_head
         dtype = next(self.parameters()).dtype
-
-        target_cache = KVCacheManager(
-            self.config.n_layer, self.config.n_head, self.config.n_kv_head, head_dim, max_cache_len
-        )
-        draft_cache = KVCacheManager(
-            draft_model.config.n_layer,
-            draft_model.config.n_head,
-            draft_model.config.n_kv_head,
-            draft_model.config.n_embd // draft_model.config.n_head,
-            max_cache_len,
-        )
+        cache_dtype = getattr(self.config, "kv_cache_dtype", "bf16")
+        target_cache: Any
+        draft_cache: Any
+        if cache_dtype == "int8":
+            from model.kv_cache_utils import QuantizedKVCacheManager
+            target_cache = QuantizedKVCacheManager(
+                self.config.n_layer, self.config.n_head, self.config.n_kv_head, head_dim, max_cache_len
+            )
+            draft_cache = QuantizedKVCacheManager(
+                draft_model.config.n_layer,
+                draft_model.config.n_head,
+                draft_model.config.n_kv_head,
+                draft_model.config.n_embd // draft_model.config.n_head,
+                max_cache_len,
+            )
+        else:
+            target_cache = KVCacheManager(
+                self.config.n_layer, self.config.n_head, self.config.n_kv_head, head_dim, max_cache_len,
+                cache_dtype=cache_dtype,
+            )
+            draft_cache = KVCacheManager(
+                draft_model.config.n_layer,
+                draft_model.config.n_head,
+                draft_model.config.n_kv_head,
+                draft_model.config.n_embd // draft_model.config.n_head,
+                max_cache_len,
+                cache_dtype=cache_dtype,
+            )
         target_cache.init_cache(B, device, dtype)
         draft_cache.init_cache(B, device, dtype)
 
@@ -1942,6 +2007,302 @@ class ModernGPT(nn.Module):
                 current_draft_logits = logits_d_extra[:, -1, :]
 
         return idx_out
+
+    @torch.no_grad()
+    def _generate_speculative_batched(
+        self,
+        idx: torch.Tensor,
+        max_new_tokens: int,
+        draft_model: nn.Module,
+        draft_tokens: int,
+        draft_temperature: float,
+        draft_top_k: Optional[int],
+        temperature: float,
+        top_k: Optional[int],
+        top_p: Optional[float],
+        eos_token_id: Optional[int],
+    ) -> torch.Tensor:
+        """Speculative decoding with batch > 1 support.
+
+        Each sequence in the batch drafts independently; the draft model KV cache
+        prefix is shared (computed once during batch prefill).  Acceptance rate
+        is tracked per sequence.  If a sequence's rolling acceptance rate drops
+        below 50 %, it falls back to standard autoregressive generation while
+        other sequences may continue speculating.
+        """
+        from model.kv_cache_utils import KVCacheManager, QuantizedKVCacheManager
+
+        B = idx.size(0)
+        device = idx.device
+        prompt_len = idx.size(1)
+        max_cache_len = self.config.block_size
+        if prompt_len + max_new_tokens > max_cache_len - 1:
+            raise ValueError(
+                "Speculative decoding requires prompt_len + max_new_tokens <= block_size - 1"
+            )
+
+        def _sample(logits: torch.Tensor, temp: float, k: Optional[int], p: Optional[float]) -> torch.Tensor:
+            if temp > 0 and temp != 1.0:
+                logits = logits / temp
+            if k is not None and k > 0:
+                kk = min(k, logits.size(-1))
+                v, _ = torch.topk(logits, kk, dim=-1)
+                logits[logits < v[:, [-1]]] = -float("Inf")
+            if p is not None and p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+                sorted_probs = F.softmax(sorted_logits, dim=-1)
+                cum_probs = torch.cumsum(sorted_probs, dim=-1)
+                sorted_mask = cum_probs > p
+                sorted_mask[:, 1:] = sorted_mask[:, :-1].clone()
+                sorted_mask[:, 0] = False
+                sorted_logits[sorted_mask] = -float("Inf")
+                logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
+            probs = F.softmax(logits, dim=-1)
+            return torch.multinomial(probs, num_samples=1)
+
+        def _draft_sample(logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+            if draft_temperature is not None and draft_temperature > 0 and draft_temperature != 1.0:
+                logits = logits / draft_temperature
+            orig_probs = F.softmax(logits, dim=-1)
+            sample_logits = logits
+            if draft_top_k is not None and draft_top_k > 0:
+                sample_logits = logits.clone()
+                kk = min(draft_top_k, sample_logits.size(-1))
+                v, _ = torch.topk(sample_logits, kk, dim=-1)
+                sample_logits[sample_logits < v[:, [-1]]] = -float("Inf")
+            sample_probs = F.softmax(sample_logits, dim=-1)
+            if draft_temperature == 0.0:
+                tok = sample_probs.argmax(dim=-1, keepdim=True)
+            else:
+                tok = torch.multinomial(sample_probs, num_samples=1)
+            p_tok = orig_probs.gather(-1, tok).squeeze(-1)
+            return tok, p_tok
+
+        head_dim = self.config.n_embd // self.config.n_head
+        dtype = next(self.parameters()).dtype
+        cache_dtype = getattr(self.config, "kv_cache_dtype", "bf16")
+
+        # Batch prefill both models (shared prefix KV cache).
+        logits_t_prefill, _, raw_kvs_t = self(idx, use_cache=True, start_pos=0)
+        logits_d_prefill, _, raw_kvs_d = draft_model(idx, use_cache=True, start_pos=0)
+
+        # Per-sequence caches for independent rollback.
+        target_caches: List[Any] = []
+        draft_caches: List[Any] = []
+        for b in range(B):
+            tc: Any
+            dc: Any
+            if cache_dtype == "int8":
+                tc = QuantizedKVCacheManager(
+                    self.config.n_layer, self.config.n_head, self.config.n_kv_head, head_dim, max_cache_len
+                )
+                dc = QuantizedKVCacheManager(
+                    draft_model.config.n_layer,
+                    draft_model.config.n_head,
+                    draft_model.config.n_kv_head,
+                    draft_model.config.n_embd // draft_model.config.n_head,
+                    max_cache_len,
+                )
+            else:
+                tc = KVCacheManager(
+                    self.config.n_layer, self.config.n_head, self.config.n_kv_head, head_dim, max_cache_len,
+                    cache_dtype=cache_dtype,
+                )
+                dc = KVCacheManager(
+                    draft_model.config.n_layer,
+                    draft_model.config.n_head,
+                    draft_model.config.n_kv_head,
+                    draft_model.config.n_embd // draft_model.config.n_head,
+                    max_cache_len,
+                    cache_dtype=cache_dtype,
+                )
+            tc.init_cache(1, device, dtype)
+            dc.init_cache(1, device, dtype)
+            for li in range(self.config.n_layer):
+                tc.update(li, raw_kvs_t[li][0][b:b + 1], raw_kvs_t[li][1][b:b + 1])
+            tc.advance(prompt_len)
+            for li in range(draft_model.config.n_layer):
+                dc.update(li, raw_kvs_d[li][0][b:b + 1], raw_kvs_d[li][1][b:b + 1])
+            dc.advance(prompt_len)
+            target_caches.append(tc)
+            draft_caches.append(dc)
+
+        # Per-sequence state
+        idx_out = [idx[b:b + 1] for b in range(B)]
+        generated = [0] * B
+        accepted_total = [0] * B
+        drafted_total = [0] * B
+        fallback = [False] * B
+        finished = [False] * B
+        current_target_logits = [logits_t_prefill[b:b + 1, -1, :] for b in range(B)]
+        current_draft_logits = [logits_d_prefill[b:b + 1, -1, :] for b in range(B)]
+
+        while any(g < max_new_tokens and not f for g, f in zip(generated, finished)):
+            # --- Draft + verify for each active sequence independently ---
+            for b in range(B):
+                if finished[b] or fallback[b] or generated[b] >= max_new_tokens:
+                    continue
+
+                draft_chunk: List[torch.Tensor] = []
+                draft_probs: List[torch.Tensor] = []
+                gamma = min(draft_tokens, max_new_tokens - generated[b])
+                logits_next = current_draft_logits[b]
+                hit_eos = False
+                for _ in range(gamma):
+                    tok, p_tok = _draft_sample(logits_next)
+                    draft_chunk.append(tok)
+                    draft_probs.append(p_tok)
+                    logits_d, _, next_kv_d = draft_model(
+                        tok,
+                        past_kvs=draft_caches[b].get_cache(),
+                        use_cache=True,
+                        start_pos=draft_caches[b].start_pos,
+                    )
+                    for li in range(draft_model.config.n_layer):
+                        draft_caches[b].update(li, next_kv_d[li][0], next_kv_d[li][1])
+                    draft_caches[b].advance(1)
+                    logits_next = logits_d[:, -1, :]
+                    if eos_token_id is not None and tok.item() == eos_token_id:
+                        hit_eos = True
+                        break
+                gamma = len(draft_chunk)
+                if gamma == 0:
+                    continue
+                drafted_total[b] += gamma
+
+                draft_ids = torch.cat(draft_chunk, dim=1)  # [1, gamma]
+
+                # Verification
+                logits_t, _, next_kv_t = self(
+                    draft_ids,
+                    past_kvs=target_caches[b].get_cache(),
+                    use_cache=True,
+                    start_pos=target_caches[b].start_pos,
+                )
+                for li in range(self.config.n_layer):
+                    target_caches[b].update(li, next_kv_t[li][0], next_kv_t[li][1])
+                target_caches[b].advance(gamma)
+
+                # Acceptance loop
+                accepted = 0
+                rejected = False
+                for i in range(gamma):
+                    tok_i = draft_ids[:, i]
+                    if i == 0:
+                        logits_for_tok = current_target_logits[b]
+                    else:
+                        logits_for_tok = logits_t[:, i - 1, :]
+                    p_t = F.softmax(logits_for_tok, dim=-1)[:, tok_i]
+                    p_d = draft_probs[i]
+                    ratio = torch.clamp(p_t / p_d, max=1.0)
+                    if torch.rand(1, device=device) < ratio:
+                        accepted += 1
+                        accepted_total[b] += 1
+                        idx_out[b] = torch.cat([idx_out[b], tok_i.unsqueeze(0)], dim=1)
+                        generated[b] += 1
+                        if eos_token_id is not None and tok_i.item() == eos_token_id:
+                            finished[b] = True
+                            break
+                    else:
+                        p_t_dist = F.softmax(logits_for_tok[0, :], dim=-1)
+                        p_d_dist = torch.zeros_like(p_t_dist)
+                        p_d_dist[tok_i[0]] = p_d[0]
+                        q = torch.relu(p_t_dist - p_d_dist)
+                        if q.sum() > 0:
+                            q = q / q.sum()
+                        else:
+                            q = p_t_dist
+                        replace = torch.multinomial(q, num_samples=1).unsqueeze(0)
+                        idx_out[b] = torch.cat([idx_out[b], replace], dim=1)
+                        generated[b] += 1
+                        rejected = True
+                        break
+
+                # Update target cache based on acceptance
+                if rejected:
+                    target_caches[b].truncate(idx_out[b].shape[1] - 1)
+                    logits_replace, _, replace_kv_t = self(
+                        idx_out[b][:, -1:],
+                        past_kvs=target_caches[b].get_cache(),
+                        use_cache=True,
+                        start_pos=target_caches[b].start_pos,
+                    )
+                    for li in range(self.config.n_layer):
+                        target_caches[b].update(li, replace_kv_t[li][0], replace_kv_t[li][1])
+                    target_caches[b].advance(1)
+                    current_target_logits[b] = logits_replace[:, -1, :]
+                else:
+                    if not finished[b] and generated[b] < max_new_tokens:
+                        extra = _sample(logits_t[:, -1, :], temperature, top_k, top_p)
+                        idx_out[b] = torch.cat([idx_out[b], extra], dim=1)
+                        generated[b] += 1
+                        if eos_token_id is not None and extra.item() == eos_token_id:
+                            finished[b] = True
+                        logits_extra, _, extra_kv_t = self(
+                            extra,
+                            past_kvs=target_caches[b].get_cache(),
+                            use_cache=True,
+                            start_pos=target_caches[b].start_pos,
+                        )
+                        for li in range(self.config.n_layer):
+                            target_caches[b].update(li, extra_kv_t[li][0], extra_kv_t[li][1])
+                        target_caches[b].advance(1)
+                        current_target_logits[b] = logits_extra[:, -1, :]
+
+                # Sync draft cache
+                draft_caches[b].truncate(idx_out[b].shape[1] - 1)
+                logits_d_next, _, next_kv_d = draft_model(
+                    idx_out[b][:, -1:],
+                    past_kvs=draft_caches[b].get_cache(),
+                    use_cache=True,
+                    start_pos=draft_caches[b].start_pos,
+                )
+                for li in range(draft_model.config.n_layer):
+                    draft_caches[b].update(li, next_kv_d[li][0], next_kv_d[li][1])
+                draft_caches[b].advance(1)
+                current_draft_logits[b] = logits_d_next[:, -1, :]
+
+                # Adaptive fallback: acceptance rate < 50 %
+                if drafted_total[b] >= 8 and accepted_total[b] / drafted_total[b] < 0.5:
+                    fallback[b] = True
+
+            # --- Standard generation for fallback sequences ---
+            for b in range(B):
+                if fallback[b] and not finished[b] and generated[b] < max_new_tokens:
+                    tok = _sample(current_target_logits[b], temperature, top_k, top_p)
+                    idx_out[b] = torch.cat([idx_out[b], tok], dim=1)
+                    generated[b] += 1
+                    if eos_token_id is not None and tok.item() == eos_token_id:
+                        finished[b] = True
+                    logits_next, _, next_kv_t = self(
+                        tok,
+                        past_kvs=target_caches[b].get_cache(),
+                        use_cache=True,
+                        start_pos=target_caches[b].start_pos,
+                    )
+                    for li in range(self.config.n_layer):
+                        target_caches[b].update(li, next_kv_t[li][0], next_kv_t[li][1])
+                    target_caches[b].advance(1)
+                    current_target_logits[b] = logits_next[:, -1, :]
+
+                    draft_caches[b].truncate(idx_out[b].shape[1] - 1)
+                    logits_d_next, _, next_kv_d = draft_model(
+                        tok,
+                        past_kvs=draft_caches[b].get_cache(),
+                        use_cache=True,
+                        start_pos=draft_caches[b].start_pos,
+                    )
+                    for li in range(draft_model.config.n_layer):
+                        draft_caches[b].update(li, next_kv_d[li][0], next_kv_d[li][1])
+                    draft_caches[b].advance(1)
+                    current_draft_logits[b] = logits_d_next[:, -1, :]
+
+        # Reassemble batch with right-padding
+        max_len = max(x.shape[1] for x in idx_out)
+        padded = torch.full((B, max_len), eos_token_id or 0, dtype=torch.long, device=device)
+        for b in range(B):
+            padded[b, :idx_out[b].shape[1]] = idx_out[b][0]
+        return padded
 
     # ------------------------------------------------------------------
     #  EMA (Exponential Moving Average)
