@@ -73,6 +73,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      - name: Generate tiny synthetic dataset for smoke test
+        run: |
+          python -c "
+          import numpy as np, os
+          os.makedirs('data/openwebtext', exist_ok=True)
+          # 2000 random uint16 tokens (enough for ~1000 steps at batch=2, block=128)
+          tokens = np.random.randint(0, 50257, size=2000, dtype=np.uint16)
+          tokens.tofile('data/openwebtext/train.bin')
+          tokens.tofile('data/openwebtext/val.bin')
+          print('Synthetic train.bin and val.bin created')
+          "
+
       - name: Short pretraining smoke test (50 steps, CPU)
         run: |
           python -m training.train_pretrain \
