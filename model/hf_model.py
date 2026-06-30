@@ -90,8 +90,16 @@ class NanoGPTModernForCausalLM(PreTrainedModel):
         super().__init__(config)
         self.model = ModernGPT(config.to_nanogpt_config())
         self.post_init()
-        # Inform HF that ``lm_head`` shares storage with ``transformer.wte``.
-        self._tied_weights_keys = ["model.lm_head.weight"]  # type: ignore[assignment]
+        # Avoid safetensors shared-tensor error by not saving the tied head
+        # weight separately.  The embedding weight is sufficient; on load
+        # ``from_pretrained`` will rebuild ``lm_head`` via ``post_init``.
+        self._keys_to_ignore_on_save = ["model.lm_head.weight"]
+        # Also tell older transformers not to warn about this tie.
+        self._tied_weights_keys = []
+        
+    def _init_weights(self, module):
+        """No-op: ModernGPT already handles its own init."""
+        pass
 
     def get_input_embeddings(self) -> Any:
         return self.model.transformer.wte
