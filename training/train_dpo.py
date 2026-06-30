@@ -1,21 +1,32 @@
-"""Direct Preference Optimization (DPO) / IPO / KTO trainer skeleton.
+"""Direct Preference Optimization (DPO) / IPO / KTO trainer.
 
-This trainer demonstrates how to plug preference-learning losses into the shared
-``BaseTrainer`` infrastructure.  It uses synthetic arithmetic preference pairs
-(correct answer = chosen, incorrect answer = rejected) as a minimal end-to-end
-example.  For production use, replace the data builder with a loaded preference
-JSONL or HuggingFace dataset.
+Complete implementation including:
+  * Preference pair construction from GRPO group_size rollouts (winner vs loser).
+  * Full training loop with evaluation, checkpointing, and metric logging.
+  * Win-rate evaluation against the reference (SFT) checkpoint.
+
+Usage
+-----
+>>> python training/train_dpo.py \
+...     --init_from out/sft/best_sft-only.pt \
+...     --ref_from out/sft/best_sft-only.pt \
+...     --preference_source grpo \
+...     --grpo_checkpoint out/grpo/best_grpo_g4.pt \
+...     --out_dir out/dpo
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import random
 from contextlib import nullcontext
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
-
+from torch.utils.data import DataLoader, TensorDataset, Dataset
 
 from model.attention_utils import print_attention_backend, set_attention_backend
 from model.modern_gpt import ModernGPTConfig
@@ -63,27 +74,116 @@ def get_args():
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--attn_backend", type=str, default="auto",
                         choices=["auto", "flash", "mem_efficient", "math", "default"])
-    # Synthetic dataset sizing (production pipelines should load real preference data).
+    # Dataset sources
+    parser.add_argument("--preference_source", type=str, default="synthetic",
+                        choices=["synthetic", "grpo", "jsonl"])
+    parser.add_argument("--grpo_checkpoint", type=str, default=None,
+                        help="GRPO checkpoint path used to load policy for GRPO-based preference generation")
+    parser.add_argument("--grpo_group_size", type=int, default=4,
+                        help="Group size for GRPO rollout when constructing preference pairs")
     parser.add_argument("--num_train", type=int, default=256)
     parser.add_argument("--num_val", type=int, default=64)
     parser.add_argument("--vocab_size", type=int, default=50257)
+    # Win-rate evaluation
+    parser.add_argument("--win_rate_eval", action="store_true",
+                        help="Run win-rate evaluation against the reference model during training")
+    parser.add_argument("--win_rate_interval", type=int, default=100,
+                        help="Run win-rate evaluation every N steps")
+    parser.add_argument("--win_rate_samples", type=int, default=50,
+                        help="Number of prompts for win-rate evaluation")
     return parse_args_with_config(parser)
 
 
 def _build_synthetic_preference_dataset(num_samples: int, seq_len: int, vocab_size: int, seed: int):
-    """Create a synthetic preference dataset for testing/demonstration.
-
-    Each sample contains ``chosen`` and ``rejected`` token ids of length
-    ``seq_len``.  This is intentionally simple; real use cases should load
-    human/AI preference data.
-    """
+    """Create a synthetic preference dataset for testing/demonstration."""
     torch.manual_seed(seed)
     chosen = torch.randint(0, vocab_size, (num_samples, seq_len))
     rejected = torch.randint(0, vocab_size, (num_samples, seq_len))
     return TensorDataset(chosen, rejected)
 
 
+class PreferenceDataset(Dataset):
+    """Simple wrapper around a list of (chosen, rejected) token-id tensors."""
+
+    def __init__(self, pairs: List[Tuple[torch.Tensor, torch.Tensor]]):
+        self.pairs = pairs
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.pairs[idx]
+
+
+def _build_preference_dataset_from_grpo(
+    grpo_trainer,
+    num_prompts: int,
+    max_length: int,
+    seed: int,
+) -> PreferenceDataset:
+    """Construct preference pairs from GRPO ``group_size`` rollouts.
+
+    For each prompt, the GRPO policy generates ``group_size`` responses.
+    The highest-reward response becomes ``chosen`` and the lowest-reward
+    response becomes ``rejected``.  Both are padded / truncated to
+    ``max_length`` token ids.
+
+    Parameters
+    ----------
+    grpo_trainer : GRPOTrainer-like object
+        Must have ``sample_group`` and ``tokenizer`` attributes.
+    num_prompts : int
+    max_length : int
+    seed : int
+
+    Returns
+    -------
+    PreferenceDataset
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    # Sample prompts from the GRPO trainer's training data.
+    data = grpo_trainer.train_data
+    if len(data) < num_prompts:
+        num_prompts = len(data)
+    prompts_batch = random.sample(data, num_prompts)
+    prompts = [b["prompt"] for b in prompts_batch]
+    answers = [b["answer"] for b in prompts_batch]
+
+    pairs = []
+    for prompt, answer in zip(prompts, answers):
+        # Single-prompt rollout with group_size responses.
+        rollout = grpo_trainer.sample_group([prompt], [answer])
+        rewards = rollout["rewards"]  # [G, 1]
+        response_ids = rollout["response_ids"]  # list[G] of list[1] of list[int]
+        # rewards shape: [group_size, batch_size=1]
+        g_size = rewards.shape[0]
+        # Flatten rewards and responses.
+        flat_rewards = [rewards[g, 0] for g in range(g_size)]
+        flat_responses = [response_ids[g][0] for g in range(g_size)]
+
+        # Winner = highest reward, loser = lowest reward.
+        winner_idx = int(np.argmax(flat_rewards))
+        loser_idx = int(np.argmin(flat_rewards))
+        winner_ids = flat_responses[winner_idx]
+        loser_ids = flat_responses[loser_idx]
+
+        # Pad / truncate to max_length.
+        def pad_or_trim(ids: List[int]) -> torch.Tensor:
+            if len(ids) >= max_length:
+                return torch.tensor(ids[:max_length], dtype=torch.long)
+            return torch.tensor(ids + [0] * (max_length - len(ids)), dtype=torch.long)
+
+        pairs.append((pad_or_trim(winner_ids), pad_or_trim(loser_ids)))
+
+    return PreferenceDataset(pairs)
+
+
 class DPOTrainer(BaseTrainer):
+    """Direct Preference Optimization trainer with full loop and eval."""
+
     def __init__(self, args):
         super().__init__(args)
 
@@ -96,18 +196,46 @@ class DPOTrainer(BaseTrainer):
     def _build_data(self):
         args = self.args
         vocab_size = getattr(args, "vocab_size", 50257)
-        train_ds = _build_synthetic_preference_dataset(
-            num_samples=getattr(args, "num_train", 256),
-            seq_len=args.max_length,
-            vocab_size=vocab_size,
-            seed=args.seed,
-        )
-        val_ds = _build_synthetic_preference_dataset(
-            num_samples=getattr(args, "num_val", 64),
-            seq_len=args.max_length,
-            vocab_size=vocab_size,
-            seed=args.seed + 1000,
-        )
+        if args.preference_source == "synthetic":
+            train_ds = _build_synthetic_preference_dataset(
+                num_samples=getattr(args, "num_train", 256),
+                seq_len=args.max_length,
+                vocab_size=vocab_size,
+                seed=args.seed,
+            )
+            val_ds = _build_synthetic_preference_dataset(
+                num_samples=getattr(args, "num_val", 64),
+                seq_len=args.max_length,
+                vocab_size=vocab_size,
+                seed=args.seed + 1000,
+            )
+        elif args.preference_source == "grpo":
+            if args.grpo_checkpoint is None:
+                raise ValueError("--grpo_checkpoint is required when --preference_source=grpo")
+            # Load GRPO trainer to generate preference pairs.
+            from training.train_grpo import GRPOTrainer, get_args as grpo_get_args
+            # Build a minimal GRPO args object from the loaded checkpoint.
+            grpo_ckpt = torch.load(args.grpo_checkpoint, map_location=self.device, weights_only=False)
+            grpo_config = grpo_ckpt.get("config", {})
+            # Build synthetic GRPO trainer for rollouts.
+            grpo_args = grpo_get_args()
+            # Override defaults with checkpoint config.
+            for k, v in grpo_config.items():
+                if hasattr(grpo_args, k):
+                    setattr(grpo_args, k, v)
+            grpo_args.device = self.device
+            grpo_trainer = GRPOTrainer(grpo_args)
+            # Load the checkpoint into the GRPO policy so rollouts use the trained policy.
+            grpo_trainer.load_checkpoint(args.grpo_checkpoint)
+            train_ds = _build_preference_dataset_from_grpo(
+                grpo_trainer, num_prompts=getattr(args, "num_train", 256), max_length=args.max_length, seed=args.seed
+            )
+            val_ds = _build_preference_dataset_from_grpo(
+                grpo_trainer, num_prompts=getattr(args, "num_val", 64), max_length=args.max_length, seed=args.seed + 1000
+            )
+        else:
+            raise ValueError(f"Unknown preference_source: {args.preference_source}")
+
         worker_init = make_worker_init_fn(args.seed, self.rank)
         self.train_loader = DataLoader(
             train_ds,
@@ -211,7 +339,6 @@ class DPOTrainer(BaseTrainer):
                 beta=self.args.beta,
             )
         else:  # kto
-            # Stack chosen and rejected as a single batch with desirability labels.
             policy_logp = torch.cat([policy_chosen_logp, policy_rejected_logp])
             ref_logp = torch.cat([ref_chosen_logp, ref_rejected_logp])
             is_desirable = torch.cat([
@@ -288,8 +415,46 @@ class DPOTrainer(BaseTrainer):
         with torch.no_grad():
             return self._run_epoch(0, is_train=False)
 
+    def _evaluate_win_rate(self, num_samples: int = 50) -> Dict[str, Any]:
+        """Compare policy vs reference on a held-out prompt set and return win rate.
+
+        Uses the ``evaluation.eval_win_rate`` module with a rule-based judge.
+        """
+        try:
+            import tiktoken
+            tokenizer = tiktoken.get_encoding("gpt2")
+        except Exception:
+            return {"error": "tiktoken not available for win-rate evaluation"}
+
+        try:
+            from evaluation.eval_win_rate import WinRateEvaluator, RuleJudge
+            prompts = [f"What is {i} + {i+1}?" for i in range(num_samples)]
+            evaluator = WinRateEvaluator(
+                policy_model=self.raw_model,
+                ref_model=self.ref_model,
+                tokenizer=tokenizer,
+                judge=RuleJudge(),
+                device=self.device,
+            )
+            results = evaluator.evaluate(
+                prompts,
+                n_samples=1,
+                max_new_tokens=32,
+                temperature=1.0,
+            )
+            return {
+                "win_rate": results.get("win_rate", 0.0),
+                "tie_rate": results.get("tie_rate", 0.0),
+                "policy_mean_score": results.get("policy_mean_score", 0.0),
+                "ref_mean_score": results.get("ref_mean_score", 0.0),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
     def train(self) -> None:
-        for epoch in range(self.start_epoch, self.args.epochs):
+        """Full DPO training loop with periodic evaluation, checkpointing, and optional win-rate metrics."""
+        args = self.args
+        for epoch in range(self.start_epoch, args.epochs):
             train_loss = self._run_epoch(epoch, is_train=True)
             if self.master_process:
                 print(f"epoch {epoch}: train_loss={train_loss:.4f}")
@@ -298,8 +463,21 @@ class DPOTrainer(BaseTrainer):
                     self.global_step,
                     self.best_metric,
                 )
+
+            # Win-rate evaluation at the end of each epoch or by interval.
+            if self.master_process and args.win_rate_eval:
+                if (epoch + 1) % max(1, args.win_rate_interval // len(self.train_loader)) == 0 or epoch == args.epochs - 1:
+                    win_rate_metrics = self._evaluate_win_rate(num_samples=args.win_rate_samples)
+                    print(f"win_rate metrics: {win_rate_metrics}")
+                    self.log_scalars({f"win_rate/{k}": v for k, v in win_rate_metrics.items() if isinstance(v, (int, float))}, self.global_step)
+                    # Save win-rate results to JSON.
+                    wr_path = os.path.join(args.out_dir, f"win_rate_step{self.global_step}.json")
+                    with open(wr_path, "w", encoding="utf-8") as f:
+                        json.dump(win_rate_metrics, f, indent=2)
+
         if self.master_process:
             self.save_checkpoint("final_ckpt.pt", self.global_step, self.best_metric)
+            print(f"Training complete. Best val loss: {self.best_metric:.4f}")
 
 
 def main():

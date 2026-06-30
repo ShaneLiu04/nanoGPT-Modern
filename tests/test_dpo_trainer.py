@@ -49,6 +49,7 @@ def test_dpo_trainer_scheduler_and_train_step():
             grad_clip=1.0,
             beta=0.1,
             preference_loss="dpo",
+            preference_source="synthetic",
             label_smoothing=0.0,
             eval_interval=1000,
             seed=42,

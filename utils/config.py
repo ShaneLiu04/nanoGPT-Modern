@@ -1,10 +1,16 @@
-"""
-Unified configuration loading.
+"""Unified configuration loading.
 
 Training scripts can accept a YAML config file via ``--config``; values in the
 file become argparse defaults, and command-line arguments still override them.
 Nested YAML dictionaries are supported both in the file and on the command line
 (``--optimizer.lr 1e-4``).
+
+Optional Pydantic validation
+----------------------------
+``validate_with_pydantic`` (and ``maybe_validate_pydantic``) provide a
+structured, runtime-validated config layer that mirrors ``BaselineGPTConfig``
+and ``ModernGPTConfig``.  It is **opt-in** — the legacy argparse pipeline
+works unchanged when Pydantic is not installed or when validation is not called.
 """
 import argparse
 import os
@@ -15,6 +21,27 @@ try:
 except Exception:  # pragma: no cover - omegaconf is optional for the legacy path
     DictConfig = None  # type: ignore[misc,assignment]
     OmegaConf = None  # type: ignore[misc,assignment]
+
+
+# Optional Pydantic validation layer (see utils.config_models)
+_PydanticModels = None
+try:
+    from utils.config_models import (
+        BaselineGPTModelConfig,
+        ModernGPTModelConfig,
+        TrainingConfig,
+        DataConfig,
+        FullConfig,
+    )
+    _PydanticModels = {
+        "baseline": BaselineGPTModelConfig,
+        "modern": ModernGPTModelConfig,
+        "training": TrainingConfig,
+        "data": DataConfig,
+        "full": FullConfig,
+    }
+except Exception:  # pragma: no cover - pydantic is optional
+    _PydanticModels = None  # type: ignore[assignment]
 
 
 def _expand_env(value):
@@ -256,3 +283,80 @@ def validate_keys(args, required, sep="."):
     if missing:
         raise ValueError(f"Missing required config keys: {missing}")
     return True
+
+
+def validate_with_pydantic(config_dict, model_type="modern"):
+    """Validate a flat or nested config dict using Pydantic models.
+
+    This is an **optional** enhancement layer that does not affect the legacy
+    argparse pipeline.  It validates architectural invariants such as
+    ``n_head % n_kv_head == 0``, ``block_size > 0``, and ``batch_size > 0``
+    before training begins, so mis-configurations are caught early with
+    descriptive error messages.
+
+    Parameters
+    ----------
+    config_dict : dict
+        A possibly-nested dict (e.g. from YAML or ``to_dict(args)``).
+    model_type : {"baseline", "modern", "training", "data", "full"}
+        Which Pydantic model to use for validation.
+
+    Returns
+    -------
+    dict
+        The validated and coerced dict (Pydantic may convert types).
+
+    Raises
+    ------
+    ValueError
+        If Pydantic is not installed or validation fails.
+    """
+    if _PydanticModels is None:
+        raise ValueError(
+            "Pydantic validation is not available. "
+            "Install pydantic (pip install pydantic) to use validate_with_pydantic."
+        )
+
+    cls = _PydanticModels.get(model_type)
+    if cls is None:
+        raise ValueError(f"Unknown model_type for validation: {model_type}")
+
+    try:
+        validated = cls.model_validate(config_dict)
+        return validated.model_dump()
+    except Exception as exc:
+        raise ValueError(f"Pydantic validation failed for {model_type}: {exc}") from exc
+
+
+def maybe_validate_pydantic(config_dict, model_type="modern", verbose=True):
+    """Best-effort Pydantic validation; silently skip if unavailable.
+
+    Returns the validated dict on success, or the original dict when Pydantic
+    is not installed or validation fails.  Use this in training entry points
+    that want to validate when possible without hard-depending on pydantic.
+
+    Parameters
+    ----------
+    config_dict : dict
+        Configuration dict to validate.
+    model_type : str
+        Pydantic model type key (see ``validate_with_pydantic``).
+    verbose : bool
+        If True, print a one-line success message when validation passes.
+
+    Returns
+    -------
+    dict
+        Validated (or original) configuration dict.
+    """
+    if _PydanticModels is None:
+        return config_dict
+    try:
+        validated = validate_with_pydantic(config_dict, model_type=model_type)
+        if verbose:
+            print(f"[config] Pydantic validation passed ({model_type})")
+        return validated
+    except Exception as exc:
+        if verbose:
+            print(f"[config] Pydantic validation skipped ({exc})")
+        return config_dict

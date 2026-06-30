@@ -1,6 +1,7 @@
 """Tests for the Hydra/OmegaConf configuration migration (M23)."""
 import argparse
 import os
+import sys
 
 import pytest
 
