@@ -1,4 +1,5 @@
 """Hydra entry point for GRPO alignment."""
+
 from __future__ import annotations
 
 import os

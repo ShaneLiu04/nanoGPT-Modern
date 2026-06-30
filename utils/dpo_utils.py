@@ -4,6 +4,7 @@ This module provides numerically stable helpers for DPO, IPO, and a simplified
 KTO-style loss.  They operate on per-sequence log-probabilities computed under
 both the policy model and the reference model.
 """
+
 from __future__ import annotations
 
 from typing import Optional, Tuple

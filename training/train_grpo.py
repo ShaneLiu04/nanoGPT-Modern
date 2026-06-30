@@ -12,6 +12,7 @@ Improvements over the naive implementation
 * Warmup + decay learning-rate schedule (cosine / linear / wsd / constant).
 * Full distributed-training, checkpointing, and resume support via BaseTrainer.
 """
+
 import os
 import time
 import random
@@ -41,52 +42,105 @@ import tiktoken
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--init_from", type=str, required=True, help="SFT checkpoint path")
-    parser.add_argument("--ref_from", type=str, required=True, help="Reference (frozen SFT) checkpoint path")
+    parser.add_argument(
+        "--init_from", type=str, required=True, help="SFT checkpoint path"
+    )
+    parser.add_argument(
+        "--ref_from",
+        type=str,
+        required=True,
+        help="Reference (frozen SFT) checkpoint path",
+    )
     parser.add_argument("--out_dir", type=str, default="out/grpo")
     parser.add_argument("--group_size", type=int, default=4)
     parser.add_argument("--num_steps", type=int, default=1000)
     parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
-                        help="Number of group rollouts before one optimizer step")
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=1,
+        help="Number of group rollouts before one optimizer step",
+    )
     parser.add_argument("--max_prompt_len", type=int, default=128)
     parser.add_argument("--max_response_len", type=int, default=128)
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--min_lr", type=float, default=1e-6)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--beta", type=float, default=0.04, help="KL penalty coefficient")
+    parser.add_argument(
+        "--beta", type=float, default=0.04, help="KL penalty coefficient"
+    )
     parser.add_argument("--eps", type=float, default=0.2, help="PPO clipping epsilon")
-    parser.add_argument("--adv_norm", type=str, default="group",
-                        choices=["group", "batch", "none"],
-                        help="Advantage normalization scope: "
-                             "'group' (per-prompt baseline, original GRPO), "
-                             "'batch' (normalize over the whole GxB batch), "
-                             "'none' (raw centered rewards, no std division)")
-    parser.add_argument("--adv_clip", type=float, default=0.0,
-                        help="Symmetric advantage clip magnitude (e.g. 3.0); "
-                             "0 disables clipping")
-    parser.add_argument("--lr_schedule", type=str, default="cosine",
-                        choices=["cosine", "linear", "wsd", "constant"])
-    parser.add_argument("--keep_last_n", type=int, default=0,
-                        help="Keep only the last N non-best checkpoints (0=keep all)")
-    parser.add_argument("--allow_dropout", action="store_true",
-                        help="Allow dropout > 0 in GRPO (old/new logprob ratios will be biased)")
+    parser.add_argument(
+        "--adv_norm",
+        type=str,
+        default="group",
+        choices=["group", "batch", "none"],
+        help="Advantage normalization scope: "
+        "'group' (per-prompt baseline, original GRPO), "
+        "'batch' (normalize over the whole GxB batch), "
+        "'none' (raw centered rewards, no std division)",
+    )
+    parser.add_argument(
+        "--adv_clip",
+        type=float,
+        default=0.0,
+        help="Symmetric advantage clip magnitude (e.g. 3.0); " "0 disables clipping",
+    )
+    parser.add_argument(
+        "--lr_schedule",
+        type=str,
+        default="cosine",
+        choices=["cosine", "linear", "wsd", "constant"],
+    )
+    parser.add_argument(
+        "--keep_last_n",
+        type=int,
+        default=0,
+        help="Keep only the last N non-best checkpoints (0=keep all)",
+    )
+    parser.add_argument(
+        "--allow_dropout",
+        action="store_true",
+        help="Allow dropout > 0 in GRPO (old/new logprob ratios will be biased)",
+    )
     parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
     parser.add_argument("--backend", type=str, default="nccl")
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--eval_interval", type=int, default=100)
-    parser.add_argument("--num_train", type=int, default=2000, help="Samples per difficulty level for training")
-    parser.add_argument("--num_val", type=int, default=300, help="Samples per difficulty level for validation")
-    parser.add_argument("--prompt_diversity", type=int, default=1,
-                        help="Prompt template diversity: 0=original only, "
-                             "1=all 12 templates, N=first N templates")
+    parser.add_argument(
+        "--num_train",
+        type=int,
+        default=2000,
+        help="Samples per difficulty level for training",
+    )
+    parser.add_argument(
+        "--num_val",
+        type=int,
+        default=300,
+        help="Samples per difficulty level for validation",
+    )
+    parser.add_argument(
+        "--prompt_diversity",
+        type=int,
+        default=1,
+        help="Prompt template diversity: 0=original only, "
+        "1=all 12 templates, N=first N templates",
+    )
     parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
-    parser.add_argument("--attn_backend", type=str, default="auto",
-                        choices=["auto", "flash", "mem_efficient", "math", "default"],
-                        help="Force SDPA attention backend (auto lets PyTorch choose)")
+    parser.add_argument(
+        "--config", type=str, default=None, help="Path to YAML config file"
+    )
+    parser.add_argument(
+        "--attn_backend",
+        type=str,
+        default="auto",
+        choices=["auto", "flash", "mem_efficient", "math", "default"],
+        help="Force SDPA attention backend (auto lets PyTorch choose)",
+    )
     return parse_args_with_config(parser)
 
 
@@ -119,14 +173,26 @@ class GRPOTrainer(BaseTrainer):
         rank_offset = self.rank * 1000 if self.rank > 0 else 0
         pd = getattr(args, "prompt_diversity", 1)
         train_data = (
-            generate_easy(args.num_train, seed=args.seed + rank_offset, prompt_diversity=pd)
-            + generate_medium(args.num_train, seed=args.seed + 1 + rank_offset, prompt_diversity=pd)
-            + generate_hard(args.num_train, seed=args.seed + 2 + rank_offset, prompt_diversity=pd)
+            generate_easy(
+                args.num_train, seed=args.seed + rank_offset, prompt_diversity=pd
+            )
+            + generate_medium(
+                args.num_train, seed=args.seed + 1 + rank_offset, prompt_diversity=pd
+            )
+            + generate_hard(
+                args.num_train, seed=args.seed + 2 + rank_offset, prompt_diversity=pd
+            )
         )
         val_data = (
-            generate_easy(args.num_val, seed=args.seed + 100 + rank_offset, prompt_diversity=pd)
-            + generate_medium(args.num_val, seed=args.seed + 101 + rank_offset, prompt_diversity=pd)
-            + generate_hard(args.num_val, seed=args.seed + 102 + rank_offset, prompt_diversity=pd)
+            generate_easy(
+                args.num_val, seed=args.seed + 100 + rank_offset, prompt_diversity=pd
+            )
+            + generate_medium(
+                args.num_val, seed=args.seed + 101 + rank_offset, prompt_diversity=pd
+            )
+            + generate_hard(
+                args.num_val, seed=args.seed + 102 + rank_offset, prompt_diversity=pd
+            )
         )
         self.train_data = train_data
         self.val_data = val_data
@@ -136,7 +202,9 @@ class GRPOTrainer(BaseTrainer):
         if args.resume:
             self.policy, _ = load_model_from_checkpoint(args.resume, device=self.device)
         else:
-            self.policy, _ = load_model_from_checkpoint(args.init_from, device=self.device)
+            self.policy, _ = load_model_from_checkpoint(
+                args.init_from, device=self.device
+            )
         self.policy = self.policy.to(self.device)
         maybe_warn_dropout(self.policy)
 
@@ -159,8 +227,10 @@ class GRPOTrainer(BaseTrainer):
     def _build_optimizer(self):
         args = self.args
         self.optimizer = self.raw_model.configure_optimizers(
-            args.weight_decay, args.learning_rate, (0.9, 0.95),
-            device_type="cuda" if "cuda" in str(self.device) else "cpu"
+            args.weight_decay,
+            args.learning_rate,
+            (0.9, 0.95),
+            device_type="cuda" if "cuda" in str(self.device) else "cpu",
         )
 
     def _build_scheduler(self):
@@ -207,7 +277,9 @@ class GRPOTrainer(BaseTrainer):
             out.append(toks)
         return out
 
-    def _generate_responses_from_tokens(self, model, prompt_tokens_list, max_response_len, gen_batch_size):
+    def _generate_responses_from_tokens(
+        self, model, prompt_tokens_list, max_response_len, gen_batch_size
+    ):
         """Generate responses from pre-tokenized prompt lists.
 
         Prompts are grouped by length so each batch fed to ``model.generate`` is
@@ -226,7 +298,7 @@ class GRPOTrainer(BaseTrainer):
         with torch.no_grad():
             for length, items in by_length.items():
                 for start in range(0, len(items), gen_batch_size):
-                    batch_items = items[start:start + gen_batch_size]
+                    batch_items = items[start : start + gen_batch_size]
                     idx = torch.tensor(
                         [toks for _, toks in batch_items],
                         dtype=torch.long,
@@ -241,9 +313,9 @@ class GRPOTrainer(BaseTrainer):
                         eos_token_id=eos_token_id,
                     )
                     for j, (orig_i, toks) in enumerate(batch_items):
-                        resp = generated[j, len(toks):].tolist()
+                        resp = generated[j, len(toks) :].tolist()
                         if eos_token_id in resp:
-                            resp = resp[:resp.index(eos_token_id)]
+                            resp = resp[: resp.index(eos_token_id)]
                         response_ids[orig_i] = resp
 
         responses = [self.tokenizer.decode(r) for r in response_ids]
@@ -290,12 +362,16 @@ class GRPOTrainer(BaseTrainer):
         """Shared implementation for policy/ref log-prob computation."""
         B = len(sequences)
         if B == 0:
-            return torch.zeros(0, 0, device=self.device), torch.zeros(0, 0, dtype=torch.bool, device=self.device)
+            return torch.zeros(0, 0, device=self.device), torch.zeros(
+                0, 0, dtype=torch.bool, device=self.device
+            )
 
         max_len = max(len(s) for s in sequences)
         pad_id = self.eot_token
 
-        input_ids = torch.full((B, max_len), pad_id, dtype=torch.long, device=self.device)
+        input_ids = torch.full(
+            (B, max_len), pad_id, dtype=torch.long, device=self.device
+        )
         targets = torch.full((B, max_len), pad_id, dtype=torch.long, device=self.device)
         attention_mask = torch.zeros((B, max_len), dtype=torch.bool, device=self.device)
         response_mask = torch.zeros((B, max_len), dtype=torch.bool, device=self.device)
@@ -305,9 +381,13 @@ class GRPOTrainer(BaseTrainer):
             if L < 2:
                 seq = seq + [pad_id]
                 L = len(seq)
-            input_ids[i, :L - 1] = torch.tensor(seq[:-1], dtype=torch.long, device=self.device)
-            targets[i, :L - 1] = torch.tensor(seq[1:], dtype=torch.long, device=self.device)
-            attention_mask[i, :L - 1] = True
+            input_ids[i, : L - 1] = torch.tensor(
+                seq[:-1], dtype=torch.long, device=self.device
+            )
+            targets[i, : L - 1] = torch.tensor(
+                seq[1:], dtype=torch.long, device=self.device
+            )
+            attention_mask[i, : L - 1] = True
             p_len = prompt_lens[i]
             r_len = response_lens[i]
             # response tokens start after the prompt; seq = prompt + response,
@@ -373,7 +453,9 @@ class GRPOTrainer(BaseTrainer):
                     gen_batch_size=args.batch_size,
                 )
 
-                rewards, fmt_scores, proc_scores, acc_scores = compute_reward_batch(responses, answers)
+                rewards, fmt_scores, proc_scores, acc_scores = compute_reward_batch(
+                    responses, answers
+                )
                 all_rewards.append(rewards)
                 all_responses.append(responses)
                 all_response_ids.append(response_tokens_list)
@@ -399,8 +481,12 @@ class GRPOTrainer(BaseTrainer):
                 flat_response_lens.append(all_response_lens[g][b])
 
         with torch.no_grad():
-            old_logprobs, masks = self._batch_logprobs(self.model, flat_sequences, flat_prompt_lens, flat_response_lens)
-        ref_logprobs, _ = self._batch_logprobs_ref(self.ref, flat_sequences, flat_prompt_lens, flat_response_lens)
+            old_logprobs, masks = self._batch_logprobs(
+                self.model, flat_sequences, flat_prompt_lens, flat_response_lens
+            )
+        ref_logprobs, _ = self._batch_logprobs_ref(
+            self.ref, flat_sequences, flat_prompt_lens, flat_response_lens
+        )
 
         rewards_arr = np.array(all_rewards, dtype=np.float32)
 
@@ -505,12 +591,18 @@ class GRPOTrainer(BaseTrainer):
                 flat_prompt_lens.append(rollout["prompt_lens"][g][b])
                 flat_response_lens.append(rollout["response_lens"][g][b])
 
-        new_logprobs, masks = self._batch_logprobs(self.model, flat_sequences, flat_prompt_lens, flat_response_lens)
+        new_logprobs, masks = self._batch_logprobs(
+            self.model, flat_sequences, flat_prompt_lens, flat_response_lens
+        )
 
         # Reshape back to [G, B, T].
         T = new_logprobs.size(1)
-        old_logp = rollout["old_logprobs"].detach().to(device).view(group_size, batch_size, T)
-        ref_logp = rollout["ref_logprobs"].detach().to(device).view(group_size, batch_size, T)
+        old_logp = (
+            rollout["old_logprobs"].detach().to(device).view(group_size, batch_size, T)
+        )
+        ref_logp = (
+            rollout["ref_logprobs"].detach().to(device).view(group_size, batch_size, T)
+        )
         new_logp = new_logprobs.view(group_size, batch_size, T)
         mask = masks.view(group_size, batch_size, T)
         adv = advantages.unsqueeze(-1)  # [G, B, 1]
@@ -533,7 +625,9 @@ class GRPOTrainer(BaseTrainer):
         # Per-component metrics (token-averaged).
         with torch.no_grad():
             policy_loss = (pg_loss * mask.float()).sum() / total_tokens.clamp_min(1)
-            kl_loss = compute_kl_divergence(ref_logp, new_logp, mask=mask, reduction="mean")
+            kl_loss = compute_kl_divergence(
+                ref_logp, new_logp, mask=mask, reduction="mean"
+            )
 
         metrics = {
             "policy_loss": policy_loss.item(),
@@ -579,7 +673,9 @@ class GRPOTrainer(BaseTrainer):
                 if args.grad_clip > 0:
                     if self.scaler is not None and self.scaler.is_enabled():
                         self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), args.grad_clip)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), args.grad_clip
+                    )
 
                 if self.scaler is not None and self.scaler.is_enabled():
                     self.scaler.step(self.optimizer)
@@ -601,17 +697,22 @@ class GRPOTrainer(BaseTrainer):
                 t1 = time.time()
                 dt = t1 - t0
                 t0 = t1
-                print(f"step {self.global_step}: loss {raw_loss:.4f}, "
-                      f"mean_reward {metrics['mean_reward']:.4f}, lr {lr:.2e}")
-                self.log_scalars({
-                    "train/loss": raw_loss,
-                    "train/policy_loss": metrics["policy_loss"],
-                    "train/kl_loss": metrics["kl_loss"],
-                    "train/mean_reward": metrics["mean_reward"],
-                    "train/mean_advantage": metrics.get("mean_advantage", 0.0),
-                    "train/std_advantage": metrics.get("std_advantage", 0.0),
-                    "train/lr": lr,
-                }, self.global_step)
+                print(
+                    f"step {self.global_step}: loss {raw_loss:.4f}, "
+                    f"mean_reward {metrics['mean_reward']:.4f}, lr {lr:.2e}"
+                )
+                self.log_scalars(
+                    {
+                        "train/loss": raw_loss,
+                        "train/policy_loss": metrics["policy_loss"],
+                        "train/kl_loss": metrics["kl_loss"],
+                        "train/mean_reward": metrics["mean_reward"],
+                        "train/mean_advantage": metrics.get("mean_advantage", 0.0),
+                        "train/std_advantage": metrics.get("std_advantage", 0.0),
+                        "train/lr": lr,
+                    },
+                    self.global_step,
+                )
 
             # --- hooks for extensions (e.g. iterative GRPO) ---
             hook_metrics = self.on_step_end(self.global_step, metrics, rollout)
@@ -622,7 +723,9 @@ class GRPOTrainer(BaseTrainer):
             improved = False
             if self.global_step % args.eval_interval == 0 and self.master_process:
                 self.model.eval()
-                val_batch = random.sample(self.val_data, min(args.batch_size * 2, len(self.val_data)))
+                val_batch = random.sample(
+                    self.val_data, min(args.batch_size * 2, len(self.val_data))
+                )
                 val_prompts = [b["prompt"] for b in val_batch]
                 val_answers = [b["answer"] for b in val_batch]
                 val_rollout = self.sample_group(val_prompts, val_answers)
@@ -633,7 +736,11 @@ class GRPOTrainer(BaseTrainer):
                 if mean_val_reward > self.best_reward:
                     self.best_reward = mean_val_reward
                     improved = True
-                    self.save_checkpoint(f"best_grpo_g{args.group_size}.pt", self.global_step, self.best_reward)
+                    self.save_checkpoint(
+                        f"best_grpo_g{args.group_size}.pt",
+                        self.global_step,
+                        self.best_reward,
+                    )
                 self.model.train()
 
                 self.on_eval_end(self.global_step, mean_val_reward, improved)
@@ -641,7 +748,9 @@ class GRPOTrainer(BaseTrainer):
             self.global_step += 1
 
         if self.master_process:
-            self.save_checkpoint(f"final_grpo_g{args.group_size}.pt", self.global_step, self.best_reward)
+            self.save_checkpoint(
+                f"final_grpo_g{args.group_size}.pt", self.global_step, self.best_reward
+            )
 
 
 def main():

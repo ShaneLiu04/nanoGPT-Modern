@@ -5,6 +5,7 @@ Refactored to use the shared BaseTrainer infrastructure: DDP/FSDP, AMP,
 GradScaler, gradient accumulation, LR scheduler, EMA, checkpointing, and
 resumable training.
 """
+
 import os
 import time
 import argparse
@@ -18,14 +19,21 @@ from model.attention_utils import set_attention_backend, print_attention_backend
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 from data.openwebtext import get_dataloader
-from training.trainer_base import BaseTrainer, load_model_from_checkpoint, get_rng_state, make_worker_init_fn
+from training.trainer_base import (
+    BaseTrainer,
+    load_model_from_checkpoint,
+    get_rng_state,
+    make_worker_init_fn,
+)
 from utils.lr_scheduler import LRScheduler
 from utils.config import parse_args_with_config
 
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="modern", choices=["baseline", "modern"])
+    parser.add_argument(
+        "--model", type=str, default="modern", choices=["baseline", "modern"]
+    )
     parser.add_argument("--data_dir", type=str, default="data/openwebtext")
     parser.add_argument("--out_dir", type=str, default="out/pretrain")
     parser.add_argument("--batch_size", type=int, default=12)
@@ -33,57 +41,118 @@ def get_args():
     parser.add_argument("--n_layer", type=int, default=9)
     parser.add_argument("--n_head", type=int, default=8)
     parser.add_argument("--n_embd", type=int, default=512)
-    parser.add_argument("--n_kv_head", type=int, default=None, help="Number of KV heads for GQA (default: n_head for MHA)")
+    parser.add_argument(
+        "--n_kv_head",
+        type=int,
+        default=None,
+        help="Number of KV heads for GQA (default: n_head for MHA)",
+    )
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--learning_rate", type=float, default=6e-4)
     parser.add_argument("--max_iters", type=int, default=18000)
     parser.add_argument("--warmup_iters", type=int, default=2000)
     parser.add_argument("--lr_decay_iters", type=int, default=18000)
     parser.add_argument("--min_lr", type=float, default=6e-5)
-    parser.add_argument("--lr_schedule", type=str, default="cosine",
-                        choices=["cosine", "linear", "wsd", "constant"],
-                        help="LR schedule type")
+    parser.add_argument(
+        "--lr_schedule",
+        type=str,
+        default="cosine",
+        choices=["cosine", "linear", "wsd", "constant"],
+        help="LR schedule type",
+    )
     parser.add_argument("--weight_decay", type=float, default=0.1)
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--eval_interval", type=int, default=1000)
     parser.add_argument("--eval_iters", type=int, default=200)
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--backend", type=str, default="nccl")
-    parser.add_argument("--fsdp", action="store_true",
-                        help="Use Fully Sharded Data Parallel instead of DDP")
-    parser.add_argument("--fsdp_sharding_strategy", type=str, default="full",
-                        choices=["full", "grad", "no"],
-                        help="FSDP sharding: full (params+grads+opt), grad (grads+opt), no (DDP-like)")
+    parser.add_argument(
+        "--fsdp",
+        action="store_true",
+        help="Use Fully Sharded Data Parallel instead of DDP",
+    )
+    parser.add_argument(
+        "--fsdp_sharding_strategy",
+        type=str,
+        default="full",
+        choices=["full", "grad", "no"],
+        help="FSDP sharding: full (params+grads+opt), grad (grads+opt), no (DDP-like)",
+    )
     parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
-                        help="Number of forward/backward passes before one optimizer step")
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=1,
+        help="Number of forward/backward passes before one optimizer step",
+    )
     parser.add_argument("--use_wandb", action="store_true")
-    parser.add_argument("--use_ema", action="store_true", help="Enable Exponential Moving Average of weights")
+    parser.add_argument(
+        "--use_ema",
+        action="store_true",
+        help="Enable Exponential Moving Average of weights",
+    )
     parser.add_argument("--ema_decay", type=float, default=0.999, help="EMA decay rate")
-    parser.add_argument("--early_stopping_patience", type=int, default=0,
-                        help="Stop if val loss does not improve for N evals (0=disabled)")
-    parser.add_argument("--keep_last_n", type=int, default=0,
-                        help="Keep only the last N non-best checkpoints (0=keep all)")
-    parser.add_argument("--use_packing", action="store_true",
-                        help="Use document packing with cross-document attention mask")
-    parser.add_argument("--gradient_checkpointing", action="store_true",
-                        help="Enable gradient checkpointing to trade compute for memory")
-    parser.add_argument("--shuffle_buffer", type=int, default=None,
-                        help="MemmapDataset shuffle buffer size (default: 10000 or dataset size)")
+    parser.add_argument(
+        "--early_stopping_patience",
+        type=int,
+        default=0,
+        help="Stop if val loss does not improve for N evals (0=disabled)",
+    )
+    parser.add_argument(
+        "--keep_last_n",
+        type=int,
+        default=0,
+        help="Keep only the last N non-best checkpoints (0=keep all)",
+    )
+    parser.add_argument(
+        "--use_packing",
+        action="store_true",
+        help="Use document packing with cross-document attention mask",
+    )
+    parser.add_argument(
+        "--gradient_checkpointing",
+        action="store_true",
+        help="Enable gradient checkpointing to trade compute for memory",
+    )
+    parser.add_argument(
+        "--shuffle_buffer",
+        type=int,
+        default=None,
+        help="MemmapDataset shuffle buffer size (default: 10000 or dataset size)",
+    )
     parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
-    parser.add_argument("--attn_backend", type=str, default="auto",
-                        choices=["auto", "flash", "mem_efficient", "math", "default"],
-                        help="Force SDPA attention backend (auto lets PyTorch choose)")
-    parser.add_argument("--use_ring_attention", action="store_true",
-                        help="Use the pure-PyTorch blockwise (Ring) attention fallback")
-    parser.add_argument("--ring_block_size_q", type=int, default=64,
-                        help="Query block size for ring attention")
-    parser.add_argument("--ring_block_size_kv", type=int, default=64,
-                        help="KV block size for ring attention")
+    parser.add_argument(
+        "--config", type=str, default=None, help="Path to YAML config file"
+    )
+    parser.add_argument(
+        "--attn_backend",
+        type=str,
+        default="auto",
+        choices=["auto", "flash", "mem_efficient", "math", "default"],
+        help="Force SDPA attention backend (auto lets PyTorch choose)",
+    )
+    parser.add_argument(
+        "--use_ring_attention",
+        action="store_true",
+        help="Use the pure-PyTorch blockwise (Ring) attention fallback",
+    )
+    parser.add_argument(
+        "--ring_block_size_q",
+        type=int,
+        default=64,
+        help="Query block size for ring attention",
+    )
+    parser.add_argument(
+        "--ring_block_size_kv",
+        type=int,
+        default=64,
+        help="KV block size for ring attention",
+    )
     return parse_args_with_config(parser)
 
 
@@ -104,14 +173,26 @@ class PretrainTrainer(BaseTrainer):
     def _build_data(self):
         args = self.args
         resume_offset = getattr(self, "resume_offset", 0)
-        worker_init = make_worker_init_fn(args.seed, self.rank) if args.num_workers > 0 else None
+        worker_init = (
+            make_worker_init_fn(args.seed, self.rank) if args.num_workers > 0 else None
+        )
         self.train_loader = get_dataloader(
-            args.data_dir, "train", args.batch_size, args.block_size,
-            args.num_workers, resume_offset=resume_offset, worker_init_fn=worker_init,
-            use_packing=args.use_packing, shuffle_buffer=args.shuffle_buffer,
+            args.data_dir,
+            "train",
+            args.batch_size,
+            args.block_size,
+            args.num_workers,
+            resume_offset=resume_offset,
+            worker_init_fn=worker_init,
+            use_packing=args.use_packing,
+            shuffle_buffer=args.shuffle_buffer,
         )
         self.val_loader = get_dataloader(
-            args.data_dir, "val", args.batch_size, args.block_size, args.num_workers,
+            args.data_dir,
+            "val",
+            args.batch_size,
+            args.block_size,
+            args.num_workers,
             worker_init_fn=worker_init,
             use_packing=args.use_packing,
         )
@@ -160,8 +241,10 @@ class PretrainTrainer(BaseTrainer):
     def _build_optimizer(self):
         args = self.args
         self.optimizer = self.raw_model.configure_optimizers(
-            args.weight_decay, args.learning_rate, (0.9, 0.95),
-            device_type="cuda" if "cuda" in str(self.device) else "cpu"
+            args.weight_decay,
+            args.learning_rate,
+            (0.9, 0.95),
+            device_type="cuda" if "cuda" in str(self.device) else "cpu",
         )
 
     def _build_scheduler(self):
@@ -238,7 +321,11 @@ class PretrainTrainer(BaseTrainer):
     def _get_model_state_dict(self):
         """Return a state dict suitable for checkpointing (handles FSDP)."""
         if self.args.fsdp and self.distributed:
-            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType
+            from torch.distributed.fsdp import (
+                FullyShardedDataParallel as FSDP,
+                StateDictType,
+            )
+
             FSDP.set_state_dict_type(self.model, StateDictType.FULL_STATE_DICT)
             return self.model.state_dict()
         return self.raw_model.state_dict()
@@ -250,7 +337,9 @@ class PretrainTrainer(BaseTrainer):
             else None
         )
         return self.ckpt_manager.save(
-            filename, self.iter_num, self.best_val_loss,
+            filename,
+            self.iter_num,
+            self.best_val_loss,
             rng_state=get_rng_state(),
             resume_offset=self.resume_offset,
             ema_shadow=ema_shadow,
@@ -310,7 +399,9 @@ class PretrainTrainer(BaseTrainer):
                 if args.grad_clip > 0:
                     if self.scaler is not None and self.scaler.is_enabled():
                         self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), args.grad_clip)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), args.grad_clip
+                    )
 
                 if self.scaler is not None and self.scaler.is_enabled():
                     self.scaler.step(self.optimizer)
@@ -328,8 +419,10 @@ class PretrainTrainer(BaseTrainer):
                 dt = t1 - t0
                 t0 = t1
                 tokens_per_sec = (
-                    args.batch_size * args.block_size * running_count
-                ) / dt / max(self.world_size, 1)
+                    (args.batch_size * args.block_size * running_count)
+                    / dt
+                    / max(self.world_size, 1)
+                )
                 msg = (
                     f"iter {self.iter_num}: loss {lossf:.4f}, lr {lr:.2e}, "
                     f"tok/s {tokens_per_sec:.2f}"
@@ -337,22 +430,34 @@ class PretrainTrainer(BaseTrainer):
                 if accum_steps > 1:
                     msg += f" (accum={accum_steps})"
                 print(msg)
-                self.log_scalars({
-                    "train/loss": lossf,
-                    "train/lr": lr,
-                    "train/tokens_per_sec": tokens_per_sec,
-                }, self.iter_num)
+                self.log_scalars(
+                    {
+                        "train/loss": lossf,
+                        "train/lr": lr,
+                        "train/tokens_per_sec": tokens_per_sec,
+                    },
+                    self.iter_num,
+                )
                 self.log_memory_stats(self.iter_num)
                 running_loss = 0.0
                 running_count = 0
 
-            if self.iter_num > 0 and self.iter_num % args.eval_interval == 0 and self.master_process:
+            if (
+                self.iter_num > 0
+                and self.iter_num % args.eval_interval == 0
+                and self.master_process
+            ):
                 losses = self.estimate_loss()
-                print(f"iter {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-                self.log_scalars({
-                    "val/loss": losses["val"],
-                    "train/avg_loss": losses["train"],
-                }, self.iter_num)
+                print(
+                    f"iter {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
+                )
+                self.log_scalars(
+                    {
+                        "val/loss": losses["val"],
+                        "train/avg_loss": losses["train"],
+                    },
+                    self.iter_num,
+                )
 
                 if losses["val"] < self.best_val_loss:
                     self.best_val_loss = losses["val"]
@@ -364,16 +469,23 @@ class PretrainTrainer(BaseTrainer):
                 self._save_checkpoint("latest_ckpt.pt")
                 self._save_ema_checkpoint()
 
-                if args.early_stopping_patience > 0 and self.early_stop_counter >= args.early_stopping_patience:
-                    print(f"Early stopping triggered at iter {self.iter_num} "
-                          f"(val loss did not improve for {args.early_stopping_patience} evals)")
+                if (
+                    args.early_stopping_patience > 0
+                    and self.early_stop_counter >= args.early_stopping_patience
+                ):
+                    print(
+                        f"Early stopping triggered at iter {self.iter_num} "
+                        f"(val loss did not improve for {args.early_stopping_patience} evals)"
+                    )
                     return
 
             self.iter_num += 1
 
         if self.master_process:
             losses = self.estimate_loss()
-            print(f"final: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+            print(
+                f"final: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
+            )
             self.log_scalars({"val/loss": losses["val"]}, self.iter_num)
             self._save_checkpoint("latest_ckpt.pt")
             if losses["val"] < self.best_val_loss:
