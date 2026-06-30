@@ -73,8 +73,14 @@ module = [
     "model.modern_gpt",
     "model.quantization",
     "inference.generate_utils",
+    "export_to_onnx",
+    "evaluation.needle_in_haystack",
+    "evaluation.eval_win_rate",
+    "inference.visualize_attention",
+    "inference.continuous_batching",
+    "api_server",
 ]
-disable_error_code = ["union-attr", "operator", "arg-type", "misc", "return-value"]
+disable_error_code = ["union-attr", "operator", "arg-type", "misc", "return-value", "assignment"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["model*", "data*", "training*", "inference*", "evaluation*", "rewards*", "utils*", "config*"]

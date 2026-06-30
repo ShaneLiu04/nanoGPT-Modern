@@ -318,7 +318,7 @@ class GRPOTrainer(BaseTrainer):
             response_mask[i, resp_start:resp_end] = True
 
         with self.ctx:
-            logits, _, _ = model(input_ids, attention_mask=attention_mask)
+            logits = model(input_ids, attention_mask=attention_mask)[0]
         token_logprobs = compute_token_logprobs(logits, targets, mask=attention_mask)
 
         token_logprobs = token_logprobs * response_mask.float()
