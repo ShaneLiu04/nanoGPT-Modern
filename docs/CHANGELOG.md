@@ -1,6 +1,6 @@
 # nanoGPT-Modern 变更日志
 
-> 汇总从 v0.1.0 到 v0.2.0 的系统改进、bug 修复与质量保障。
+> 汇总从 v0.1.0 到 v0.3.0 的系统改进、bug 修复与质量保障。
 
 ---
 
@@ -10,9 +10,70 @@
 |------|------|-----------|
 | v0.1.0 | 2026-05 | 经典 GPT-2 基线（BaselineGPT） |
 | v0.1.5 | 2026-05 | 引入 ModernGPT（RMSNorm + SwiGLU + RoPE） |
-| **v0.2.0** | **2026-06** | **完整三阶段流水线 + 23 项优化落地** |
+| v0.2.0 | 2026-06 | 完整三阶段流水线 + 23 项优化落地 |
+| **v0.3.0** | **2026-06** | **全维度 42 项优化落地 + 244 回归测试全绿** |
 
-当前回归测试：**234 passed, 2 skipped**。
+当前回归测试：**244 passed, 1 skipped**。
+
+---
+
+## v0.3.0 重大变更（从 2026630 优化方向全景报告落地）
+
+### 模型架构优化
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| MoE grouped GEMM | ✅ | 专家权重堆叠 + `bmm` 向量化，消除 Python for-loop 路由 |
+| KV Cache 量化（INT8/FP8） | ✅ | `QuantizedKVCacheManager` 量化存储 + 反量化计算，显存节省 50% |
+| FlashAttention 自动调度 | ✅ | SDPA 后端自动探测 + 自动回退 |
+
+### 训练系统优化
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 全局数据 Shuffle | ✅ | 预计算 `.shuffle.idx` 随机索引，训练时全局随机化 |
+| 数据质量 2.0 | ✅ | `QualityScoreFilter` 规则/FastText 评分 + 分层采样 |
+| 增量去重 | ✅ | `MinHashDeduplicator` 增量签名持久化与追加比对 |
+| 多语言数据管道 | ✅ | `MultilingualTokenizer`（tiktoken + SentencePiece）+ 按语言权重采样 |
+| 代码数据管道 | ✅ | `CodeDataset` 本地目录/The Stack + AST 语法过滤 |
+| 数学 CoT 增强 | ✅ | `ChainOfThoughtDataset` GSM8K 风格逐步推理（`<reasoning>` + `<answer>`） |
+| 对话模板系统 | ✅ | `ChatTemplate` 抽象（chatml / llama-2 / gemma）+ system prompt 注入 |
+| 监控告警体系 | ✅ | `LossSpikeDetector`（>3σ 触发 LR 降低）、`GradientNormMonitor`、`ThroughputMonitor` |
+| 配置 Pydantic 校验 | ✅ | `ConfigValidator` 运行时结构化校验（`n_head % n_kv_head == 0` 等） |
+
+### 推理与服务优化
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 连续批处理 | ✅ | `RequestQueue` + `ContinuousBatchScheduler` + 动态 batch 拼接 |
+| Prefix Cache | ✅ | 共享 prompt 的 KV Cache 跨请求复用 |
+| 投机解码 batch > 1 | ✅ | `_generate_speculative_batched` 树形解码，支持 batch 扩展 |
+| 注意力可视化 | ✅ | `AttentionVisualizer` heatmap + `LogitLens` 各层 top-k 预测词 |
+| 性能 Profiler | ✅ | PyTorch Profiler Chrome trace 导出 + 显存分层报告 |
+| ONNX 导出 | ✅ | `export_to_onnx.py` 动态轴导出 + ONNX Runtime 验证 |
+| API 服务 | ✅ | `api_server.py` FastAPI 兼容 OpenAI API（`/v1/completions` + `/v1/chat/completions`） |
+
+### 对齐与 RL 优化
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| DPO 完整训练 | ✅ | 从 GRPO 自动生成偏好对 + 完整训练循环 + 胜率评估 |
+| 胜率评估 | ✅ | `eval_win_rate.py` policy vs reference 胜率对比 |
+
+### 评估与可观测性
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 标准 Benchmark 集成 | ✅ | `benchmark_suite.py` MMLU / ARC / HellaSwag / Winogrande / HumanEval / GSM8K |
+| 长上下文测试 | ✅ | `needle_in_haystack.py` Needle-in-Haystack 验证 |
+
+### 工程与 DevOps
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| CI/CD | ✅ | GitHub Actions（pytest + mypy + black + ruff + 50-step smoke test） |
+| 容器化 | ✅ | Dockerfile 多阶段 + docker-compose（训练 + TensorBoard + API） |
+| 预提交钩子 | ✅ | `.pre-commit-config.yaml`（black + ruff + mypy + pytest） |
 
 ---
 
@@ -130,16 +191,24 @@ python -m pytest tests/ -q
 
 ---
 
-## 已知限制与未来方向
+## 已知限制与未来方向（v0.3.0 后）
 
 | 方向 | 优先级 | 说明 |
 |------|--------|------|
-| 50M 参数完整训练验证 | P0 | 当前实验停留在 3.3M 快速验证模式 |
-| MoE grouped GEMM | P2 | 当前为 Python for-loop 路由 |
-| 容器化 / CI/CD | P2 | 尚未接入 GitHub Actions |
-| 分布式训练自动化测试 | P2 | 受单卡环境限制 |
-| 生产级推理服务 | P3 | 未来可对接 vLLM / TGI |
-| 全局数据 shuffle | P3 | 当前使用 chunk-level `shuffle_buffer` |
+| 50M 参数完整训练验证 | P0 | 当前实验停留在 3.3M 快速验证模式，需验证 50M 完整收敛 |
+| 3D 并行验证（TP+PP+DP） | P1 | 在 8×A100 上验证张量/流水线/数据并行组合 |
+| 序列并行（RingAttention）生产级 | P1 | 当前为纯 PyTorch 实现，需验证 >100K 上下文 |
+| 权重量化感知训练（QAT） | P1 | 预训练/SFT 阶段引入伪量化节点 |
+| 结构化剪枝 | P2 | SwiGLU FFN 隐藏维度重要性评分剪枝 |
+| 注意力头剪枝 | P2 | 基于 GQA 的 n_rep 比例移除冗余 Query head |
+| 渐进式训练 | P2 | 从短序列（256）到长序列（4096）逐步扩展 |
+| Mamba / SSM 混合 | P3 | 在局部注意力层引入 selective SSM 层 |
+| 线性注意力 | P3 | 基于 kernel feature map 的近似注意力 |
+| Web UI（Gradio/Streamlit） | P3 | 浏览器端交互式 demo |
+| 边缘/移动端部署 | P3 | llama.cpp 适配 + Android/iOS 推理 |
+| MLX 导出（Apple Silicon） | P3 | macOS 统一内存加速推理 |
+
+> 原始优化方向全景报告（2026630）已归档到本文件（v0.3.0 部分）及技术白皮书 Roadmap。
 
 ---
 
@@ -147,4 +216,4 @@ python -m pytest tests/ -q
 
 - 完整技术白皮书：`docs/TECH_REPORT.md`
 - 实验记录与复现命令：`docs/EXPERIMENTS.md`
-- 原始改进清单与诊断报告已合并归档到本文件
+- 架构决策记录：`docs/adr/`
