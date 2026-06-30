@@ -8,6 +8,7 @@ Features
 * Per-step gradient norm / parameter histogram tracking (optional).
 * Configurable log level for console output.
 """
+
 import os
 import logging
 from typing import Any, Dict, Optional
@@ -62,17 +63,21 @@ class Logger:
         if use_tensorboard:
             try:
                 from torch.utils.tensorboard import SummaryWriter
+
                 full_log_dir = os.path.join(log_dir, run_name)
                 os.makedirs(full_log_dir, exist_ok=True)
                 self.writer = SummaryWriter(log_dir=full_log_dir)
             except Exception as e:
-                self._console.warning(f"TensorBoard init failed: {e}. Falling back to no TensorBoard.")
+                self._console.warning(
+                    f"TensorBoard init failed: {e}. Falling back to no TensorBoard."
+                )
                 self.writer = None
 
         # Weights & Biases
         if use_wandb:
             try:
                 import wandb
+
                 # Allow offline mode if the network is unavailable.
                 os.environ.setdefault("WANDB_MODE", "online")
                 self.run = wandb.init(
@@ -84,7 +89,9 @@ class Logger:
                 if self.run is None:
                     raise RuntimeError("wandb.init returned None")
             except Exception as e:
-                self._console.warning(f"wandb init failed: {e}. Continuing without wandb logging.")
+                self._console.warning(
+                    f"wandb init failed: {e}. Continuing without wandb logging."
+                )
                 self.run = None
                 self.use_wandb = False
 
@@ -109,6 +116,7 @@ class Logger:
             self.writer.add_histogram(tag, values, step)
         if self.run is not None:
             import wandb
+
             self.run.log({tag: wandb.Histogram(values)}, step=step)
 
     def log_text(self, tag: str, text: str, step: int):
@@ -127,9 +135,10 @@ class Logger:
         if not torch_cuda_available():
             return
         import torch
-        allocated = torch.cuda.memory_allocated() / (1024 ** 2)
-        reserved = torch.cuda.memory_reserved() / (1024 ** 2)
-        max_allocated = torch.cuda.max_memory_allocated() / (1024 ** 2)
+
+        allocated = torch.cuda.memory_allocated() / (1024**2)
+        reserved = torch.cuda.memory_reserved() / (1024**2)
+        max_allocated = torch.cuda.max_memory_allocated() / (1024**2)
         self.log_scalars(
             {
                 f"{tag_prefix}/memory_allocated_mb": allocated,
@@ -146,14 +155,15 @@ class Logger:
         ``scaler.unscale_(optimizer)`` so that the gradients are in fp32.
         """
         import torch
+
         total_norm = 0.0
         norms = []
         for name, p in model.named_parameters():
             if p.grad is not None:
                 param_norm = p.grad.data.norm(2).item()
                 norms.append(param_norm)
-                total_norm += param_norm ** 2
-        total_norm = total_norm ** 0.5
+                total_norm += param_norm**2
+        total_norm = total_norm**0.5
         self.log_scalar(f"{tag_prefix}/total_norm", total_norm, step)
         if norms:
             self.log_histogram(f"{tag_prefix}/layer_norms", torch.tensor(norms), step)
@@ -161,6 +171,7 @@ class Logger:
     def log_model_weights(self, model, step: int, tag_prefix: str = "param"):
         """Log per-layer parameter value histograms."""
         import torch
+
         for name, p in model.named_parameters():
             # Sanitize tag name.
             safe_name = name.replace(".", "/")
@@ -173,6 +184,7 @@ class Logger:
         if self.writer is not None:
             # TensorBoard does not have a native config object; dump as text.
             import json
+
             self.writer.add_text("config", json.dumps(config, indent=2, default=str), 0)
 
     def close(self):
@@ -181,6 +193,7 @@ class Logger:
             self.writer = None
         if self.run is not None:
             import wandb
+
             wandb.finish()
             self.run = None
 
@@ -189,6 +202,7 @@ def torch_cuda_available() -> bool:
     """Safe check for torch CUDA availability without importing torch eagerly."""
     try:
         import torch
+
         return torch.cuda.is_available()
     except Exception:
         return False
