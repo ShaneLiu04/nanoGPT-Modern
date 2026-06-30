@@ -558,7 +558,6 @@ def main():
 
     try:
         import tiktoken
-        from datasets import load_dataset
     except ImportError as e:
         print(f"Missing dependency: {e}")
         print("Please run: pip install tiktoken datasets")

@@ -8,14 +8,12 @@ heuristic rules.
 from __future__ import annotations
 
 import json
-import os
 import re
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional
 
 import numpy as np
-import torch
 from torch.utils.data import IterableDataset
 
 # ---------------------------------------------------------------------------

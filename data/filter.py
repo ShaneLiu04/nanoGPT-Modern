@@ -15,7 +15,7 @@ import re
 import warnings
 from abc import ABC, abstractmethod
 from collections import Counter
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 
 class QualityFilter(ABC):

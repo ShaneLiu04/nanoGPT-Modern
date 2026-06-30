@@ -6,7 +6,6 @@ Three difficulty levels: easy, medium, hard.
 import ast
 import operator
 import random
-import re
 from typing import Any, Optional
 
 import torch
@@ -182,7 +181,6 @@ def generate_medium(num_samples=1000, seed=43, prompt_diversity: int = 1):
             a = random.randint(0, 500)
             b = random.randint(1, 500)
             c = random.randint(0, 500)
-            d = random.randint(1, 500)
             op1 = random.choice(ops)
             op2 = random.choice(ops)
             # ensure no div-by-zero in either operand if it's a division

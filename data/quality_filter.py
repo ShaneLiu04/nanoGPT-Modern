@@ -10,10 +10,9 @@ from __future__ import annotations
 
 import math
 import random
-import re
 import warnings
 from collections import Counter
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional
 
 from data.filter import QualityFilter
 
