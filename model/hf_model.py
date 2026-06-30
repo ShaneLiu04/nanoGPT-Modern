@@ -67,7 +67,15 @@ class NanoGPTModernConfig(PretrainedConfig):
         """Recover the native ``ModernGPTConfig`` from this HF config."""
         allowed = set(ModernGPTConfig.__init__.__code__.co_varnames)
         allowed.discard("self")
-        d = {k: v for k, v in self.to_dict().items() if k in allowed}
+        # PretrainedConfig.to_dict() may silently drop some attributes (e.g.
+        # rope_scaling) in certain transformers versions.  Fall back to
+        # self.__dict__ so the round-trip is faithful.
+        source: dict = self.to_dict()
+        d = {k: source[k] for k in allowed if k in source}
+        # Explicitly preserve attributes that may have been filtered out
+        for attr in ("rope_scaling", "qk_norm", "sliding_window_size"):
+            if attr not in d and hasattr(self, attr):
+                d[attr] = getattr(self, attr)
         return ModernGPTConfig(**d)
 
 
