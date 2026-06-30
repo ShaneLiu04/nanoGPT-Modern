@@ -1,10 +1,13 @@
 """Tests for model.attention_utils."""
-import os
 
 import pytest
 
 
-from model.attention_utils import set_attention_backend, get_attention_backend_info, VALID_BACKENDS
+from model.attention_utils import (
+    set_attention_backend,
+    get_attention_backend_info,
+    VALID_BACKENDS,
+)
 
 
 def test_valid_backends():

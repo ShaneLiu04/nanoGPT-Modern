@@ -112,7 +112,7 @@ def blockwise_attention(
             device=q.device,
             dtype=q.dtype,
         )
-        l = torch.zeros((B, Hq, block_size_q, 1), device=q.device, dtype=q.dtype)
+        lse = torch.zeros((B, Hq, block_size_q, 1), device=q.device, dtype=q.dtype)
         acc = torch.zeros(
             (B, Hq, block_size_q, D),
             device=q.device,
@@ -160,14 +160,14 @@ def blockwise_attention(
             exp_scale = torch.exp(m - m_new_safe)
             exp_ij = torch.exp(s_ij - m_new_safe)
 
-            l = l * exp_scale + exp_ij.sum(dim=-1, keepdim=True)
+            lse = lse * exp_scale + exp_ij.sum(dim=-1, keepdim=True)
             acc = acc * exp_scale + torch.matmul(exp_ij, v_j)
             m = m_new
 
         # Rows that received no valid KV tokens would divide by 0; set l to 1
         # so their output remains 0 (these rows belong to padding queries).
-        l = torch.where(l == 0, torch.ones_like(l), l)
-        out[:, :, i * block_size_q : (i + 1) * block_size_q, :] = acc / l
+        lse = torch.where(lse == 0, torch.ones_like(lse), lse)
+        out[:, :, i * block_size_q : (i + 1) * block_size_q, :] = acc / lse
 
     if pad_q:
         out = out[:, :, :Tq, :]

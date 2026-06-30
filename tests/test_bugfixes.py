@@ -1,4 +1,5 @@
 """Regression tests for the blocking bugs fixed in this pass."""
+
 import os
 import tempfile
 from types import SimpleNamespace
@@ -7,18 +8,22 @@ import numpy as np
 import torch
 
 
-from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 from model.kv_cache_utils import KVCacheManager
 from data.openwebtext import DocBoundaryDataset
-from utils.checkpoint import save_checkpoint, load_checkpoint, get_rng_state, set_rng_state
+from utils.checkpoint import save_checkpoint, load_checkpoint, get_rng_state
 
 
 def test_modern_gpt_kv_cache_dtype():
     """ModernGPT.generate(use_cache=True) must not crash on dtype mismatch."""
     config = ModernGPTConfig(
-        n_layer=2, n_head=4, n_embd=128, block_size=64,
-        vocab_size=100, dropout=0.0, n_kv_head=2,
+        n_layer=2,
+        n_head=4,
+        n_embd=128,
+        block_size=64,
+        vocab_size=100,
+        dropout=0.0,
+        n_kv_head=2,
     )
     model = ModernGPT(config)
     model.eval()
@@ -33,8 +38,12 @@ def test_modern_gpt_kv_cache_dtype():
 def test_optimizer_weight_tying_dedup():
     """wte and lm_head share the same tensor; optimizer must see it once."""
     config = ModernGPTConfig(
-        n_layer=2, n_head=4, n_embd=128, block_size=64,
-        vocab_size=100, dropout=0.0,
+        n_layer=2,
+        n_head=4,
+        n_embd=128,
+        block_size=64,
+        vocab_size=100,
+        dropout=0.0,
     )
     model = ModernGPT(config)
     opt = model.configure_optimizers(0.1, 1e-3, (0.9, 0.95), "cpu")
@@ -44,7 +53,10 @@ def test_optimizer_weight_tying_dedup():
     assert id(model.transformer.wte.weight) in param_ids
     # Count how many times the shared tensor appears in optimizer params.
     occurrences = sum(
-        1 for group in opt.param_groups for p in group["params"] if id(p) == id(model.transformer.wte.weight)
+        1
+        for group in opt.param_groups
+        for p in group["params"]
+        if id(p) == id(model.transformer.wte.weight)
     )
     assert occurrences == 1, f"shared weight appears {occurrences} times in optimizer"
     print("[OK] Optimizer weight-tying deduplication works")
@@ -53,8 +65,12 @@ def test_optimizer_weight_tying_dedup():
 def test_ma_update_and_checkpoint():
     """EMA shadow weights must update and round-trip through checkpoint."""
     config = ModernGPTConfig(
-        n_layer=2, n_head=4, n_embd=128, block_size=64,
-        vocab_size=100, dropout=0.0,
+        n_layer=2,
+        n_head=4,
+        n_embd=128,
+        block_size=64,
+        vocab_size=100,
+        dropout=0.0,
     )
     model = ModernGPT(config)
     model.init_ema(decay=0.9)
@@ -75,9 +91,15 @@ def test_ma_update_and_checkpoint():
     # Save and load checkpoint.
     with tempfile.TemporaryDirectory() as tmpdir:
         path = save_checkpoint(
-            model, opt, iter_num=7, best_val_loss=1.23, config=config,
-            out_dir=tmpdir, filename="ckpt.pt",
-            ema_shadow=model.ema_shadow, rng_state=get_rng_state(),
+            model,
+            opt,
+            iter_num=7,
+            best_val_loss=1.23,
+            config=config,
+            out_dir=tmpdir,
+            filename="ckpt.pt",
+            ema_shadow=model.ema_shadow,
+            rng_state=get_rng_state(),
         )
         model2 = ModernGPT(config)
         opt2 = model2.configure_optimizers(0.1, 1e-3, (0.9, 0.95), "cpu")
@@ -130,6 +152,7 @@ def test_doc_boundary_dataset_state_dict():
 # GRPO performance / correctness regression tests
 # ---------------------------------------------------------------------------
 
+
 def _tiny_grpo_args(tmpdir, ckpt_path, **overrides):
     """Build a minimal args Namespace for GRPO testing."""
     defaults = dict(
@@ -166,14 +189,22 @@ def _tiny_grpo_args(tmpdir, ckpt_path, **overrides):
 def _make_tiny_checkpoint(tmpdir):
     """Create a tiny ModernGPT checkpoint on disk and return its path."""
     config = ModernGPTConfig(
-        n_layer=1, n_head=2, n_embd=64, block_size=128,
+        n_layer=1,
+        n_head=2,
+        n_embd=64,
+        block_size=128,
         dropout=0.0,
     )
     model = ModernGPT(config)
     opt = model.configure_optimizers(0.0, 1e-3, (0.9, 0.95), "cpu")
     path = save_checkpoint(
-        model, opt, iter_num=0, best_val_loss=float("inf"), config=config,
-        out_dir=tmpdir, filename="ckpt.pt",
+        model,
+        opt,
+        iter_num=0,
+        best_val_loss=float("inf"),
+        config=config,
+        out_dir=tmpdir,
+        filename="ckpt.pt",
     )
     return path
 
@@ -197,7 +228,9 @@ def test_grpo_batched_logprobs_consistency():
         prompt_lens = [2, 3, 1]
         response_lens = [3, 3, 2]
 
-        batched_logps, masks = trainer._batch_logprobs(model, sequences, prompt_lens, response_lens)
+        batched_logps, masks = trainer._batch_logprobs(
+            model, sequences, prompt_lens, response_lens
+        )
 
         # Compare response-token logprobs against per-sequence computation.
         for i, seq in enumerate(sequences):
@@ -207,8 +240,12 @@ def test_grpo_batched_logprobs_consistency():
                 logits, _, _ = model(inp)
                 logp = torch.log_softmax(logits, dim=-1)
                 single_logps = logp.gather(2, tgt.unsqueeze(-1)).squeeze(-1)
-            resp_mask = masks[i, :len(seq) - 1]
-            assert torch.allclose(batched_logps[i, :len(seq) - 1][resp_mask], single_logps[0][resp_mask], atol=1e-5)
+            resp_mask = masks[i, : len(seq) - 1]
+            assert torch.allclose(
+                batched_logps[i, : len(seq) - 1][resp_mask],
+                single_logps[0][resp_mask],
+                atol=1e-5,
+            )
             expected_mask = [False] * (prompt_lens[i] - 1) + [True] * response_lens[i]
             assert torch.equal(resp_mask, torch.tensor(expected_mask))
 
@@ -222,7 +259,8 @@ def test_grpo_gradient_accumulation():
     with tempfile.TemporaryDirectory() as tmpdir:
         ckpt = _make_tiny_checkpoint(tmpdir)
         args = _tiny_grpo_args(
-            tmpdir, ckpt,
+            tmpdir,
+            ckpt,
             num_steps=6,
             batch_size=2,
             group_size=2,
@@ -240,7 +278,10 @@ def test_grpo_gradient_accumulation():
         def _mock_sample_group(prompts, answers, prompt_tokens=None):
             group_size, batch_size = args.group_size, len(prompts)
             responses = [["dummy"] * batch_size for _ in range(group_size)]
-            response_ids = [[[vocab_size // 2] * response_len for _ in range(batch_size)] for _ in range(group_size)]
+            response_ids = [
+                [[vocab_size // 2] * response_len for _ in range(batch_size)]
+                for _ in range(group_size)
+            ]
             rewards = np.ones((group_size, batch_size), dtype=np.float32)
 
             flat_sequences = []
@@ -254,8 +295,12 @@ def test_grpo_gradient_accumulation():
                     flat_prompt_lens.append(len(ptoks))
                     flat_response_lens.append(response_len)
 
-            old_logprobs, masks = trainer._batch_logprobs(trainer.policy, flat_sequences, flat_prompt_lens, flat_response_lens)
-            ref_logprobs, _ = trainer._batch_logprobs(trainer.ref, flat_sequences, flat_prompt_lens, flat_response_lens)
+            old_logprobs, masks = trainer._batch_logprobs(
+                trainer.policy, flat_sequences, flat_prompt_lens, flat_response_lens
+            )
+            ref_logprobs, _ = trainer._batch_logprobs(
+                trainer.ref, flat_sequences, flat_prompt_lens, flat_response_lens
+            )
 
             return {
                 "responses": responses,
@@ -265,8 +310,11 @@ def test_grpo_gradient_accumulation():
                 "ref_logprobs": ref_logprobs,
                 "masks": masks,
                 "prompt_lens": [[prompt_len] * batch_size for _ in range(group_size)],
-                "response_lens": [[response_len] * batch_size for _ in range(group_size)],
-                "prompt_tokens": prompt_tokens or [[0] * prompt_len for _ in range(batch_size)],
+                "response_lens": [
+                    [response_len] * batch_size for _ in range(group_size)
+                ],
+                "prompt_tokens": prompt_tokens
+                or [[0] * prompt_len for _ in range(batch_size)],
             }
 
         original_sample_group = trainer.sample_group
@@ -288,7 +336,9 @@ def test_grpo_gradient_accumulation():
             trainer.optimizer.step = original_optimizer_step
 
         # 6 rollouts / 3 accum = 2 optimizer steps.
-        assert len(step_counts) == 2, f"expected 2 optimizer steps, got {len(step_counts)}"
+        assert (
+            len(step_counts) == 2
+        ), f"expected 2 optimizer steps, got {len(step_counts)}"
         print("[OK] GRPO gradient accumulation steps correctly")
 
 
@@ -319,11 +369,17 @@ def test_iterative_grpo_rejection_pool():
 def test_kv_cache_ring_buffer_order():
     """Ring-buffer cache must return keys/values in logical order."""
     B, n_layers, n_kv_heads, head_dim, max_len = 2, 1, 2, 4, 6
-    cache = KVCacheManager(n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len)
+    cache = KVCacheManager(
+        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
+    )
     cache.init_cache(B, "cpu", torch.float32)
 
     # Write 4 tokens.
-    tok4 = torch.arange(B * n_kv_heads * 4 * head_dim).view(B, n_kv_heads, 4, head_dim).float()
+    tok4 = (
+        torch.arange(B * n_kv_heads * 4 * head_dim)
+        .view(B, n_kv_heads, 4, head_dim)
+        .float()
+    )
     cache.update(0, tok4, tok4.clone())
     cache.advance(4)
     blocks = cache.get_cache()
@@ -335,7 +391,12 @@ def test_kv_cache_ring_buffer_order():
     # Write 3 more tokens (wraps around, evicts oldest tokens).
     # One slot is reserved for the next single-token decode step, so the
     # effective capacity is max_len - 1.
-    tok3 = torch.arange(B * n_kv_heads * 3 * head_dim).view(B, n_kv_heads, 3, head_dim).float() + 1000
+    tok3 = (
+        torch.arange(B * n_kv_heads * 3 * head_dim)
+        .view(B, n_kv_heads, 3, head_dim)
+        .float()
+        + 1000
+    )
     cache.update(0, tok3, tok3.clone())
     cache.advance(3)
     effective_len = max_len - 1
@@ -355,7 +416,9 @@ def test_kv_cache_ring_buffer_order():
 def test_kv_cache_sliding_window_eviction():
     """Cache must keep only the last max_cache_len tokens."""
     B, n_layers, n_kv_heads, head_dim, max_len = 1, 1, 1, 2, 4
-    cache = KVCacheManager(n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len)
+    cache = KVCacheManager(
+        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
+    )
     cache.init_cache(B, "cpu", torch.float32)
 
     for step in range(8):
@@ -372,7 +435,12 @@ def test_kv_cache_sliding_window_eviction():
         recovered = torch.cat([b[0] for b in layer_cache], dim=2)
     else:
         recovered = layer_cache[0]
-    expected = torch.arange(5, 8).view(1, 1, effective_len, 1).expand(-1, -1, -1, head_dim).float()
+    expected = (
+        torch.arange(5, 8)
+        .view(1, 1, effective_len, 1)
+        .expand(-1, -1, -1, head_dim)
+        .float()
+    )
     assert torch.equal(recovered, expected)
     print("[OK] KV Cache sliding window eviction works")
 
@@ -380,7 +448,10 @@ def test_kv_cache_sliding_window_eviction():
 def test_kv_cache_long_generate_consistency():
     """generate(use_cache=True) must match no-cache output even when exceeding cache length."""
     config = ModernGPTConfig(
-        n_layer=2, n_head=2, n_embd=64, block_size=32,
+        n_layer=2,
+        n_head=2,
+        n_embd=64,
+        block_size=32,
         dropout=0.0,
     )
     model = ModernGPT(config)
@@ -401,7 +472,9 @@ def test_kv_cache_long_generate_consistency():
 def test_kv_cache_set_restore():
     """set_cache must restore logical order and state."""
     B, n_layers, n_kv_heads, head_dim, max_len = 1, 2, 2, 4, 8
-    cache = KVCacheManager(n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len)
+    cache = KVCacheManager(
+        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
+    )
     cache.init_cache(B, "cpu", torch.float32)
 
     k = torch.randn(B, n_kv_heads, 5, head_dim)
@@ -411,7 +484,9 @@ def test_kv_cache_set_restore():
     cache.advance(5)
 
     snapshot = cache.get_cache()
-    cache2 = KVCacheManager(n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len)
+    cache2 = KVCacheManager(
+        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
+    )
     cache2.init_cache(B, "cpu", torch.float32)
     cache2.set_cache(snapshot)
 
@@ -431,7 +506,7 @@ def test_kv_cache_set_restore():
 
 def test_prepare_shard_writer_dtype_and_index():
     """_ShardWriter must produce readable shards and a dtype-aware .idx."""
-    from data.prepare import _ShardWriter, _select_dtype, _concatenate_shards_to_bin
+    from data.prepare import _ShardWriter, _concatenate_shards_to_bin
     from data.openwebtext import _detect_dtype_from_index
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -476,6 +551,7 @@ def test_prepare_shard_writer_dtype_and_index():
 def test_prepare_dtype_selection():
     """_select_dtype must pick uint16 for small vocab and uint32 for large vocab."""
     from data.prepare import _select_dtype
+
     assert _select_dtype(50000) == np.uint16
     assert _select_dtype(65535) == np.uint16
     assert _select_dtype(65536) == np.uint32
@@ -498,7 +574,9 @@ def test_arithmetic_dataset_pre_tokenize():
     assert "labels" in sample
     assert isinstance(sample["input_ids"], torch.Tensor)
     assert isinstance(sample["labels"], torch.Tensor)
-    assert len(sample["input_ids"]) + 1 == len(sample["labels"]) + 1  # input_ids is tokens[:-1]
+    assert (
+        len(sample["input_ids"]) + 1 == len(sample["labels"]) + 1
+    )  # input_ids is tokens[:-1]
     print("[OK] ArithmeticDataset pre-tokenization works")
 
 
@@ -507,9 +585,7 @@ def test_rule_reward_perfect_partial_and_malformed():
     from rewards.rule_reward import compute_reward
 
     # Perfect answer with derivation.
-    total, fmt, proc, acc = compute_reward(
-        "Step 1: 2 + 3 = 5. <answer>5</answer>", "5"
-    )
+    total, fmt, proc, acc = compute_reward("Step 1: 2 + 3 = 5. <answer>5</answer>", "5")
     assert total > 1.5
     assert fmt == 0.5
     assert proc > 0.0

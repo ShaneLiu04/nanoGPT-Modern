@@ -1743,10 +1743,6 @@ class ModernGPT(nn.Module):
             probs = F.softmax(logits, dim=-1)
             return torch.multinomial(probs, num_samples=1)
 
-        eos_tensor: Optional[torch.Tensor] = None
-        if eos_token_id is not None:
-            eos_tensor = torch.tensor(eos_token_id, dtype=torch.long, device=device)
-
         def _decode_step(
             x: torch.Tensor,
             past_kvs: List[Tuple[torch.Tensor, torch.Tensor]],
@@ -2325,7 +2321,6 @@ class ModernGPT(nn.Module):
                 draft_probs: List[torch.Tensor] = []
                 gamma = min(draft_tokens, max_new_tokens - generated[b])
                 logits_next = current_draft_logits[b]
-                hit_eos = False
                 for _ in range(gamma):
                     tok, p_tok = _draft_sample(logits_next)
                     draft_chunk.append(tok)
@@ -2341,7 +2336,6 @@ class ModernGPT(nn.Module):
                     draft_caches[b].advance(1)
                     logits_next = logits_d[:, -1, :]
                     if eos_token_id is not None and tok.item() == eos_token_id:
-                        hit_eos = True
                         break
                 gamma = len(draft_chunk)
                 if gamma == 0:

@@ -1,8 +1,12 @@
 ﻿"""Batch inference ablation with CUDA-event timing and prefill/decode breakdown."""
-import os, json, torch
+
+import os
+import json
+import torch
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 import tiktoken
+
 
 def load_model(ckpt_path, model_type, device):
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
@@ -18,9 +22,12 @@ def load_model(ckpt_path, model_type, device):
     model.to(device).eval()
     return model
 
+
 def benchmark(model, prompt_ids, max_new_tokens, num_samples, device):
     from inference.generate import benchmark as gen_bench
+
     return gen_bench(model, prompt_ids, max_new_tokens, num_samples, device)
+
 
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -48,13 +55,15 @@ def main():
             for nt in lengths:
                 r = benchmark(model, prompt_ids, nt, num_samples, device)
                 results[label][nt] = r
-                print(f"  {label:20s} gen={nt:3d}: "
-                      f"total={r['total_time_ms']:.0f}ms "
-                      f"prefill={r['prefill_ms']:.0f}ms "
-                      f"decode={r['decode_ms']:.0f}ms "
-                      f"decode_tps={r['decode_tok_s']:.0f} "
-                      f"total_tps={r['total_tok_s']:.0f} "
-                      f"mem={r['peak_mem_mb']:.1f}MB")
+                print(
+                    f"  {label:20s} gen={nt:3d}: "
+                    f"total={r['total_time_ms']:.0f}ms "
+                    f"prefill={r['prefill_ms']:.0f}ms "
+                    f"decode={r['decode_ms']:.0f}ms "
+                    f"decode_tps={r['decode_tok_s']:.0f} "
+                    f"total_tps={r['total_tok_s']:.0f} "
+                    f"mem={r['peak_mem_mb']:.1f}MB"
+                )
         del model
         torch.cuda.empty_cache()
 
@@ -63,6 +72,7 @@ def main():
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\nResults saved to {out_path}")
+
 
 if __name__ == "__main__":
     main()
