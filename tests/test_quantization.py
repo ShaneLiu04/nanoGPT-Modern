@@ -121,6 +121,8 @@ def test_bitsandbytes_import_if_available():
     except Exception as exc:  # pragma: no cover
         pytest.skip(f"bitsandbytes not available: {exc}")
 
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
     cfg = _tiny_config()
     model = ModernGPT(cfg).eval().half().cuda()
     for method in ("bnb_8bit", "bnb_4bit"):
