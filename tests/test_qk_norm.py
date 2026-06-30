@@ -1,6 +1,6 @@
 """Tests for QK-Norm and attention temperature in ModernGPT."""
+
 import math
-import pytest
 import torch
 
 from model import ModernGPT, ModernGPTConfig
@@ -9,14 +9,22 @@ from model import ModernGPT, ModernGPTConfig
 def test_qk_norm_adds_parameters():
     cfg = ModernGPTConfig(n_layer=1, n_head=4, n_embd=64, block_size=16, qk_norm=True)
     model = ModernGPT(cfg)
-    norm_names = [name for name, _ in model.named_modules() if "q_norm" in name or "k_norm" in name]
+    norm_names = [
+        name
+        for name, _ in model.named_modules()
+        if "q_norm" in name or "k_norm" in name
+    ]
     assert len(norm_names) >= cfg.n_layer * 2
 
 
 def test_qk_norm_false_has_no_norm_parameters():
     cfg = ModernGPTConfig(n_layer=1, n_head=4, n_embd=64, block_size=16, qk_norm=False)
     model = ModernGPT(cfg)
-    norm_names = [name for name, _ in model.named_modules() if "q_norm" in name or "k_norm" in name]
+    norm_names = [
+        name
+        for name, _ in model.named_modules()
+        if "q_norm" in name or "k_norm" in name
+    ]
     assert norm_names == []
 
 
@@ -31,8 +39,22 @@ def test_forward_backward_with_qk_norm():
 
 
 def test_attention_temperature_changes_output():
-    cfg_base = ModernGPTConfig(n_layer=1, n_head=4, n_embd=64, block_size=16, qk_norm=False, attn_temperature=1.0)
-    cfg_temp = ModernGPTConfig(n_layer=1, n_head=4, n_embd=64, block_size=16, qk_norm=False, attn_temperature=2.0)
+    cfg_base = ModernGPTConfig(
+        n_layer=1,
+        n_head=4,
+        n_embd=64,
+        block_size=16,
+        qk_norm=False,
+        attn_temperature=1.0,
+    )
+    cfg_temp = ModernGPTConfig(
+        n_layer=1,
+        n_head=4,
+        n_embd=64,
+        block_size=16,
+        qk_norm=False,
+        attn_temperature=2.0,
+    )
     torch.manual_seed(0)
     model_base = ModernGPT(cfg_base)
     torch.manual_seed(0)
@@ -46,7 +68,9 @@ def test_attention_temperature_changes_output():
 
 def test_attention_temperature_scale_matches_eager():
     """Ensure the custom temperature is reflected in attention logits."""
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=8, attn_temperature=math.sqrt(2.0))
+    cfg = ModernGPTConfig(
+        n_layer=1, n_head=2, n_embd=32, block_size=8, attn_temperature=math.sqrt(2.0)
+    )
     model = ModernGPT(cfg)
     model.eval()
     x = torch.randint(0, cfg.vocab_size, (1, 8))
@@ -66,7 +90,9 @@ def test_kv_cache_compatible_with_qk_norm():
             prompt[:, -1:], use_cache=True, past_kvs=past_kvs, start_pos=0
         )
         full_logits, _, _ = model(prompt)
-    assert torch.allclose(logits_prefill[:, -1, :], full_logits[:, -1, :], atol=1e-5, rtol=1e-5)
+    assert torch.allclose(
+        logits_prefill[:, -1, :], full_logits[:, -1, :], atol=1e-5, rtol=1e-5
+    )
     # Decode path may show small SDPA/numerical drift vs. full prefill; verify it runs
     # and produces finite logits (the cache itself is unchanged by QK-Norm).
     assert next_logits.shape == (1, 1, cfg.vocab_size)
@@ -74,7 +100,14 @@ def test_kv_cache_compatible_with_qk_norm():
 
 
 def test_config_serialization_roundtrip():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, qk_norm=True, attn_temperature=1.5, rmsnorm_eps=1e-5)
+    cfg = ModernGPTConfig(
+        n_layer=1,
+        n_head=2,
+        n_embd=32,
+        qk_norm=True,
+        attn_temperature=1.5,
+        rmsnorm_eps=1e-5,
+    )
     d = cfg.to_dict()
     cfg2 = ModernGPTConfig.from_dict(d)
     assert cfg2.qk_norm is True

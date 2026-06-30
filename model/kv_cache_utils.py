@@ -26,7 +26,6 @@ generation quality for most models.
 
 from __future__ import annotations
 
-import math
 from typing import Any, List, Optional, Tuple, Union
 
 import torch

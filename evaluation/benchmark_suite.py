@@ -31,7 +31,6 @@ import sys
 from typing import Any, Dict, List, Optional, Union
 
 import torch
-import torch.nn as nn
 
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig

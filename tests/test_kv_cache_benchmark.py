@@ -6,6 +6,7 @@ These tests therefore focus on:
   1. Correctness: cache and no-cache produce identical outputs.
   2. Sanity: cache path does not crash and completes in bounded time.
 """
+
 import time
 
 import pytest
@@ -18,8 +19,13 @@ from model.modern_gpt import ModernGPT, ModernGPTConfig
 def test_kv_cache_decode_completes_efficiently():
     """Cache path must complete in bounded time for long sequences."""
     config = ModernGPTConfig(
-        n_layer=12, n_head=8, n_embd=512, block_size=1024,
-        vocab_size=1000, dropout=0.0, n_kv_head=2,
+        n_layer=12,
+        n_head=8,
+        n_embd=512,
+        block_size=1024,
+        vocab_size=1000,
+        dropout=0.0,
+        n_kv_head=2,
     )
     model = ModernGPT(config).cuda().eval()
     prompt_len = 512
@@ -64,8 +70,13 @@ def test_kv_cache_decode_completes_efficiently():
 def test_kv_cache_outputs_match_no_cache():
     """Cache and no-cache paths must produce identical token outputs."""
     config = ModernGPTConfig(
-        n_layer=2, n_head=4, n_embd=128, block_size=128,
-        vocab_size=100, dropout=0.0, n_kv_head=2,
+        n_layer=2,
+        n_head=4,
+        n_embd=128,
+        block_size=128,
+        vocab_size=100,
+        dropout=0.0,
+        n_kv_head=2,
     )
     model = ModernGPT(config).eval()
     idx = torch.randint(0, config.vocab_size, (1, 32))

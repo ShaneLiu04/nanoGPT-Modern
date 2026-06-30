@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import warnings
 from collections import defaultdict
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 
 def _char_ngrams(text: str, n: int) -> Set[str]:

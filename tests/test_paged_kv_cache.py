@@ -1,5 +1,5 @@
 """Tests for PagedKVCacheManager."""
-import pytest
+
 import torch
 
 from model import ModernGPT, ModernGPTConfig
@@ -38,7 +38,14 @@ def test_paged_manager_handles_multiblock_sequence():
 
 def test_paged_generation_matches_ring_buffer():
     cfg_ring = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=64)
-    cfg_paged = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=64, use_paged_kv_cache=True, kv_cache_block_size=8)
+    cfg_paged = ModernGPTConfig(
+        n_layer=1,
+        n_head=2,
+        n_embd=32,
+        block_size=64,
+        use_paged_kv_cache=True,
+        kv_cache_block_size=8,
+    )
     torch.manual_seed(0)
     model_ring = ModernGPT(cfg_ring)
     torch.manual_seed(0)
@@ -46,13 +53,19 @@ def test_paged_generation_matches_ring_buffer():
     prompt = torch.randint(0, cfg_ring.vocab_size, (1, 16))
     with torch.no_grad():
         # Use top_k=1 to make sampling deterministic (greedy).
-        out_ring = model_ring.generate(prompt, max_new_tokens=8, use_cache=True, top_k=1)
-        out_paged = model_paged.generate(prompt, max_new_tokens=8, use_cache=True, top_k=1)
+        out_ring = model_ring.generate(
+            prompt, max_new_tokens=8, use_cache=True, top_k=1
+        )
+        out_paged = model_paged.generate(
+            prompt, max_new_tokens=8, use_cache=True, top_k=1
+        )
     assert torch.equal(out_ring, out_paged)
 
 
 def test_paged_config_serialization():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, use_paged_kv_cache=True, kv_cache_block_size=32)
+    cfg = ModernGPTConfig(
+        n_layer=1, n_head=2, n_embd=32, use_paged_kv_cache=True, kv_cache_block_size=32
+    )
     d = cfg.to_dict()
     cfg2 = ModernGPTConfig.from_dict(d)
     assert cfg2.use_paged_kv_cache is True

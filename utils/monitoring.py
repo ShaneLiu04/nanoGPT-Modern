@@ -12,8 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
-import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
@@ -199,8 +198,6 @@ class MemoryProfiler:
         """
         if not torch.cuda.is_available():
             return {"error": "CUDA not available"}
-
-        import torch.cuda
 
         torch.cuda.synchronize(self.device)
         alloc = torch.cuda.memory_allocated(self.device)

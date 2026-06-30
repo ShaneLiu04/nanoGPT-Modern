@@ -5,16 +5,17 @@ These tests verify that the grouped-broadcast reshape
 are numerically identical to ``repeat_interleave`` while never copying KV,
 across training (causal), decode (non-causal), masked, and cached paths.
 """
+
 import pytest
 import torch
 
 from model.attention_utils import probe_gqa_sdpa_support, reset_gqa_probe_cache
 from model.modern_gpt import ModernGPT, ModernGPTConfig, _gqa_grouped_sdpa
 
-
 # ---------------------------------------------------------------------------
 #  _gqa_grouped_sdpa unit tests
 # ---------------------------------------------------------------------------
+
 
 class TestGQAGroupedSDPA:
     """Unit tests for the _gqa_grouped_sdpa helper."""
@@ -36,7 +37,11 @@ class TestGQAGroupedSDPA:
             is_causal=True,
         )
         out = _gqa_grouped_sdpa(
-            self.q, self.k, self.v, self.Hkv, self.rep,
+            self.q,
+            self.k,
+            self.v,
+            self.Hkv,
+            self.rep,
             is_causal=True,
         )
         assert out.shape == ref.shape
@@ -54,7 +59,11 @@ class TestGQAGroupedSDPA:
             is_causal=False,
         )
         out = _gqa_grouped_sdpa(
-            q1, k1, v1, self.Hkv, self.rep,
+            q1,
+            k1,
+            v1,
+            self.Hkv,
+            self.rep,
             is_causal=False,
         )
         assert out.shape == ref.shape
@@ -76,7 +85,11 @@ class TestGQAGroupedSDPA:
             is_causal=False,
         )
         out = _gqa_grouped_sdpa(
-            q1, k1, v1, self.Hkv, self.rep,
+            q1,
+            k1,
+            v1,
+            self.Hkv,
+            self.rep,
             attn_mask=mask,
             is_causal=False,
         )
@@ -93,8 +106,13 @@ class TestGQAGroupedSDPA:
             scale=0.5,
         )
         out = _gqa_grouped_sdpa(
-            self.q, self.k, self.v, self.Hkv, self.rep,
-            is_causal=True, scale=0.5,
+            self.q,
+            self.k,
+            self.v,
+            self.Hkv,
+            self.rep,
+            is_causal=True,
+            scale=0.5,
         )
         assert out.shape == ref.shape
         assert torch.allclose(out, ref, atol=1e-5, rtol=1e-5)
@@ -107,7 +125,10 @@ class TestGQAGroupedSDPA:
         v = torch.randn(1, H, 16, 32)
         out = _gqa_grouped_sdpa(q, k, v, H, 1, is_causal=True)
         ref = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, is_causal=True,
+            q,
+            k,
+            v,
+            is_causal=True,
         )
         assert torch.allclose(out, ref, atol=1e-5, rtol=1e-5)
 
@@ -115,6 +136,7 @@ class TestGQAGroupedSDPA:
 # ---------------------------------------------------------------------------
 #  probe_gqa_sdpa_support tests
 # ---------------------------------------------------------------------------
+
 
 class TestGQAProbe:
     """Tests for the runtime GQA broadcast probe."""
@@ -139,7 +161,9 @@ class TestGQAProbe:
 
     def test_probe_invalid_gqa_config(self):
         raw, grouped = probe_gqa_sdpa_support(
-            torch.device("cpu"), n_head=3, n_kv_head=2,
+            torch.device("cpu"),
+            n_head=3,
+            n_kv_head=2,
         )
         assert raw is False
         assert grouped is False
@@ -156,14 +180,21 @@ class TestGQAProbe:
 #  Integration tests with ModernGPT
 # ---------------------------------------------------------------------------
 
+
 class TestGQABroadcastIntegration:
     """Integration tests: GQA broadcast strategy with full model."""
 
     def _make_model(self, gqa_broadcast="auto", **kw):
         cfg = ModernGPTConfig(
-            n_layer=1, n_head=4, n_embd=64, block_size=32,
-            n_kv_head=2, vocab_size=100, dropout=0.0,
-            gqa_broadcast=gqa_broadcast, **kw,
+            n_layer=1,
+            n_head=4,
+            n_embd=64,
+            block_size=32,
+            n_kv_head=2,
+            vocab_size=100,
+            dropout=0.0,
+            gqa_broadcast=gqa_broadcast,
+            **kw,
         )
         return ModernGPT(cfg)
 
@@ -224,7 +255,10 @@ class TestGQABroadcastIntegration:
     def test_gqa_broadcast_config_serialization(self):
         """gqa_broadcast round-trips through to_dict / from_dict."""
         cfg = ModernGPTConfig(
-            n_layer=1, n_head=4, n_embd=64, gqa_broadcast="grouped",
+            n_layer=1,
+            n_head=4,
+            n_embd=64,
+            gqa_broadcast="grouped",
         )
         d = cfg.to_dict()
         assert d["gqa_broadcast"] == "grouped"
@@ -235,15 +269,25 @@ class TestGQABroadcastIntegration:
         """Invalid gqa_broadcast value raises ValueError."""
         with pytest.raises(ValueError, match="gqa_broadcast"):
             ModernGPTConfig(
-                n_layer=1, n_head=4, n_embd=64, gqa_broadcast="invalid",
+                n_layer=1,
+                n_head=4,
+                n_embd=64,
+                gqa_broadcast="invalid",
             )
 
     def test_mha_no_gqa_ignores_broadcast_mode(self):
         """When n_kv_head == n_head (MHA), broadcast mode is irrelevant."""
-        model = ModernGPT(ModernGPTConfig(
-            n_layer=1, n_head=4, n_embd=64, block_size=32,
-            vocab_size=100, dropout=0.0, gqa_broadcast="grouped",
-        ))
+        model = ModernGPT(
+            ModernGPTConfig(
+                n_layer=1,
+                n_head=4,
+                n_embd=64,
+                block_size=32,
+                vocab_size=100,
+                dropout=0.0,
+                gqa_broadcast="grouped",
+            )
+        )
         model.eval()
         x = torch.randint(0, 100, (1, 8))
         with torch.no_grad():

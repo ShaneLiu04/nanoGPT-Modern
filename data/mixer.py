@@ -13,11 +13,8 @@ from typing import (
     Dict,
     Iterable,
     Iterator,
-    List,
     Mapping,
     Optional,
-    Sequence,
-    Union,
 )
 
 import numpy as np

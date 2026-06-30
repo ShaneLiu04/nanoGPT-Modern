@@ -28,14 +28,13 @@ Usage Example
 from __future__ import annotations
 
 import dataclasses
-import math
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
+from typing import Callable, Dict, List, Optional, Tuple, Union, cast
 
 import torch
 import torch.nn as nn
 
-from model.modern_gpt import ModernGPT, ModernGPTConfig
+from model.modern_gpt import ModernGPTConfig
 from model.kv_cache_utils import KVCacheManager
 
 
@@ -185,7 +184,7 @@ class BatchGenerator:
 
     def _get_cache_manager(self, batch_size: int) -> KVCacheManager:
         """Allocate a KVCacheManager compatible with the model config."""
-        head_dim = self.config.n_embd // self.config.n_head
+        _head_dim = self.config.n_embd // self.config.n_head
         # Use quantized cache if the model config requests it (future hook).
         cache_dtype = getattr(self.config, "kv_cache_dtype", "bf16")
         return KVCacheManager.from_config(self.config, cache_dtype=cache_dtype)
@@ -306,7 +305,7 @@ class BatchGenerator:
                         # Replace the precomputed prefix KV for this sequence.
                         # The prefix must be <= prompt_len; we overwrite the first
                         # prefix_len positions of the cache.
-                        prefix_len = prefix_kv[0][0].shape[2]
+                        _prefix_len = prefix_kv[0][0].shape[2]
                         for li in range(self.config.n_layer):
                             k_p, v_p = prefix_kv[li]
                             # Ensure same batch dimension

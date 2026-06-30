@@ -1,9 +1,9 @@
 """Tests for document packing and cross-document attention mask."""
+
 import os
 import tempfile
 
 import numpy as np
-import pytest
 import torch
 
 
@@ -45,6 +45,7 @@ def test_packing_dataset_produces_document_ids():
     finally:
         # np.memmap keeps files open on Windows; ignore cleanup errors.
         import shutil
+
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -55,9 +56,15 @@ def test_packing_cross_document_mask_changes_output():
     model.eval()
 
     # Two documents packed into one sequence.
-    x = torch.tensor([[1, 2, 3, 4, 50256, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.long)
-    y = torch.tensor([[2, 3, 4, 50256, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, -1]], dtype=torch.long)
-    document_ids = torch.tensor([[0, 0, 0, 0, 0, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1]], dtype=torch.long)
+    x = torch.tensor(
+        [[1, 2, 3, 4, 50256, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.long
+    )
+    y = torch.tensor(
+        [[2, 3, 4, 50256, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, -1]], dtype=torch.long
+    )
+    document_ids = torch.tensor(
+        [[0, 0, 0, 0, 0, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1]], dtype=torch.long
+    )
 
     with torch.no_grad():
         logits_no_mask, _, _ = model(x, targets=y)
@@ -96,6 +103,7 @@ def test_packing_long_document_chunks_share_doc_id():
                 assert y[-1].item() != eot
     finally:
         import shutil
+
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -117,4 +125,5 @@ def test_memmap_dataset_shuffle_buffer():
         assert s1 != s2
     finally:
         import shutil
+
         shutil.rmtree(tmpdir, ignore_errors=True)

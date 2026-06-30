@@ -16,15 +16,11 @@ Usage
 from __future__ import annotations
 
 import json
-import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
-
-from model.modern_gpt import ModernGPT
-from inference.generate_utils import _sample_logits
 
 
 class Judge(ABC):

@@ -1,6 +1,4 @@
 """Tests for the pure-PyTorch blockwise (Ring) attention fallback."""
-import math
-import os
 
 import pytest
 import torch
@@ -9,7 +7,7 @@ import torch.nn.functional as F
 
 from model import ModernGPT, ModernGPTConfig
 from model import ring_attention as ring_attn_module
-from model.attention_utils import set_attention_backend, get_attention_backend_info
+from model.attention_utils import set_attention_backend
 
 
 def _reference_sdpa(q, k, v, causal=True, scale=None):
@@ -139,7 +137,6 @@ def test_model_runs_with_ring_attention():
 
 def test_model_ring_attention_matches_sdpa():
     # Force the math backend so SDPA is deterministic and easy to align with.
-    old_info = get_attention_backend_info() if torch.cuda.is_available() else {}
     try:
         if torch.cuda.is_available():
             set_attention_backend("math")

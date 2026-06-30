@@ -1,8 +1,8 @@
 """Tests for GRPO trainer behavior."""
+
 import argparse
 import os
 import tempfile
-from pathlib import Path
 
 import pytest
 import torch
@@ -14,13 +14,19 @@ from utils.checkpoint import save_checkpoint
 
 
 def _make_sft_checkpoint(path, dropout=0.0):
-    config = ModernGPTConfig(block_size=32, n_layer=2, n_head=2, n_embd=32, dropout=dropout)
+    config = ModernGPTConfig(
+        block_size=32, n_layer=2, n_head=2, n_embd=32, dropout=dropout
+    )
     model = ModernGPT(config)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     save_checkpoint(
-        model, torch.optim.AdamW(model.parameters(), lr=1e-3),
-        iter_num=0, best_val_loss=1.0, config=config,
-        out_dir=os.path.dirname(path), filename=os.path.basename(path),
+        model,
+        torch.optim.AdamW(model.parameters(), lr=1e-3),
+        iter_num=0,
+        best_val_loss=1.0,
+        config=config,
+        out_dir=os.path.dirname(path),
+        filename=os.path.basename(path),
     )
 
 

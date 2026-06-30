@@ -1,9 +1,9 @@
 """End-to-end smoke tests for training/train_dpo.py."""
+
 import argparse
 import os
 import tempfile
 
-import pytest
 import torch
 
 from model.modern_gpt import ModernGPT, ModernGPTConfig
@@ -13,7 +13,11 @@ from training.train_dpo import DPOTrainer
 def _make_minimal_checkpoint(path, seed=42):
     torch.manual_seed(seed)
     config = ModernGPTConfig(
-        block_size=64, n_layer=2, n_head=2, n_embd=32, dropout=0.0,
+        block_size=64,
+        n_layer=2,
+        n_head=2,
+        n_embd=32,
+        dropout=0.0,
     )
     model = ModernGPT(config)
     torch.save(
@@ -74,4 +78,5 @@ def test_dpo_trainer_scheduler_and_train_step():
         assert train_loss >= 0
     finally:
         import shutil
+
         shutil.rmtree(tmpdir, ignore_errors=True)

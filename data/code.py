@@ -7,12 +7,8 @@ Includes AST-based syntax filtering and language-group sampling.
 from __future__ import annotations
 
 import ast
-import json
-import os
-import random
-import warnings
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, Iterator, Mapping, Optional, Sequence, Union
 
 import torch
 from torch.utils.data import IterableDataset

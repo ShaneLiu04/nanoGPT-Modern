@@ -17,11 +17,9 @@ import os
 import time
 import random
 import argparse
-from contextlib import nullcontext
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 
 from collections import defaultdict
@@ -287,7 +285,6 @@ class GRPOTrainer(BaseTrainer):
         and the raw response token-id lists.
         """
         eos_token_id = self.eot_token
-        prompt_lens = [len(toks) for toks in prompt_tokens_list]
 
         by_length = defaultdict(list)
         for i, toks in enumerate(prompt_tokens_list):
@@ -695,7 +692,7 @@ class GRPOTrainer(BaseTrainer):
             raw_loss = loss.item() * accum_steps if accum_steps > 1 else loss.item()
             if self.global_step % 10 == 0 and self.master_process:
                 t1 = time.time()
-                dt = t1 - t0
+                _dt = t1 - t0
                 t0 = t1
                 print(
                     f"step {self.global_step}: loss {raw_loss:.4f}, "

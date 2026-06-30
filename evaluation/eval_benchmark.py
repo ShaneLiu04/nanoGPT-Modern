@@ -23,7 +23,6 @@ Examples
         --tasks hellaswag,lambada_openai
 """
 
-import os
 import argparse
 import math
 import json

@@ -1,5 +1,5 @@
 """Tests for Multi-Token Prediction (MTP)."""
-import pytest
+
 import torch
 
 from model import ModernGPT, ModernGPTConfig
@@ -32,7 +32,9 @@ def test_mtp_forward_backward():
 def test_mtp_loss_grows_with_n_future():
     """More future heads should produce a strictly positive MTP component."""
     cfg1 = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=0)
-    cfg2 = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=1, mtp_weight=1.0)
+    cfg2 = ModernGPTConfig(
+        n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=1, mtp_weight=1.0
+    )
     torch.manual_seed(0)
     model1 = ModernGPT(cfg1)
     torch.manual_seed(0)
@@ -44,8 +46,12 @@ def test_mtp_loss_grows_with_n_future():
 
 
 def test_mtp_weight_scales_loss():
-    cfg_low = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=1, mtp_weight=0.1)
-    cfg_high = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=1, mtp_weight=1.0)
+    cfg_low = ModernGPTConfig(
+        n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=1, mtp_weight=0.1
+    )
+    cfg_high = ModernGPTConfig(
+        n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=1, mtp_weight=1.0
+    )
     torch.manual_seed(0)
     model_low = ModernGPT(cfg_low)
     torch.manual_seed(0)

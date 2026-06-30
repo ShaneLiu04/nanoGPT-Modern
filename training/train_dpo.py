@@ -22,7 +22,7 @@ import json
 import os
 import random
 from contextlib import nullcontext
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
@@ -30,7 +30,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset, Dataset
 
 from model.attention_utils import print_attention_backend, set_attention_backend
-from model.modern_gpt import ModernGPTConfig
 from training.trainer_base import (
     BaseTrainer,
     load_model_from_checkpoint,

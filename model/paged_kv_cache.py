@@ -206,7 +206,7 @@ class PagedKVCacheManager:
         (all sequences are concatenated along the sequence dim).  This mirrors
         ``KVCacheManager.get_cache()``.
         """
-        if not self._k or all(l == 0 for l in self._seq_len):
+        if not self._k or all(length == 0 for length in self._seq_len):
             return []
 
         batch_size = self._batch_size
@@ -257,7 +257,7 @@ class PagedKVCacheManager:
 
     def get_cache(self):
         """Return cached K/V as a list of blocks per layer."""
-        if not self._k or all(l == 0 for l in self._seq_len):
+        if not self._k or all(length == 0 for length in self._seq_len):
             return []
         layer_blocks = self._get_layer_blocks(0)
         return [layer_blocks for _ in range(self.n_layers)]

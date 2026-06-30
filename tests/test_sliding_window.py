@@ -1,5 +1,5 @@
 """Tests for Sliding Window Attention integration."""
-import pytest
+
 import torch
 
 from model import ModernGPT, ModernGPTConfig
@@ -17,7 +17,9 @@ def test_build_sliding_window_mask_shape():
 
 
 def test_forward_with_sliding_window():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=4)
+    cfg = ModernGPTConfig(
+        n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=4
+    )
     model = ModernGPT(cfg)
     x = torch.randint(0, cfg.vocab_size, (2, 8))
     logits, loss, _ = model(x, targets=x)
@@ -27,7 +29,9 @@ def test_forward_with_sliding_window():
 
 def test_sliding_window_changes_output():
     cfg_full = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16)
-    cfg_win = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=2)
+    cfg_win = ModernGPTConfig(
+        n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=2
+    )
     torch.manual_seed(0)
     model_full = ModernGPT(cfg_full)
     torch.manual_seed(0)
@@ -40,7 +44,9 @@ def test_sliding_window_changes_output():
 
 
 def test_sliding_window_cache_bounded():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=3)
+    cfg = ModernGPTConfig(
+        n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=3
+    )
     model = ModernGPT(cfg)
     model.eval()
     prompt = torch.randint(0, cfg.vocab_size, (1, 6))

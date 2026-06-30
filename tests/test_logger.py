@@ -1,10 +1,8 @@
 """Regression tests for utils.logging."""
-import os
+
 import tempfile
-from pathlib import Path
 from unittest import mock
 
-import pytest
 import torch
 
 
@@ -12,7 +10,9 @@ from utils.logging import Logger
 
 
 def test_logger_degrades_on_tensorboard_failure():
-    with mock.patch("torch.utils.tensorboard.SummaryWriter", side_effect=ImportError("no tb")):
+    with mock.patch(
+        "torch.utils.tensorboard.SummaryWriter", side_effect=ImportError("no tb")
+    ):
         logger = Logger(
             project_name="test",
             run_name="tb_fail",
@@ -38,7 +38,6 @@ def test_logger_degrades_on_wandb_failure():
 
 
 def test_log_scalar_and_scalars(tmp_path):
-    from torch.utils.tensorboard import SummaryWriter
 
     logger = Logger(
         project_name="test",

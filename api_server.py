@@ -24,8 +24,6 @@ Then test with curl:
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import time
 import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union

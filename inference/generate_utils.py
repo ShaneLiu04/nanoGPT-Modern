@@ -10,7 +10,7 @@ GRPO rollouts).
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Union
 
 import torch
 import torch.nn as nn

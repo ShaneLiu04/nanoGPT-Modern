@@ -170,7 +170,6 @@ class Logger:
 
     def log_model_weights(self, model, step: int, tag_prefix: str = "param"):
         """Log per-layer parameter value histograms."""
-        import torch
 
         for name, p in model.named_parameters():
             # Sanitize tag name.

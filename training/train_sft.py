@@ -22,7 +22,6 @@ from data.arithmetic import (
     collate_fn,
 )
 from model.attention_utils import set_attention_backend, print_attention_backend
-from model.modern_gpt import ModernGPTConfig
 from training.trainer_base import (
     BaseTrainer,
     load_model_from_checkpoint,
@@ -293,7 +292,7 @@ class SFTTrainer(BaseTrainer):
                 raw_loss = loss.item() * accum_steps
                 if self.global_step % 10 == 0 and self.master_process:
                     t1 = time.time()
-                    dt = t1 - t0
+                    _dt = t1 - t0
                     t0 = t1
                     print(f"step {self.global_step}: loss {raw_loss:.4f}, lr {lr:.2e}")
                     self.log_scalars(
