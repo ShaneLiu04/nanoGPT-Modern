@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import torch
 import torch.nn as nn
@@ -73,6 +73,8 @@ def _load_model(ckpt_path: str, model_type: str, device: str) -> nn.Module:
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     raw_config = ckpt.get("config", {})
 
+    config: Union[BaselineGPTConfig, ModernGPTConfig]
+    model: Union[BaselineGPT, ModernGPT]
     if isinstance(raw_config, dict):
         if model_type == "baseline":
             config = BaselineGPTConfig.from_dict(raw_config)
@@ -82,7 +84,10 @@ def _load_model(ckpt_path: str, model_type: str, device: str) -> nn.Module:
             model = ModernGPT(config)
     else:
         config = raw_config
-        model = (BaselineGPT if model_type == "baseline" else ModernGPT)(config)
+        if model_type == "baseline":
+            model = BaselineGPT(config)
+        else:
+            model = ModernGPT(config)  # type: ignore[arg-type]
 
     model.load_state_dict(ckpt["model"])
     model.to(device)
@@ -131,7 +136,7 @@ class _OnnxCacheWrapper(nn.Module):
         self,
         idx: torch.Tensor,
         *past_kvs: torch.Tensor,
-    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor], ...]:
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
         """Forward with explicit past KV pairs.
 
         Parameters
@@ -155,7 +160,7 @@ class _OnnxCacheWrapper(nn.Module):
             idx, past_kvs=past_kv_list, use_cache=True, start_pos=0
         )
         # Flatten new KV pairs into a tuple
-        flat = tuple(t for pair in new_past_kvs for t in pair)  # type: ignore[arg-type]
+        flat = cast(Tuple[torch.Tensor, ...], tuple(t for pair in new_past_kvs for t in pair))
         return logits, flat
 
 
@@ -193,6 +198,7 @@ def export_to_onnx(
     device = next(model.parameters()).device
     vocab_size = model.config.vocab_size
 
+    wrapper: nn.Module
     if use_cache:
         wrapper = _OnnxCacheWrapper(model)
         dummy_idx = torch.randint(
@@ -303,7 +309,7 @@ def validate_onnx(
     match = torch.allclose(pt_logits, ort_logits, atol=atol, rtol=rtol)
     max_diff = (pt_logits - ort_logits).abs().max().item()
     print(
-        f"[ONNX Validation] max_diff={max_diff:.6e} | atol={atol} | rtol={rtot} | "
+        f"[ONNX Validation] max_diff={max_diff:.6e} | atol={atol} | rtol={rtol} | "
         f"{'PASS' if match else 'FAIL'}"
     )
     return match

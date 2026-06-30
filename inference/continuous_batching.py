@@ -29,7 +29,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 import torch
 import torch.nn as nn
@@ -262,7 +262,7 @@ class BatchGenerator:
             max_new = min(max_new, max_total_tokens)
 
         # Right-pad prompts to the same length so we can prefill in one forward.
-        prompt_lens = [r.prompt_ids.shape[1] for r in requests]
+        prompt_lens = [cast(torch.Tensor, r.prompt_ids).shape[1] for r in requests]
         max_prompt_len = max(prompt_lens)
         input_ids = torch.full(
             (B, max_prompt_len), self.eos_token_id or 0, dtype=torch.long, device=self.device
@@ -270,12 +270,12 @@ class BatchGenerator:
         attention_mask = torch.zeros((B, max_prompt_len), dtype=torch.bool, device=self.device)
         for b, req in enumerate(requests):
             pl = prompt_lens[b]
-            input_ids[b, :pl] = req.prompt_ids[0, :pl].to(self.device)
+            input_ids[b, :pl] = cast(torch.Tensor, req.prompt_ids)[0, :pl].to(self.device)
             attention_mask[b, :pl] = True
 
         # Build a shared KV cache manager for the batch.
         cache = self._get_cache_manager(B)
-        cache.init_cache(B, self.device, next(self.model.parameters()).dtype)
+        cache.init_cache(B, torch.device(self.device), next(self.model.parameters()).dtype)
 
         # --- Prefill: encode all prompts together ---
         with torch.no_grad():
@@ -355,7 +355,11 @@ class BatchGenerator:
             next_tokens = torch.zeros(B, dtype=torch.long, device=self.device)
             for b in range(B):
                 if finished[b]:
-                    next_tokens[b] = eos_ids[b] if eos_ids[b] is not None else 0
+                    eos_id = eos_ids[b]
+                    if eos_id is None:
+                        next_tokens[b] = 0
+                    else:
+                        next_tokens[b] = eos_id
                 else:
                     next_tokens[b] = self._sample(
                         logits_last[b].unsqueeze(0),
@@ -367,7 +371,7 @@ class BatchGenerator:
             # Append and mark finished.
             for b in range(B):
                 if not finished[b]:
-                    results[b].append(next_tokens[b].item())
+                    results[b].append(int(next_tokens[b].item()))
                     generated_counts[b] += 1
                     if eos_ids[b] is not None and next_tokens[b].item() == eos_ids[b]:
                         finished[b] = True

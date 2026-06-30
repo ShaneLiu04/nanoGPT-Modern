@@ -92,6 +92,7 @@ class ModernGPTModelConfig(ModelConfig):
     @model_validator(mode="after")
     def _check_gqa(self) -> ModernGPTModelConfig:
         """Ensure n_head is divisible by n_kv_head."""
+        assert self.n_kv_head is not None
         if self.n_head % self.n_kv_head != 0:
             raise ValueError(
                 f"n_head ({self.n_head}) must be divisible by n_kv_head ({self.n_kv_head})"

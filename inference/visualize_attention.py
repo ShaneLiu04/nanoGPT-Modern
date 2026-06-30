@@ -158,8 +158,8 @@ class AttentionVisualizer:
 
             # Truncate to token length.
             T = min(mat.shape[0], len(tokens))
-            mat = mat[:T, :T].numpy()
-            sns.heatmap(mat, ax=ax, cmap="YlOrRd", xticklabels=tokens[:T], yticklabels=tokens[:T])
+            mat_np = mat[:T, :T].numpy()
+            sns.heatmap(mat_np, ax=ax, cmap="YlOrRd", xticklabels=tokens[:T], yticklabels=tokens[:T])
             ax.set_title(title)
             ax.tick_params(axis="both", labelsize=6)
 

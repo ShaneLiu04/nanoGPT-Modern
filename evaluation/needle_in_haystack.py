@@ -166,8 +166,8 @@ class NeedleEvaluator:
         by_depth: Dict[float, List[bool]] = {d: [] for d in depths}
         by_length: Dict[int, List[bool]] = {l: [] for l in context_lengths}
         for s in scores:
-            by_depth[s["depth"]].append(s["correct"])
-            by_length[s["context_length"]].append(s["correct"])
+            by_depth[float(s["depth"])].append(bool(s["correct"]))
+            by_length[int(s["context_length"])].append(bool(s["correct"]))
 
         summary = {
             "overall_accuracy": sum(s["correct"] for s in scores) / len(scores) if scores else 0.0,

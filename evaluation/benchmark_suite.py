@@ -75,6 +75,8 @@ def _load_model_for_eval(checkpoint_path: str, device: Union[str, torch.device] 
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     raw_config = ckpt.get("config")
     model_type = raw_config.pop("model_type", "modern") if isinstance(raw_config, dict) else "modern"
+    config: Union[BaselineGPTConfig, ModernGPTConfig]
+    model: Union[BaselineGPT, ModernGPT]
     if model_type == "baseline":
         config = BaselineGPTConfig.from_dict(raw_config) if isinstance(raw_config, dict) else BaselineGPTConfig()
         model = BaselineGPT(config)

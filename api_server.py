@@ -27,7 +27,7 @@ import json
 import os
 import time
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -136,7 +136,7 @@ class ModelState:
             try:
                 self.model = torch.compile(
                     self.model, mode="reduce-overhead", fullgraph=False, dynamic=True
-                )
+                )  # type: ignore[assignment]
             except Exception as e:
                 warnings.warn(f"torch.compile failed for API server: {e}")
 
@@ -145,6 +145,8 @@ class ModelState:
     ) -> Tuple[nn.Module, Any]:
         ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
         raw_config = ckpt.get("config", {})
+        config: Union[BaselineGPTConfig, ModernGPTConfig]
+        model: Union[BaselineGPT, ModernGPT]
         if isinstance(raw_config, dict):
             if model_type == "baseline":
                 config = BaselineGPTConfig.from_dict(raw_config)
@@ -154,7 +156,10 @@ class ModelState:
                 model = ModernGPT(config)
         else:
             config = raw_config
-            model = (BaselineGPT if model_type == "baseline" else ModernGPT)(config)
+            if model_type == "baseline":
+                model = BaselineGPT(config)
+            else:
+                model = ModernGPT(config)  # type: ignore[arg-type]
         model.load_state_dict(ckpt["model"])
         model.to(device)
         model.eval()
