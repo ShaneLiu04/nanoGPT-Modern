@@ -86,20 +86,20 @@ class NanoGPTModernForCausalLM(PreTrainedModel):
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
 
+    # The LM head shares its weight with the token embedding.  Declaring the
+    # mapping lets ``transformers`` retie the head after ``from_pretrained``
+    # even when we do not save the redundant key.
+    _tied_weights_keys = {"model.lm_head.weight": "model.transformer.wte.weight"}
+
     def __init__(self, config: NanoGPTModernConfig):
         super().__init__(config)
         self.model = ModernGPT(config.to_nanogpt_config())
         self.post_init()
-        # Avoid safetensors shared-tensor error by not saving the tied head
+        # Avoid safetensors shared-tensor errors by not saving the tied head
         # weight separately.  The embedding weight is sufficient; on load
-        # ``from_pretrained`` will rebuild ``lm_head`` via ``post_init``.
+        # ``from_pretrained`` uses ``_tied_weights_keys`` to restore the tie.
         self._keys_to_ignore_on_save = ["model.lm_head.weight"]
-        # Also tell older transformers not to warn about this tie.
-        self._tied_weights_keys = []
-        
-    def _init_weights(self, module):
-        """No-op: ModernGPT already handles its own init."""
-        pass
+
 
     def get_input_embeddings(self) -> Any:
         return self.model.transformer.wte

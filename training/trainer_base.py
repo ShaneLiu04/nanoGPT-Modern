@@ -78,7 +78,9 @@ def cleanup_distributed():
 
 def set_seed(seed, rank=0):
     """Set random seeds for torch/numpy/random with rank-based offset."""
-    seed = seed + rank
+    seed = int(seed) + int(rank)
+    # NumPy requires a non-negative seed below 2**32.
+    seed = seed % 2**32
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -94,7 +96,9 @@ def make_worker_init_fn(base_seed=0, rank=0):
         DataLoader(..., worker_init_fn=make_worker_init_fn(args.seed, rank))
     """
     def _worker_init(worker_id):
-        worker_seed = base_seed + rank * 1000 + worker_id
+        # In non-distributed mode ``rank`` is -1; treat it as 0 for seeding.
+        effective_rank = rank if rank >= 0 else 0
+        worker_seed = base_seed + effective_rank * 1000 + worker_id
         set_seed(worker_seed)
     return _worker_init
 
