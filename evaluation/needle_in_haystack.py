@@ -13,9 +13,7 @@ Usage
 
 from __future__ import annotations
 
-import random
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -171,7 +169,7 @@ class NeedleEvaluator:
 
         # Summary.
         by_depth: Dict[float, List[bool]] = {d: [] for d in depths}
-        by_length: Dict[int, List[bool]] = {l: [] for l in context_lengths}
+        by_length: Dict[int, List[bool]] = {length: [] for length in context_lengths}
         for s in scores:
             by_depth[float(s["depth"])].append(bool(s["correct"]))
             by_length[int(s["context_length"])].append(bool(s["correct"]))
@@ -181,7 +179,7 @@ class NeedleEvaluator:
                 sum(s["correct"] for s in scores) / len(scores) if scores else 0.0
             ),
             "by_depth": {d: sum(v) / len(v) for d, v in by_depth.items()},
-            "by_length": {l: sum(v) / len(v) for l, v in by_length.items()},
+            "by_length": {length: sum(v) / len(v) for length, v in by_length.items()},
         }
 
         return {

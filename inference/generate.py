@@ -4,7 +4,8 @@ Uses CUDA events for precise wall-time measurement and separates
 prefill (prompt encoding) from decode (token-by-token generation).
 """
 
-import os, time, argparse, json
+import argparse
+import json
 import torch
 from model.attention_utils import set_attention_backend, print_attention_backend
 from model.modern_gpt import ModernGPT, ModernGPTConfig

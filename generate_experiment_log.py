@@ -1,13 +1,12 @@
 import json
-import os
 
-with open('out/inference_ablation_results.json', encoding='utf-8') as f:
+with open("out/inference_ablation_results.json", encoding="utf-8") as f:
     inf = json.load(f)
-with open('out/full_evaluation_results.json', encoding='utf-8') as f:
+with open("out/full_evaluation_results.json", encoding="utf-8") as f:
     eval_res = json.load(f)
-with open('out/sft_fast/eval_results.json', encoding='utf-8') as f:
+with open("out/sft_fast/eval_results.json", encoding="utf-8") as f:
     sft_eval = json.load(f)
-with open('out/grpo_fast/eval_results.json', encoding='utf-8') as f:
+with open("out/grpo_fast/eval_results.json", encoding="utf-8") as f:
     grpo_eval = json.load(f)
 
 report = """
@@ -241,10 +240,10 @@ GRPO 评估:     out/grpo_fast/eval_results.json
 ================================================================================
 """
 
-output_path = 'docs/EXPERIMENT_LOG.md'
-with open(output_path, 'w', encoding='utf-8') as f:
+output_path = "docs/EXPERIMENT_LOG.md"
+with open(output_path, "w", encoding="utf-8") as f:
     f.write(report)
 
-print(f'Full experiment log saved to {output_path}')
+print(f"Full experiment log saved to {output_path}")
 print()
 print(report)
