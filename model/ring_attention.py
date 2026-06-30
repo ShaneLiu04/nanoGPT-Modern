@@ -11,6 +11,7 @@ backend-independent attention.
 .. _From Online Softmax to FlashAttention:
    https://arxiv.org/abs/2305.13245
 """
+
 from __future__ import annotations
 
 import math

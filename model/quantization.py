@@ -5,6 +5,7 @@ optional ``bitsandbytes`` wrappers.  The quantized modules are intended for
 **inference only**: they keep weights in low precision and de-quantize on the
 fly during ``forward``.
 """
+
 from __future__ import annotations
 
 import re
@@ -80,7 +81,9 @@ class QuantizedLinear(nn.Module):
             self.register_parameter("bias", None)
 
     @classmethod
-    def from_float(cls, module: nn.Linear, dtype: torch.dtype = torch.float16) -> "QuantizedLinear":
+    def from_float(
+        cls, module: nn.Linear, dtype: torch.dtype = torch.float16
+    ) -> "QuantizedLinear":
         """Create a quantized copy of a ``nn.Linear`` module."""
         qmodule = cls(
             module.in_features,
@@ -148,7 +151,9 @@ def _make_bnb_8bit(linear: nn.Linear, config: QuantConfig) -> nn.Module:
         linear.weight.data,
         requires_grad=False,
         has_fp16_weights=False,
-    ).to(device)  # type: ignore[misc]
+    ).to(
+        device
+    )  # type: ignore[misc]
     return new
 
 
@@ -171,7 +176,9 @@ def _make_bnb_4bit(linear: nn.Linear, config: QuantConfig) -> nn.Module:
     new.weight = bnb.nn.Params4bit(
         linear.weight.data,
         requires_grad=False,
-    ).to(device)  # type: ignore[misc]
+    ).to(
+        device
+    )  # type: ignore[misc]
     return new
 
 
@@ -201,7 +208,9 @@ def quantize_model(
         parent, child_name = _get_parent(model, name)
         linear = module
         if config.method == "int8":
-            new_module: nn.Module = QuantizedLinear.from_float(linear, config.compute_dtype)
+            new_module: nn.Module = QuantizedLinear.from_float(
+                linear, config.compute_dtype
+            )
         elif config.method == "bnb_8bit":
             new_module = _make_bnb_8bit(linear, config)
         elif config.method == "bnb_4bit":
@@ -262,9 +271,7 @@ def estimate_quantized_size(
         bytes_per_weight = 1.0
         # per-output-channel fp16 scale
         scale_params = sum(
-            m.out_features
-            for m in model.modules()
-            if isinstance(m, QuantizedLinear)
+            m.out_features for m in model.modules() if isinstance(m, QuantizedLinear)
         )
         return total_params * bytes_per_weight + scale_params * 2
     if method == "bnb_4bit":

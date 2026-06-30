@@ -11,6 +11,7 @@ implementation keeps K/V in contiguous per-sequence buffers internally and uses
 block tables to track which logical positions are allocated, making it a safe,
 bit-exact drop-in replacement for the ring-buffer manager.
 """
+
 from __future__ import annotations
 
 from typing import List, Optional, Tuple
@@ -61,7 +62,9 @@ class PagedKVCacheManager:
         self.n_kv_heads = n_kv_heads
         self.head_dim = head_dim
         self.block_size = block_size
-        self.max_cache_len = ((max_cache_len + block_size - 1) // block_size) * block_size
+        self.max_cache_len = (
+            (max_cache_len + block_size - 1) // block_size
+        ) * block_size
         self.max_blocks_per_seq = self.max_cache_len // block_size
 
         self._k: List[torch.Tensor] = []
@@ -90,24 +93,34 @@ class PagedKVCacheManager:
             block_size=block_size,
         )
 
-    def init_cache(self, batch_size: int, device: torch.device, dtype: torch.dtype) -> None:
+    def init_cache(
+        self, batch_size: int, device: torch.device, dtype: torch.dtype
+    ) -> None:
         """Allocate per-layer per-sequence block buffers and reset state."""
         self._batch_size = batch_size
         self._device = device
         self._dtype = dtype
         self._k = [
             torch.zeros(
-                batch_size, self.max_blocks_per_seq, self.n_kv_heads,
-                self.block_size, self.head_dim,
-                device=device, dtype=dtype,
+                batch_size,
+                self.max_blocks_per_seq,
+                self.n_kv_heads,
+                self.block_size,
+                self.head_dim,
+                device=device,
+                dtype=dtype,
             )
             for _ in range(self.n_layers)
         ]
         self._v = [
             torch.zeros(
-                batch_size, self.max_blocks_per_seq, self.n_kv_heads,
-                self.block_size, self.head_dim,
-                device=device, dtype=dtype,
+                batch_size,
+                self.max_blocks_per_seq,
+                self.n_kv_heads,
+                self.block_size,
+                self.head_dim,
+                device=device,
+                dtype=dtype,
             )
             for _ in range(self.n_layers)
         ]
@@ -121,7 +134,9 @@ class PagedKVCacheManager:
             tensor.zero_()
         for tensor in self._v:
             tensor.zero_()
-        self._block_tables = [[] for _ in range(self._batch_size)] if self._batch_size else []
+        self._block_tables = (
+            [[] for _ in range(self._batch_size)] if self._batch_size else []
+        )
         self._seq_len = [0] * self._batch_size if self._batch_size else []
         self.start_pos = 0
 
@@ -161,10 +176,12 @@ class PagedKVCacheManager:
                 room = self.block_size - pos_in_block
                 chunk = min(room, remaining)
 
-                self._k[layer_idx][b, block_idx, :, pos_in_block : pos_in_block + chunk, :] = \
-                    new_k[b, :, write_offset : write_offset + chunk, :]
-                self._v[layer_idx][b, block_idx, :, pos_in_block : pos_in_block + chunk, :] = \
-                    new_v[b, :, write_offset : write_offset + chunk, :]
+                self._k[layer_idx][
+                    b, block_idx, :, pos_in_block : pos_in_block + chunk, :
+                ] = new_k[b, :, write_offset : write_offset + chunk, :]
+                self._v[layer_idx][
+                    b, block_idx, :, pos_in_block : pos_in_block + chunk, :
+                ] = new_v[b, :, write_offset : write_offset + chunk, :]
 
                 write_pos += chunk
                 write_offset += chunk
@@ -180,7 +197,9 @@ class PagedKVCacheManager:
         for b in range(batch_size):
             self._seq_len[b] += delta
 
-    def _get_layer_blocks(self, layer_idx: int) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+    def _get_layer_blocks(
+        self, layer_idx: int
+    ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
         """Return a list of (k_block, v_block) tuples covering all sequences.
 
         Each block is contiguous in sequence dimension for one or more sequences
@@ -199,12 +218,20 @@ class PagedKVCacheManager:
         # where T_max is the maximum logical length across the batch.
         max_len = max(self._seq_len)
         k_out = torch.zeros(
-            batch_size, self.n_kv_heads, max_len, self.head_dim,
-            device=device, dtype=dtype,
+            batch_size,
+            self.n_kv_heads,
+            max_len,
+            self.head_dim,
+            device=device,
+            dtype=dtype,
         )
         v_out = torch.zeros(
-            batch_size, self.n_kv_heads, max_len, self.head_dim,
-            device=device, dtype=dtype,
+            batch_size,
+            self.n_kv_heads,
+            max_len,
+            self.head_dim,
+            device=device,
+            dtype=dtype,
         )
 
         k_pool = self._k[layer_idx]
@@ -218,10 +245,12 @@ class PagedKVCacheManager:
                 block_len = min(self.block_size, seq_len - written)
                 if block_len <= 0:
                     break
-                k_out[b, :, written : written + block_len, :] = \
-                    k_pool[b, block_idx, :, :block_len, :]
-                v_out[b, :, written : written + block_len, :] = \
-                    v_pool[b, block_idx, :, :block_len, :]
+                k_out[b, :, written : written + block_len, :] = k_pool[
+                    b, block_idx, :, :block_len, :
+                ]
+                v_out[b, :, written : written + block_len, :] = v_pool[
+                    b, block_idx, :, :block_len, :
+                ]
                 written += block_len
 
         return [(k_out, v_out)]
