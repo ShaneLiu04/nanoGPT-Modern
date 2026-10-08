@@ -23,7 +23,9 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+import torch
 
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
@@ -137,8 +139,14 @@ def build_train_command(
     config: str,
     max_iters: Optional[int] = None,
     out_root: str = "out",
+    resume_from: Optional[Any] = None,
 ) -> List[str]:
-    """Assemble the subprocess command for one group's training run."""
+    """Assemble the subprocess command for one group's training run.
+
+    ``resume_from`` (path or path-like string to a group checkpoint)
+    appends ``--resume <path>`` so the training continues from the last
+    in-group checkpoint.
+    """
     cmd = [
         sys.executable, "-m", "training.train_pretrain",
         "--config", str(config),
@@ -148,19 +156,106 @@ def build_train_command(
     ]
     if max_iters is not None:
         cmd += ["--max_iters", str(max_iters)]
+    if resume_from is not None:
+        cmd += ["--resume", str(resume_from)]
     return cmd
+
+
+# Architecture fields compared against a group's resolved config overlay
+# when deciding whether a checkpoint belongs to the group (design §4.3.1).
+_ARCH_FIELD_DEFAULTS: Dict[str, Any] = {
+    "num_experts": 1,
+    "position_encoding": "rope",
+    "ffn_variant": "swiglu",
+}
+
+
+def find_group_checkpoint(
+    out_root: str, name: str
+) -> Optional[Tuple[Path, int, Dict[str, Any]]]:
+    """Probe ``{out_root}/ablation-{name}/latest_ckpt.pt``.
+
+    Returns ``(ckpt_path, iter_num, ckpt_config_dict)`` when the file
+    exists and loads; returns ``None`` when it is missing or corrupt
+    (``torch.load`` raises) — never raises to the caller.
+    """
+    ckpt_path = Path(group_out_dir(out_root, name)) / "latest_ckpt.pt"
+    if not ckpt_path.is_file():
+        return None
+    try:
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    except Exception:
+        return None
+    iter_num = int(ckpt.get("iter_num", 0))
+    raw_cfg = ckpt.get("config")
+    ckpt_cfg = dict(raw_cfg) if isinstance(raw_cfg, dict) else {}
+    return ckpt_path, iter_num, ckpt_cfg
+
+
+def _arch_matches(ckpt_cfg: Dict[str, Any], overrides: Dict[str, Any]) -> bool:
+    """Compare architecture fields of a ckpt config vs a config overlay."""
+    ckpt_model = str(ckpt_cfg.get("model_type", "modern"))
+    flag_model = str(overrides.get("model", "modern"))
+    if ckpt_model != flag_model:
+        return False
+
+    if ckpt_model != "baseline":
+        # GQA heads: ckpt None -> n_head (or 8); overlay likewise.
+        ckpt_nkv = ckpt_cfg.get("n_kv_head")
+        if ckpt_nkv is None:
+            ckpt_nkv = ckpt_cfg.get("n_head", 8)
+        flag_nkv = overrides.get("n_kv_head")
+        if flag_nkv is None:
+            flag_nkv = overrides.get("n_head", 8)
+        if int(ckpt_nkv) != int(flag_nkv):
+            return False
+
+    for key, default in _ARCH_FIELD_DEFAULTS.items():
+        ckpt_val = ckpt_cfg.get(key, default)
+        flag_val = overrides.get(key, default)
+        if key == "num_experts":
+            if int(ckpt_val) != int(flag_val):
+                return False
+        elif str(ckpt_val) != str(flag_val):
+            return False
+    return True
+
+
+def ckpt_matches_group(ckpt_cfg: Dict[str, Any], flags: List[str]) -> bool:
+    """True when the checkpoint's config matches the group's CLI flags.
+
+    Compares ``model_type`` vs ``--model`` plus the architecture fields
+    (``n_kv_head``, ``num_experts``, ``position_encoding``,
+    ``ffn_variant``); fields absent on either side fall back to defaults.
+    """
+    return _arch_matches(dict(ckpt_cfg), _flags_to_overrides(list(flags)))
+
+
+def _group_overrides(args: argparse.Namespace, name: str) -> Dict[str, Any]:
+    """Merged YAML + group-flag overlay used for checkpoint matching."""
+    merged: Dict[str, Any] = {}
+    try:
+        merged = dict(load_yaml_config(args.config) or {})
+    except Exception:
+        merged = {}
+    merged.update(_flags_to_overrides(ABLATION_GROUPS[name]))
+    return merged
 
 
 def run_train_stage(args: argparse.Namespace) -> Dict[str, Any]:
     """Train every selected, not-yet-completed group as a subprocess.
 
     Completed groups (manifest status == 'completed') are skipped for
-    resume; a failing group is recorded and normally does not stop the
-    others (``--fail_fast`` stops after the first failure).
+    resume.  For each pending group the in-group ``latest_ckpt.pt`` is
+    probed; an architecture-matching checkpoint injects ``--resume`` (and
+    a failing resumed run falls back to one rerun without ``--resume``).
+    A failing group is recorded and normally does not stop the others
+    (``--fail_fast`` stops after the first failure).
     """
     completed: List[str] = []
     skipped: List[str] = []
     errors: List[Dict[str, Any]] = []
+    resumed_from_iter: Dict[str, Optional[int]] = {}
     fail_fast_triggered = False
 
     for name in select_groups(args.groups):
@@ -169,13 +264,62 @@ def run_train_stage(args: argparse.Namespace) -> Dict[str, Any]:
             print(f"[skip] {name}: already completed ({exp_dir})")
             skipped.append(name)
             continue
+
+        resume_from = None
+        found = find_group_checkpoint(args.out_root, name)
+        if found is not None:
+            ckpt_path, iter_num, ckpt_cfg = found
+            if _arch_matches(ckpt_cfg, _group_overrides(args, name)):
+                resume_from = ckpt_path
+                resumed_from_iter[name] = iter_num
+                print(f"[resume] {name}: from iter {iter_num} ({ckpt_path})")
+            else:
+                print(
+                    f"[warn] {name}: checkpoint architecture mismatch "
+                    f"({ckpt_path}); starting a fresh run"
+                )
+
         cmd = build_train_command(
-            name, args.config, args.max_iters, out_root=args.out_root
+            name,
+            args.config,
+            args.max_iters,
+            out_root=args.out_root,
+            resume_from=resume_from,
         )
         print(f"[train] {name}: {' '.join(cmd)}")
         result = subprocess.run(cmd)
         if result.returncode == 0:
             completed.append(name)
+        elif resume_from is not None:
+            # A failed resumed run degrades to one fresh rerun.
+            print(
+                f"[warn] {name}: resumed run failed "
+                f"(exit code {result.returncode}); rerunning without --resume"
+            )
+            cmd = build_train_command(
+                name,
+                args.config,
+                args.max_iters,
+                out_root=args.out_root,
+            )
+            print(f"[train] {name}: {' '.join(cmd)}")
+            result = subprocess.run(cmd)
+            if result.returncode == 0:
+                completed.append(name)
+            else:
+                errors.append(
+                    {
+                        "group": name,
+                        "returncode": result.returncode,
+                        "command": cmd,
+                    }
+                )
+                print(
+                    f"[fail] {name}: exit code {result.returncode}"
+                )
+                if args.fail_fast:
+                    fail_fast_triggered = True
+                    break
         else:
             errors.append(
                 {
@@ -195,6 +339,7 @@ def run_train_stage(args: argparse.Namespace) -> Dict[str, Any]:
         "completed": completed,
         "skipped": skipped,
         "errors": errors,
+        "resumed_from_iter": resumed_from_iter,
         "fail_fast_triggered": fail_fast_triggered,
     }
 
@@ -300,15 +445,16 @@ def write_markdown_summary(summary: Dict[str, Any]) -> str:
         "",
         "| Group | Status | Params (M) | Active (M) | Best Val Loss | "
         "Final Val Loss | Delta vs Baseline (%) | Tok/s | Peak Mem (GB) | "
-        "Wall Time (s) |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "Wall Time (s) | Resumed From Iter |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
+    resumed_map = summary.get("resumed_from_iter") or {}
     for row in summary.get("groups", []):
         delta = row.get("delta_vs_baseline_pct")
         delta_text = "-" if delta is None else f"{delta:+.2f}"
         lines.append(
             "| {name} | {status} | {params} | {active} | {best} | {final} "
-            "| {delta} | {tps} | {mem} | {wall} |".format(
+            "| {delta} | {tps} | {mem} | {wall} | {resumed} |".format(
                 name=row.get("name"),
                 status=_fmt(row.get("status")),
                 params=_fmt(row.get("params_m"), ".3f"),
@@ -319,6 +465,7 @@ def write_markdown_summary(summary: Dict[str, Any]) -> str:
                 tps=_fmt(row.get("mean_tokens_per_sec"), ".1f"),
                 mem=_fmt(row.get("peak_mem_gb"), ".2f"),
                 wall=_fmt(row.get("wall_time_s"), ".1f"),
+                resumed=_fmt(resumed_map.get(row.get("name"))),
             )
         )
     lines.append("")
@@ -427,6 +574,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         summary = summarize_groups(selected, args.config, args.out_root)
         if train_result is not None:
             summary["errors"] = list(train_result["errors"])
+            summary["resumed_from_iter"] = dict(
+                train_result.get("resumed_from_iter", {})
+            )
             _write_summary_artifacts(summary, args.out_root)
 
     errors = train_result["errors"] if train_result is not None else []
