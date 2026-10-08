@@ -217,39 +217,42 @@ def test_grpo_batched_logprobs_consistency():
         ckpt = _make_tiny_checkpoint(tmpdir)
         args = _tiny_grpo_args(tmpdir, ckpt, num_train=2, num_val=2)
         trainer = GRPOTrainer(args)
-        model = trainer.policy
-        model.eval()
+        try:
+            model = trainer.policy
+            model.eval()
 
-        sequences = [
-            [1, 2, 3, 4, 5],
-            [10, 11, 12, 13, 14, 15],
-            [20, 21, 22],
-        ]
-        prompt_lens = [2, 3, 1]
-        response_lens = [3, 3, 2]
+            sequences = [
+                [1, 2, 3, 4, 5],
+                [10, 11, 12, 13, 14, 15],
+                [20, 21, 22],
+            ]
+            prompt_lens = [2, 3, 1]
+            response_lens = [3, 3, 2]
 
-        batched_logps, masks = trainer._batch_logprobs(
-            model, sequences, prompt_lens, response_lens
-        )
-
-        # Compare response-token logprobs against per-sequence computation.
-        for i, seq in enumerate(sequences):
-            inp = torch.tensor([seq[:-1]], dtype=torch.long)
-            tgt = torch.tensor([seq[1:]], dtype=torch.long)
-            with torch.no_grad():
-                logits, _, _ = model(inp)
-                logp = torch.log_softmax(logits, dim=-1)
-                single_logps = logp.gather(2, tgt.unsqueeze(-1)).squeeze(-1)
-            resp_mask = masks[i, : len(seq) - 1]
-            assert torch.allclose(
-                batched_logps[i, : len(seq) - 1][resp_mask],
-                single_logps[0][resp_mask],
-                atol=1e-5,
+            batched_logps, masks = trainer._batch_logprobs(
+                model, sequences, prompt_lens, response_lens
             )
-            expected_mask = [False] * (prompt_lens[i] - 1) + [True] * response_lens[i]
-            assert torch.equal(resp_mask, torch.tensor(expected_mask))
 
-        print("[OK] GRPO batched logprob computation is consistent")
+            # Compare response-token logprobs against per-sequence computation.
+            for i, seq in enumerate(sequences):
+                inp = torch.tensor([seq[:-1]], dtype=torch.long)
+                tgt = torch.tensor([seq[1:]], dtype=torch.long)
+                with torch.no_grad():
+                    logits, _, _ = model(inp)
+                    logp = torch.log_softmax(logits, dim=-1)
+                    single_logps = logp.gather(2, tgt.unsqueeze(-1)).squeeze(-1)
+                resp_mask = masks[i, : len(seq) - 1]
+                assert torch.allclose(
+                    batched_logps[i, : len(seq) - 1][resp_mask],
+                    single_logps[0][resp_mask],
+                    atol=1e-5,
+                )
+                expected_mask = [False] * (prompt_lens[i] - 1) + [True] * response_lens[i]
+                assert torch.equal(resp_mask, torch.tensor(expected_mask))
+
+            print("[OK] GRPO batched logprob computation is consistent")
+        finally:
+            trainer.cleanup()
 
 
 def test_grpo_gradient_accumulation():
@@ -334,6 +337,7 @@ def test_grpo_gradient_accumulation():
         finally:
             trainer.sample_group = original_sample_group
             trainer.optimizer.step = original_optimizer_step
+            trainer.cleanup()
 
         # 6 rollouts / 3 accum = 2 optimizer steps.
         assert (
@@ -359,11 +363,14 @@ def test_iterative_grpo_rejection_pool():
         args.rejection_batch_size = 2
 
         trainer = IterativeGRPOTrainer(args)
-        assert hasattr(trainer, "rejection_pool")
-        assert len(trainer.rejection_pool) == 3 * args.num_train
-        assert trainer.ref_updates_done == 0
-        assert trainer.rejection_rounds_done == 0
-        print("[OK] IterativeGRPOTrainer builds data pools")
+        try:
+            assert hasattr(trainer, "rejection_pool")
+            assert len(trainer.rejection_pool) == 3 * args.num_train
+            assert trainer.ref_updates_done == 0
+            assert trainer.rejection_rounds_done == 0
+            print("[OK] IterativeGRPOTrainer builds data pools")
+        finally:
+            trainer.cleanup()
 
 
 def test_kv_cache_ring_buffer_order():

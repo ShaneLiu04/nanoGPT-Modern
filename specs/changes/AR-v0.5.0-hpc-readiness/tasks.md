@@ -17,7 +17,7 @@
 | T001 | FR1 依赖与环境固化：pyproject 补 server/validate extras、torch pin ~=2.5、uv.lock 重新同步、Dockerfile/compose 现代化、CI 补 lock 检查 + Docker build job | - | passing | 2026-10-08 完成；torch 收紧为 `~=2.5,<2.9` 消除 cu13 分裂 |
 | T002 | FR2 数据迁移：修复 prepare.py --max_docs 复现陷阱、新增 docs/MIGRATION.md（必带清单/验证/冒烟/冗余清理）、本机干净环境演练 ≤1h | T001 | passing | 2026-10-08 完成；演练核心链路 2m17s |
 | T003 | FR3a 断点续跑：编排器组内自动 --resume（ckpt 探测/架构校验/降级重跑/resumed_from_iter）、训练 RNG 恢复 + resume_offset 真实推进 + early_stop_counter、新增 --ckpt_interval | - | passing | 云抢占刚需，TDD |
-| T004 | FR3b 运行管理：日志轮转（RotatingFileHandler）、metrics.jsonl 心跳 watchdog、编排器失败 webhook 通知（缺 URL 静默） | T003 | pending | 降级哲学与现有一致 |
+| T004 | FR3b 运行管理：日志轮转（RotatingFileHandler）、metrics.jsonl 心跳 watchdog、编排器失败 webhook 通知（缺 URL 静默） | T003 | passing | 降级哲学与现有一致 |
 | T005 | FR4a Paged KV 双 bug 修复（get_cache 逐层 / block table 逐层 append）+ n_layer=2 回归测试；generate 四处 max_cache_len → effective_block_size（NTK 解锁） | - | pending | v0.4.0 推理实验硬前提 |
 | T006 | FR4b 投机解码分布修正（greedy p_d=point mass/完整 q 残差/温度统一）+ 分布等价性测试（draft==target KL→0）；temperature=0 → greedy 三处 | - | pending | 接受率不再虚高 |
 | T007 | FR4c profile_inference 假 per-token 计时修复（挂入真实 decode 回调） | - | pending | 微型任务 |
@@ -92,6 +92,15 @@
 - 测试：tests/test_orchestrator_resume.py（6 用例：completed 回归守卫/三态探测/架构校验/命令注入/降级重跑/resumed_from_iter）+ tests/test_resume_integrity.py（5 用例：RNG 行为+接线双断言/offset 推进+恢复后首 batch 逐元素相等/early_stop 往返+旧格式默认/ckpt_interval=5 两时点落盘 vs =0 跟随 eval/旧 ckpt 缺键默认）——Red 9 失败 2 守卫通过 → Green 11/11；全量回归 361 passed / 2 skipped（零回归）
 - 演练验收（FR3a 业务场景 E1 抢占）：真实 tiny 训练（CPU，2000 chunks 顺序 shuffle.idx）→ ckpt_interval=20 轮询至 iter≥40 强杀（manifest=running）→ 编排器重投递自动 `[resume] from iter 40` → 续跑至 100；断言全过：manifest completed/steps=100、final ckpt consumed=160+60×4=400 **精确对账**（修复前 404）、metrics.jsonl 轨迹 0..95 连续无重复、resumed_from_iter=40>0、「最多丢一个 ckpt_interval」成立
 - 备注：resume 失败降级重跑路径由 UT monkeypatch 覆盖（演练走 happy path）；`estimate_loss` 迭代 train_loader 从 dataset.resume_offset（构造值）取样为 v0.4.0 既有行为，非本任务范围；epoch 回绕重置为新增语义（原实现 dataset.resume_offset 不复位导致回绕起点漂移）
+
+### 2026-10-08 会话记录（T004）
+
+- 完成任务：T004 FR3b 运行管理（标准任务，Red/Green 分离 + 真实冒烟）
+- 修改文件：utils/notify.py（新增：`notify_webhook(message, env=None, timeout=10) -> bool`，URL 从 `NANOGPT_WEBHOOK_URL` env 读，缺失/空 → False 静默；POST JSON {"text"}，2xx → True，任何异常 → False 不抛）；utils/monitoring.py（新增 `MetricsHeartbeatWatchdog(threading.Thread)`：daemon 线程 + `check(now)` 同步核心（load_metrics 解析 train 事件 ts → 最近 baseline_window 间隔均值 → age > timeout_factor×baseline 首次告警）+ stderr/on_alert 回调/webhook 三连告警 + alerted 去抖 + stop() 幂等；轮询异常吞掉不杀线程）；utils/logging.py（Logger 加 `logging.handlers.RotatingFileHandler`：`{log_dir}/train.log`，maxBytes 10MB/backupCount 3，带 asctime Formatter，OSError 降级 console warning；同名 logger 复用时复用既有 handler；`close()` flush+close+removeHandler 释放句柄并置 file_handler=None 幂等）；run_component_ablations.py（`start_group_watchdog` 构造 watchdog 失败降级 None；`_run_with_watchdog` 包住每次 subprocess.run（resume 尝试与降级重跑各一轮）：显式 start（失败→None 继续）+ finally stop；`notify_failures(errors)` 失败摘要 webhook；main() errors 非空调用）；tests/test_bugfixes.py（3 个 GRPO 用例补 try/finally trainer.cleanup()——RotatingFileHandler 句柄在 Windows 阻塞 TemporaryDirectory 清理）
+- **关键发现（Windows 句柄交互）**：新增 RotatingFileHandler 后，既有测试中「构造 trainer 不 cleanup」的用例连锁 PermissionError（WinError 32）——Logger.close() 必须 close+removeHandler 释放句柄，且测试侧补 cleanup；此交互 T018（conftest tiny fixture/测试拆分）应固化「trainer 构造必须配 cleanup」约定
+- 测试：tests/test_run_management.py 8 用例（stall 告警+精确消息+去抖/健康与数据不足三态/webhook 缺 URL 静默/成功失败路径断言请求体与 Content-Type/RotatingFileHandler 落盘+类型+asctime 格式/notify_failures 消息与空跳过/编排器启停 watchdog（stop==start）/线程生命周期 daemon+join+stop 幂等）——Red 8 失败 → Green 8/8；全量回归 369 passed / 2 skipped（361 基线 + 8 新增，零回归）
+- 冒烟验收（FR3b healthy 路径）：真实编排器 + 真 watchdog 线程跑 tiny 训练 40 步——completed、全程无 `[watchdog]` 告警、`out/ablation-baseline/logs/train.log` 落盘（0 bytes 属正常：健康跑无 warning 输出）
+- 备注：watchdog stall 真实路径由 UT mock ts 覆盖（冒烟仅验证 healthy）；`NANOGPT_WEBHOOK_URL` 变量名已定契约（MIGRATION.md 环境清单可后续补文档，T021 收尾时统一交叉引用）
 
 ## 阶段门控记录
 

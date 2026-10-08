@@ -11,6 +11,7 @@ Features
 
 import os
 import logging
+import logging.handlers
 from typing import Any, Dict, Optional
 
 
@@ -58,6 +59,35 @@ class Logger:
             handler.setLevel(log_level)
             handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
             self._console.addHandler(handler)
+
+        # Rotating file log (FR3b run management): size-capped, persisted
+        # under log_dir so long cloud runs never lose warnings to a closed
+        # terminal.  Failure degrades to a console warning.
+        self.file_handler = None
+        for existing in self._console.handlers:
+            if isinstance(existing, logging.handlers.RotatingFileHandler):
+                self.file_handler = existing
+                break
+        if self.file_handler is None:
+            try:
+                os.makedirs(log_dir, exist_ok=True)
+                file_handler = logging.handlers.RotatingFileHandler(
+                    os.path.join(log_dir, "train.log"),
+                    maxBytes=10 * 1024 * 1024,
+                    backupCount=3,
+                    encoding="utf-8",
+                )
+                file_handler.setLevel(log_level)
+                file_handler.setFormatter(
+                    logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
+                )
+                self._console.addHandler(file_handler)
+                self.file_handler = file_handler
+            except OSError as e:
+                self._console.warning(
+                    f"Rotating file log init failed: {e}. "
+                    "Continuing with console logging only."
+                )
 
         # TensorBoard
         if use_tensorboard:
@@ -187,6 +217,14 @@ class Logger:
             self.writer.add_text("config", json.dumps(config, indent=2, default=str), 0)
 
     def close(self):
+        if self.file_handler is not None:
+            try:
+                self.file_handler.flush()
+                self.file_handler.close()
+                self._console.removeHandler(self.file_handler)
+            except Exception:
+                pass
+            self.file_handler = None
         if self.writer is not None:
             self.writer.close()
             self.writer = None

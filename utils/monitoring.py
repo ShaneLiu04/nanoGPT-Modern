@@ -11,8 +11,11 @@ Provides:
 from __future__ import annotations
 
 import logging
+import sys
+import threading
 import time
-from typing import Any, Dict, Optional
+from datetime import datetime
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 import torch
@@ -321,3 +324,109 @@ class ThroughputMonitor:
         self._last_time = None
         self._tokens_per_s = 0.0
         self._samples_per_s = 0.0
+
+
+class MetricsHeartbeatWatchdog(threading.Thread):
+    """Heartbeat watchdog over a group's ``metrics.jsonl`` (FR3b).
+
+    Establishes a baseline from the ``ts`` gaps of recent ``train`` events
+    and alerts (stderr + optional callback + webhook) when no new event has
+    appeared for more than ``timeout_factor`` x baseline — a likely stall
+    (design.md §4.2 flow C / boundary E4: alert only, never kill).  Alerts
+    are debounced: at most one per watchdog instance.
+    """
+
+    def __init__(
+        self,
+        metrics_path: str,
+        group_name: str,
+        on_alert: Optional[Callable[[str], None]] = None,
+        poll_interval: float = 5.0,
+        baseline_window: int = 10,
+        timeout_factor: float = 3.0,
+    ) -> None:
+        super().__init__(daemon=True, name=f"watchdog-{group_name}")
+        self.metrics_path = str(metrics_path)
+        self.group_name = str(group_name)
+        self.on_alert = on_alert
+        self.poll_interval = float(poll_interval)
+        self.baseline_window = int(baseline_window)
+        self.timeout_factor = float(timeout_factor)
+        self.alerted = False
+        self._stop_event = threading.Event()
+
+    # ------------------------------------------------------------------
+    # Core check (synchronous, unit-testable)
+    # ------------------------------------------------------------------
+
+    def _train_ts(self) -> list:
+        """Epoch seconds of all ``train`` events recorded so far."""
+        from utils.experiment import load_metrics
+
+        try:
+            events = load_metrics(self.metrics_path)
+        except (OSError, ValueError):
+            return []
+        out = []
+        for e in events:
+            if e.get("type") != "train" or not e.get("ts"):
+                continue
+            try:
+                out.append(datetime.fromisoformat(e["ts"]).timestamp())
+            except (ValueError, TypeError):
+                continue
+        return out
+
+    def check(self, now: float):
+        """Run one stall check at wall-clock time ``now`` (epoch seconds).
+
+        Returns the alert message when a stall is detected (first time
+        only), otherwise ``None``.
+        """
+        if self.alerted:
+            return None
+        ts = self._train_ts()
+        if len(ts) < 2:
+            return None  # baseline not established yet
+        recent = ts[-self.baseline_window :]
+        gaps = [b - a for a, b in zip(recent[:-1], recent[1:]) if b - a > 0]
+        if not gaps:
+            return None
+        baseline = sum(gaps) / len(gaps)
+        age = now - ts[-1]
+        if age <= self.timeout_factor * baseline:
+            return None
+
+        self.alerted = True
+        message = (
+            f"[watchdog] {self.group_name}: training stalled "
+            f"(no metrics for {age:.0f}s, baseline {baseline:.1f}s)"
+        )
+        print(message, file=sys.stderr)
+        if self.on_alert is not None:
+            try:
+                self.on_alert(message)
+            except Exception:  # alerting must never break the watchdog
+                pass
+        try:
+            from utils.notify import notify_webhook
+
+            notify_webhook(message)
+        except Exception:
+            pass
+        return message
+
+    # ------------------------------------------------------------------
+    # Thread lifecycle
+    # ------------------------------------------------------------------
+
+    def run(self) -> None:
+        while not self._stop_event.wait(self.poll_interval):
+            try:
+                self.check(time.time())
+            except Exception:  # never let polling kill the thread
+                pass
+
+    def stop(self) -> None:
+        """Signal the polling loop to exit; idempotent."""
+        self._stop_event.set()
