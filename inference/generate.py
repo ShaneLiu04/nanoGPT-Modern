@@ -111,6 +111,8 @@ def benchmark(
     """
     from inference.generate_utils import _sample_logits
 
+    import time as _time
+
     is_cuda = "cuda" in str(device)
     sync = torch.cuda.synchronize if is_cuda else (lambda: None)
 
@@ -146,13 +148,14 @@ def benchmark(
     total_ms = []
     decode_tok_s = []
 
-    for run in range(num_samples + 1):  # first is warmup
+    for run in range(num_samples + 3):  # first 3 runs are warmup
         inp = prompt_ids.clone()
         if is_cuda:
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
 
         sync()
+        cpu_t0 = _time.perf_counter()
         if is_cuda:
             ev0 = torch.cuda.Event(enable_timing=True)
             ev1 = torch.cuda.Event(enable_timing=True)
@@ -165,6 +168,8 @@ def benchmark(
             logits, _, past_kvs = _forward(inp, use_cache=True, start_pos=0)
             if is_cuda:
                 ev1.record()
+            else:
+                cpu_t1 = _time.perf_counter()
             # Decode: generate the rest
             out_ids = inp.clone()
             start_pos = inp.shape[1]
@@ -206,6 +211,8 @@ def benchmark(
             out_ids = model.generate(inp, **gen_kwargs)
             if is_cuda:
                 ev1.record()  # no separate prefill/decode
+            else:
+                cpu_t1 = _time.perf_counter()
 
         if is_cuda:
             ev2.record()
@@ -216,9 +223,11 @@ def benchmark(
             t_decode = ev1.elapsed_time(ev2)  # ms
             t_total = ev0.elapsed_time(ev2)
         else:
-            t_total = t_prefill = 0.0
+            t_prefill = (cpu_t1 - cpu_t0) * 1000.0
+            t_total = (_time.perf_counter() - cpu_t0) * 1000.0
+            t_decode = t_total - t_prefill
 
-        if run == 0:  # warmup
+        if run < 3:  # warmup
             continue
         prefill_ms.append(t_prefill)
         decode_ms.append(t_decode)
@@ -232,8 +241,15 @@ def benchmark(
         s = sorted(vals)
         return s[len(s) // 2]
 
+    def pct(vals, q):
+        s = sorted(vals)
+        return s[min(int(q * len(s)), len(s) - 1)]
+
     return {
         "total_time_ms": med(total_ms),
+        "p50_ms": pct(total_ms, 0.50),
+        "p95_ms": pct(total_ms, 0.95),
+        "p99_ms": pct(total_ms, 0.99),
         "prefill_ms": med(prefill_ms),
         "decode_ms": med(decode_ms),
         "decode_tok_s": med(decode_tok_s) if decode_tok_s else 0.0,

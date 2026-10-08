@@ -24,6 +24,8 @@ def _sample_logits(
     top_p: Optional[float] = None,
 ) -> torch.Tensor:
     """Sample a single token from logits [B, vocab]."""
+    if temperature is not None and temperature == 0:
+        return logits.argmax(dim=-1, keepdim=True).squeeze(-1)
     if temperature is not None and temperature > 0 and temperature != 1.0:
         logits = logits / temperature
     if top_k is not None and top_k > 0:
