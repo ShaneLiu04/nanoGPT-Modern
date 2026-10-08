@@ -96,6 +96,22 @@ def get_args():
     parser.add_argument("--backend", type=str, default="nccl")
     parser.add_argument("--keep_last_n", type=int, default=0)
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument(
+        "--exp_id",
+        type=str,
+        default=None,
+        help="Experiment ID for structured metrics (default: basename of --out_dir)",
+    )
+    parser.add_argument(
+        "--no_metrics",
+        action="store_true",
+        help="Disable structured metrics.jsonl / manifest.json recording",
+    )
+    parser.add_argument(
+        "--no_monitoring",
+        action="store_true",
+        help="Disable loss-spike detection and grad-norm monitoring",
+    )
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument(
         "--attn_backend",
@@ -449,8 +465,10 @@ class DPOTrainer(BaseTrainer):
                 if (num_batches + 1) % self.args.gradient_accumulation_steps == 0:
                     if self.scaler is not None:
                         self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.args.grad_clip
+                    self._step_grad_norm = float(
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(), self.args.grad_clip
+                        )
                     )
                     if self.scaler is not None:
                         self.scaler.step(self.optimizer)
@@ -463,6 +481,13 @@ class DPOTrainer(BaseTrainer):
 
                     if self.master_process:
                         self.log_scalars({"train/lr": lr}, self.global_step)
+                        self.on_step_end(
+                            self.global_step,
+                            loss.detach().item()
+                            * self.args.gradient_accumulation_steps,
+                            lr=lr,
+                            grad_norm=getattr(self, "_step_grad_norm", None),
+                        )
 
                     if self.global_step % self.args.eval_interval == 0:
                         val_loss = self._evaluate()
@@ -568,6 +593,10 @@ class DPOTrainer(BaseTrainer):
         if self.master_process:
             self.save_checkpoint("final_ckpt.pt", self.global_step, self.best_metric)
             print(f"Training complete. Best val loss: {self.best_metric:.4f}")
+            self.finalize_recorder(
+                "completed",
+                {"best_val_loss": self.best_metric, "steps": self.global_step},
+            )
 
 
 def main():

@@ -78,6 +78,22 @@ def get_args():
     parser.add_argument("--num_val", type=int, default=300)
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument(
+        "--exp_id",
+        type=str,
+        default=None,
+        help="Experiment ID for structured metrics (default: basename of --out_dir)",
+    )
+    parser.add_argument(
+        "--no_metrics",
+        action="store_true",
+        help="Disable structured metrics.jsonl / manifest.json recording",
+    )
+    parser.add_argument(
+        "--no_monitoring",
+        action="store_true",
+        help="Disable loss-spike detection and grad-norm monitoring",
+    )
+    parser.add_argument(
         "--config", type=str, default=None, help="Path to YAML config file"
     )
 
@@ -301,7 +317,7 @@ class IterativeGRPOTrainer(GRPOTrainer):
     # ------------------------------------------------------------------
     #  Training hooks
     # ------------------------------------------------------------------
-    def on_step_end(self, step, metrics, rollout):
+    def on_rollout_end(self, step, metrics, rollout):
         """Periodic ref-model updates and rejection-sampling SFT."""
         args = self.args
         extra_metrics = {}
@@ -365,6 +381,12 @@ def main():
             trainer.global_step,
             trainer.best_reward,
         )
+        if trainer.recorder is not None:
+            trainer.recorder.write_manifest(
+                artifacts={
+                    "final_checkpoint": f"final_iterative_grpo_g{args.group_size}.pt"
+                }
+            )
         trainer.cleanup()
 
 
