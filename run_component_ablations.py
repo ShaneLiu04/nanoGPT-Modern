@@ -19,6 +19,7 @@ any group failed, 2 on invalid arguments.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -31,6 +32,8 @@ from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 from utils.config import load_yaml_config
 from utils.experiment import summarize_experiment
+from utils.monitoring import MetricsHeartbeatWatchdog
+from utils.notify import notify_webhook
 
 MANIFEST_FILENAME = "manifest.json"
 
@@ -242,6 +245,59 @@ def _group_overrides(args: argparse.Namespace, name: str) -> Dict[str, Any]:
     return merged
 
 
+def start_group_watchdog(
+    out_root: str, name: str, poll_interval: float = 15.0
+) -> Optional[MetricsHeartbeatWatchdog]:
+    """Build (not yet started) a heartbeat watchdog for one group.
+
+    The caller starts/stops it around the training subprocess; the
+    watchdog alerts (stderr + webhook) on stalls.  Any setup failure
+    degrades to ``None`` and never blocks the training run.
+    """
+    try:
+        metrics_path = os.path.join(group_exp_dir(out_root, name), "metrics.jsonl")
+        return MetricsHeartbeatWatchdog(
+            metrics_path, name, poll_interval=poll_interval
+        )
+    except Exception as exc:
+        print(f"[warn] watchdog setup failed for {name}: {exc}")
+        return None
+
+
+def notify_failures(
+    errors: List[Dict[str, Any]], env: Optional[Dict[str, str]] = None
+) -> bool:
+    """Send a failure digest to the configured webhook (missing URL: skip)."""
+    if not errors:
+        return False
+    lines = [f"[ablations] {len(errors)} group(s) failed:"]
+    for err in errors:
+        lines.append(f"- {err['group']} (exit {err['returncode']})")
+    return notify_webhook("\n".join(lines), env=env)
+
+
+def _run_with_watchdog(
+    cmd: List[str], out_root: str, name: str
+) -> subprocess.CompletedProcess:
+    """Run one training subprocess under a heartbeat watchdog.
+
+    The watchdog monitors the group's metrics.jsonl while the subprocess
+    runs and alerts on stalls (never kills); it is stopped afterwards.
+    """
+    watchdog = start_group_watchdog(out_root, name)
+    if watchdog is not None:
+        try:
+            watchdog.start()
+        except Exception as exc:
+            print(f"[warn] watchdog start failed for {name}: {exc}")
+            watchdog = None
+    try:
+        return subprocess.run(cmd)
+    finally:
+        if watchdog is not None:
+            watchdog.stop()
+
+
 def run_train_stage(args: argparse.Namespace) -> Dict[str, Any]:
     """Train every selected, not-yet-completed group as a subprocess.
 
@@ -287,7 +343,7 @@ def run_train_stage(args: argparse.Namespace) -> Dict[str, Any]:
             resume_from=resume_from,
         )
         print(f"[train] {name}: {' '.join(cmd)}")
-        result = subprocess.run(cmd)
+        result = _run_with_watchdog(cmd, args.out_root, name)
         if result.returncode == 0:
             completed.append(name)
         elif resume_from is not None:
@@ -303,7 +359,7 @@ def run_train_stage(args: argparse.Namespace) -> Dict[str, Any]:
                 out_root=args.out_root,
             )
             print(f"[train] {name}: {' '.join(cmd)}")
-            result = subprocess.run(cmd)
+            result = _run_with_watchdog(cmd, args.out_root, name)
             if result.returncode == 0:
                 completed.append(name)
             else:
@@ -569,6 +625,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(
                 f"[fail] {err['group']}: exit code {err['returncode']}"
             )
+        if train_result["errors"]:
+            notified = notify_failures(train_result["errors"])
+            if notified:
+                print("[notify] failure digest sent to webhook")
 
     if args.stage in ("summarize", "all"):
         summary = summarize_groups(selected, args.config, args.out_root)
