@@ -121,6 +121,7 @@
 - 替换规则：fig1-4 PIL quantize（195/115/114/77KB → 43/44/40/33KB）、uv.lock×2 → stub（附 `uv lock` 再生指引）；镜像链确定性（seed committer date 取原 commit author date）保证重跑增量跳过
 - 远端不可保真项：5 blob 替换 + commit parent 指向 seed 链（author/date/message 逐字保留）；本地历史零改动，gitee 为内容镜像
 - 固化规则：**每个 AR 结束后运行 `python tools/gitee_mirror.py`**（幂等增量；BDWAF ~100KB POST 上限、SSH 22 封锁、NTLM 代理 `proxyhk.huawei.com:8080` 环境约束内置）
+- 增量机制（后续两轮迭代）：跳过判据用远端 refs 的 **rev-list 祖先集**（精确 sha 匹配会在 _sm* 清理后失效）；被 merge 掉的旁支（GitHub 链镜像 commits 非 main 祖先）用常驻 `_mirror_side` ref 锚定，避免每次重推
 
 ## 阶段门控记录
 

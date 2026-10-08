@@ -468,6 +468,23 @@ def main() -> None:
         haves.append(sha)
         print(f"  chain[{n}] {sha[:8]} ok ({kb:.0f}KB)", flush=True)
 
+    # orphaned side branches (e.g. the merged-away GitHub lineage whose
+    # mirrored commits are not ancestors of head): pin a permanent ref at
+    # each orphan run tip so future runs count them as known
+    anc = set(
+        subprocess.run(
+            ["git", "-C", MIRROR_DIR, "rev-list", head_mirror],
+            capture_output=True, text=True,
+        ).stdout.split()
+    )
+    orphans = [sha for sha in chain.push_seq if sha not in anc]
+    for i, sha in enumerate(orphans):
+        nxt = orphans[i + 1] if i + 1 < len(orphans) else None
+        if nxt is None or chain.push_seq.index(nxt) != chain.push_seq.index(sha) + 1:
+            ok, out = push(f"{sha}:refs/heads/_mirror_side")
+            if not ok:
+                print(f"  _mirror_side pin {sha[:8]}: {out[:120]}", flush=True)
+
     ok, out = push(f"{head_mirror}:refs/heads/main")
     print("[gitee-mirror] main push:", "ok" if ok else f"FAILED\n{out}")
     if not ok:
