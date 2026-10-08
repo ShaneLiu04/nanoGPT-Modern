@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 
-def get_args():
+def get_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", type=str, default="data/openwebtext")
     parser.add_argument("--split", type=str, default="train", choices=["train", "val"])
@@ -144,7 +144,16 @@ def get_args():
         default=None,
         help="JSON config for mixing multiple source datasets",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--data_files",
+        type=str,
+        default=None,
+        help="Comma-separated globs of local parquet data files "
+        "(e.g. 'data/owt_parquet/0.parquet,data/owt_parquet/[1-78].parquet'). "
+        "When set, these files are used directly instead of downloading "
+        "from the HuggingFace hub (proxy/offline friendly).",
+    )
+    return parser.parse_args(argv)
 
 
 def _build_quality_filter(args):
@@ -224,6 +233,22 @@ def _load_mixed_dataset(args, streaming: bool = False):
     """Load a single dataset or a mixture configured by ``args.mixture_config``."""
     from datasets import load_dataset  # type: ignore[import-untyped]
     from data.mixer import load_mixture_config, mix_datasets
+
+    if getattr(args, "data_files", None):
+        import glob as _glob
+
+        patterns = [p.strip() for p in args.data_files.split(",") if p.strip()]
+        files = sorted(
+            f for pattern in patterns for f in _glob.glob(pattern)
+        )
+        if not files:
+            raise FileNotFoundError(
+                f"--data_files matched no files: {args.data_files!r}"
+            )
+        print(f"Loading {len(files)} local data file(s)...")
+        return load_dataset(
+            "parquet", data_files=files, split="train", streaming=streaming
+        )
 
     if args.mixture_config is None:
         name = "openwebtext"

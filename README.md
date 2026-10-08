@@ -1,112 +1,122 @@
-# nanoGPT-Modern v0.3.0
+<p align="center">
+  <img src="docs/assets/cover.svg" alt="nanoGPT-Modern — 轻量级 LLM 全栈框架">
+</p>
 
-一个**端到端的轻量级大语言模型训练-推理-对齐全栈框架**，基于 Andrej Karpathy 的 [nanoGPT](https://github.com/karpathy/nanoGPT) 思想构建，在 **~50M 参数** 规模下完整验证现代 Transformer 组件的架构增益与效率 trade-off。v0.3.0 是一次全维度升级，覆盖模型架构、训练系统、数据管道、推理服务、评估观测与工程 DevOps 六大领域共 **42 项优化**。
+<p align="center">
+  <a href="https://github.com/ShaneLiu04/nanoGPT-Modern/actions/workflows/ci.yml"><img src="https://github.com/ShaneLiu04/nanoGPT-Modern/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
+  <a href="requirements.txt"><img src="https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C.svg" alt="PyTorch 2.0+"></a>
+  <img src="https://img.shields.io/badge/tests-230%2B%20passing-brightgreen.svg" alt="230+ tests">
+  <img src="https://img.shields.io/badge/version-0.3.0-8B5CF6.svg" alt="v0.3.0">
+</p>
 
-> 📊 技术白皮书：`docs/TECH_REPORT.md`
-> 📝 变更日志与改进清单：`docs/CHANGELOG.md`
-> 🏗️ 架构决策记录：`docs/adr/`
-> 🧪 实验记录与复现命令：`docs/EXPERIMENTS.md`
+# nanoGPT-Modern
 
----
+一个**端到端的轻量级大语言模型全栈框架**，基于 Andrej Karpathy 的 [nanoGPT](https://github.com/karpathy/nanoGPT) 思想构建。在 **~50M 参数**规模下，以**双轨对照实验**的方式完整验证现代 Transformer 组件的架构增益与效率 trade-off，并覆盖 **预训练 → SFT → GRPO/DPO 对齐 → 高效推理 → 评估** 全生命周期。
 
-## 核心特性
-
-### 双轨制架构对比
-- 同一仓库实现 **GPT-2 经典架构**（BaselineGPT）与 **LLaMA/Gemma 风格现代架构**（ModernGPT），共享数据顺序、随机种子与超参，唯一变量是架构差异。
-
-### 现代组件全集成（v0.3.0 增强）
-- **归一化**: RMSNorm（fused kernel 自动探测）
-- **激活**: SwiGLU (8d/3) / MoE top-1 gating（分组 GEMM 优化）
-- **位置编码**: RoPE + NTK-aware 长度外推
-- **注意力**: MHA / GQA（零拷贝 grouped broadcast）/ FlashAttention / SDPA 自动后端 / Sliding Window / QK-Norm / Attention Temperature
-- **KV Cache**: 静态环形缓存 + Paged KV Cache + **INT8/FP8 量化缓存**
-- **推理加速**: torch.compile / **投机解码（batch > 1）** / **连续批处理（Continuous Batching）**
-- **多 Token 预测**: MTP (n_future heads)
-- **序列并行**: Ring Attention (纯 PyTorch blockwise)
-
-### 三阶段对齐流水线 + 偏好学习
-- **预训练**: OpenWebText 因果语言建模
-- **SFT**: 监督微调（算术 + **Chain-of-Thought 推理格式**）
-- **GRPO**: 强化学习对齐（组相对策略优化，**G8/G16 扩展**，**KL 自适应**）
-- **DPO / IPO / KTO**: 偏好对齐（**从 GRPO 自动生成偏好对**，完整训练循环）
-- **Iterative GRPO**: 拒绝采样 + EMA ref 更新循环
-
-### 工程化训练设施（v0.3.0 增强）
-- **统一训练抽象**: `BaseTrainer` 模板方法（预训练/SFT/GRPO/DPO/Iterative GRPO 共享基础设施）
-- **分布式**: DDP / FSDP / **张量并行骨架（TP）** / **序列并行（SP）**
-- **混合精度**: AMP bf16/fp16 + GradScaler
-- **梯度累积**: 所有训练阶段支持
-- **学习率调度**: cosine / linear / WSD / constant + warmup
-- **EMA**: 影子权重保存/恢复
-- **Early Stopping**: 基于 val loss 的耐心机制
-- **Checkpoint 生命周期**: `keep_last_n` 自动清理 + 完整状态恢复（模型 + 优化器 + scaler + scheduler + EMA + RNG + resume_offset）
-- **监控告警**: **Loss Spike 自动检测**（>3σ 触发 LR 降低）、**梯度范数分层监控**、**显存 Profiler**、**吞吐实时监控**
-- **配置校验**: **Pydantic 结构化校验**（`n_head % n_kv_head == 0` 等规则自动验证）
-
-### 数据管道（v0.3.0 全面增强）
-- **全局 Shuffle**: 预计算随机索引 `.shuffle.idx`，训练时全局随机化
-- **质量评分**: `QualityScoreFilter` 基于规则/FastText 评分，支持分层采样
-- **增量去重**: `MinHashDeduplicator` 支持增量签名持久化与追加比对
-- **多语言**: `MultilingualTokenizer`（tiktoken + SentencePiece）+ `LanguageDetector` + 按语言权重采样
-- **代码数据**: `CodeDataset` 支持本地目录/The Stack 加载 + AST 语法过滤 + 按语言分组采样
-- **数学增强**: `ChainOfThoughtDataset` 生成 GSM8K 风格逐步推理数据（`<reasoning>` + `<answer>`）
-- **对话模板**: `ChatTemplate` 抽象（chatml / llama-2 / gemma 格式）+ system prompt 注入
-- **文档边界**: DocBoundaryDataset / PackingDataset（跨文档 mask + `document_ids`）
-
-### 高效推理（v0.3.0 全面增强）
-- **CUDA Events** 精确计时，prefill/decode 分离
-- **KV Cache**: 环形缓存 + Paged KV Cache + **INT8/FP8 量化**（显存节省 50%）
-- **投机解码**: draft-then-verify，支持 **batch > 1**（tree-based），接受率自适应降级
-- **连续批处理**: `RequestQueue` + `ContinuousBatchScheduler` + 动态 batch 拼接，Prefix Cache 共享
-- **torch.compile**: 自动探测与回退
-- **Batch 推理**: finished mask 逐序列提前终止
-
-### 评估与可观测性（v0.3.0 新增）
-- **标准 Benchmark**: `benchmark_suite.py` 预配置 MMLU / ARC / HellaSwag / Winogrande / HumanEval / GSM8K / **Needle-in-Haystack（长上下文）**
-- **对齐评估**: 本地 PPL + 可选 lm-eval 下游任务 + **胜率对比（Win Rate）**
-- **注意力可视化**: `AttentionVisualizer` 输出 heatmap + `LogitLens` 各层 top-k 预测词
-- **性能 Profiler**: Chrome trace 导出 + 显存分层报告
-- **消融自动化**: `run_ablations.py` 训练/推理矩阵一键运行
-
-### 生态兼容与部署（v0.3.0 新增）
-- **HuggingFace**: 格式导出/加载（`config.json` + `model.safetensors`）
-- **GGUF**: 导出（f32/f16/q8_0），扩展支持 Q4_0 / Q5_0 / Q6_K 类型标注
-- **ONNX**: `export_to_onnx.py` 动态轴导出 + ONNX Runtime 验证
-- **量化**: INT8 / bitsandbytes 8-bit/4-bit / **SmoothQuant / AWQ 集成**（骨架）
-- **API 服务**: `api_server.py` FastAPI 兼容 OpenAI API（`/v1/completions` + `/v1/chat/completions`）
-- **容器化**: Dockerfile + docker-compose（训练 + TensorBoard + API 服务）
-- **预提交**: `.pre-commit-config.yaml`（black + ruff + mypy + pytest）
-
-### 质量保障
-- **回归测试**: 234 项 + 新增覆盖，核心模块通过 `mypy` 类型检查
-- **CI/CD**: GitHub Actions（pytest + mypy + lint + 短训练 smoke test）
-- **确定性**: `test_determinism.py` 固定种子重复训练 loss 曲线完全一致
+> v0.3.0 完成模型架构、训练系统、数据管道、推理服务、评估观测与工程 DevOps 六大领域共 **42 项现代化升级**。
+>
+> 📊 技术白皮书 [docs/TECH_REPORT.md](docs/TECH_REPORT.md) · 📝 变更日志 [docs/CHANGELOG.md](docs/CHANGELOG.md) · 🧪 实验记录 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) · 🏗️ 架构决策 [docs/adr/](docs/adr/README.md)
 
 ---
 
-## 快速开始
+## ✨ 核心亮点
 
-### 1. 安装依赖
+### 🧭 双轨对照实验
+同一仓库实现两种架构，共享数据顺序、随机种子与超参——**唯一变量是架构本身**：
+
+- **BaselineGPT** — GPT-2 经典架构（LayerNorm + GELU + 可学习绝对位置编码）
+- **ModernGPT** — LLaMA/Gemma 风格现代架构（RMSNorm + SwiGLU + RoPE + GQA）
+
+### 🏗️ 现代组件全集成
+| 类别 | 组件 |
+|------|------|
+| 归一化 | RMSNorm（自动探测 PyTorch ≥ 2.4 fused kernel）· QK-Norm |
+| 激活/FFN | SwiGLU (8d/3) · **MoE top-1 gating**（分组 GEMM + 负载均衡辅助损失） |
+| 位置编码 | RoPE + **NTK-aware 长度外推** |
+| 注意力 | MHA / **GQA（零拷贝 grouped broadcast）** / FlashAttention 封装 / SDPA 后端切换 / Sliding Window / Attention Temperature |
+| 序列 | 多 Token 预测（MTP heads）· **Ring Attention**（纯 PyTorch blockwise，长上下文确定性回退） |
+
+### 🎯 完整对齐流水线
+- **预训练** — OpenWebText 因果语言建模
+- **SFT** — 算术 + Chain-of-Thought 逐步推理格式（`<reasoning>` + `<answer>`）
+- **GRPO** — 组相对策略优化（组大小可调 G4/G8/G16，KL 惩罚 + PPO clip + 优势归一化/裁剪）
+- **DPO / IPO / KTO** — 偏好对齐，支持**从 GRPO 轨迹自动生成偏好对** + 胜率评估
+- **Iterative GRPO** — 拒绝采样微调 + EMA 参考模型更新循环
+
+### 🚀 生产级推理
+- **KV Cache 家族** — 静态环形缓存 / Paged KV Cache（块表管理）/ **INT8·FP8 量化缓存**
+- **投机解码** — draft-then-verify，支持 batch > 1 与接受率自适应降级
+- **连续批处理** — `RequestQueue` + `ContinuousBatchScheduler` + **Prefix Cache** 共享 prefill
+- **API 服务** — FastAPI，OpenAI 兼容（`/v1/completions` + `/v1/chat/completions`）
+- torch.compile 自动探测与回退 · CUDA Events 精确计时（prefill/decode 分离）
+
+### 🔬 评估与可观测
+- 标准 Benchmark 集成（lm-eval：MMLU / ARC / HellaSwag / GSM8K …）+ 本地 PPL
+- **Needle-in-Haystack** 长上下文检索评估
+- **胜率评估**（RuleJudge / LengthPenaltyJudge）· 对齐质量评估（reward 分解 + KL）
+- **注意力可视化**（heatmap）+ **Logit Lens**（逐层 top-k 预测）
+- 训练/推理 Profiler（Chrome trace + 显存分层报告）· 监控工具箱（Loss Spike >3σ 检测、梯度范数分层）
+
+### 🛠️ 工程化设施
+- **统一训练抽象** — `BaseTrainer` 模板方法，五种训练器共享基础设施
+- **分布式与显存** — DDP / FSDP（full/grad/no 分片策略）· AMP bf16/fp16 · 梯度累积 · 梯度检查点
+- **训练稳定性** — EMA 影子权重 · Early Stopping · LR 调度（cosine/linear/WSD/constant + warmup）· 完整 checkpoint 生命周期（模型 + 优化器 + scaler + scheduler + EMA + RNG + resume offset，`keep_last_n` 自动清理）
+- **配置系统** — YAML + argparse 双向覆盖 · Hydra 可组合配置 · Pydantic 结构化校验（`n_head % n_kv_head == 0` 等规则）
+- **数据管道** — 全局 Shuffle（预计算索引）· 质量评分过滤 · MinHash+LSH 增量去重 · 多语言（tiktoken/SentencePiece + 语言检测加权采样）· 代码数据（AST 语法过滤）· 文档边界 / Packing（跨文档 mask）· 对话模板（chatml/llama-2/gemma）
+- **生态互操作** — HuggingFace 格式导出/加载（round-trip）· GGUF 导出（f32/f16/q8_0，内置无依赖 writer）· ONNX 导出（动态轴 + Runtime 验证）
+- **质量保障** — 230+ 回归测试（含确定性测试：固定种子 loss 曲线完全一致）· CI（pytest + mypy + black + ruff + CPU 冒烟训练）· 多阶段 Docker（训练 + TensorBoard + API）· pre-commit · 6 篇 ADR
+
+---
+
+## 🏗️ 架构对比
+
+| 维度 | BaselineGPT | ModernGPT |
+|------|-------------|-----------|
+| 归一化 | LayerNorm | RMSNorm（fused kernel 自动探测） |
+| FFN | GELU (4×) | SwiGLU (8d/3) / MoE grouped GEMM |
+| 位置编码 | 可学习绝对 Embedding | RoPE + NTK-aware 外推 |
+| Attention | MHA / SDPA | MHA / GQA / FlashAttention / Sliding Window / QK-Norm |
+| KV Cache | — | ring / paged + INT8/FP8 量化 |
+| MTP | — | n_future heads |
+| 长上下文 | block_size | + Ring Attention blockwise |
+
+**参数量对齐（12L / 8H / 512D，精确计算值）：**
+
+| 配置 | 总参数量 | 非嵌入参数 | KV Cache (B/tok) |
+|------|----------|-----------|------------------|
+| BaselineGPT | 54.6M | 28.4M | — |
+| ModernGPT MHA (n_kv=8) | 54.0M | 28.3M | 18,432 |
+| ModernGPT GQA-4KV | 51.7M | 26.0M | 9,216 **(-50%)** |
+| ModernGPT GQA-2KV | 50.5M | 24.8M | 4,608 **(-75%)** |
+| ModernGPT GQA-2KV + KV-INT8 | 50.5M | 24.8M | 2,304 **(-87.5%)** |
+
+---
+
+## 🚀 快速开始
+
+### 1. 安装
 
 ```bash
-pip install -r requirements.txt
-# 可选：评估、量化、多语言扩展
-pip install -e ".[eval,quant, multilingual]"
+pip install -r requirements.txt          # 基础依赖
+pip install -e ".[dev,eval,quant,hf]"    # 开发 / lm-eval / 量化 / HF 兼容（可选）
 ```
+
+安装后即可使用控制台命令：`nanogpt-train-pretrain`、`nanogpt-train-sft`、`nanogpt-train-grpo`、`nanogpt-train-dpo`、`nanogpt-generate`、`nanogpt-export-gguf` 等（含全部 `-hydra` 变体）。
 
 ### 2. 准备数据
 
 ```bash
-# 全局 shuffle 数据（推荐，v0.3.0）
 python data/prepare.py --split train
 python data/prepare.py --split val
-python data/validate.py data/openwebtext/train.bin
+python data/validate.py data/openwebtext/train.bin   # 抽样解码 + token 直方图检查
 
-# 生成全局随机索引（可选，提升训练质量）
+# 可选：生成全局随机索引，训练时全局 shuffle（v0.3.0）
 python -c "from data.openwebtext import generate_shuffle_index; generate_shuffle_index('data/openwebtext/train.bin', seed=1337)"
 ```
 
-### 3. 快速验证预训练（1000 步，约 5 分钟）
+### 3. 冒烟预训练（1000 步，CPU 亦可）
 
 ```bash
 python training/train_pretrain.py --config config/pretrain.yaml --max_iters 1000 --n_kv_head 2
@@ -115,85 +125,72 @@ python training/train_pretrain.py --config config/pretrain.yaml --max_iters 1000
 ### 4. 推理
 
 ```bash
-# 标准推理
 python inference/generate.py \
-  --config config/generate.yaml \
   --checkpoint out/pretrain/best_ckpt.pt \
-  --max_new_tokens 200
-
-# 连续批处理推理（v0.3.0）
-python inference/continuous_batching.py \
-  --checkpoint out/pretrain/best_ckpt.pt \
-  --prompts "The future of AI is" "Explain quantum computing"
+  --max_new_tokens 200 --num_samples 5
 ```
 
-### 5. 运行回归测试
+### 5. 启动 OpenAI 兼容 API
 
 ```bash
-python -m pytest tests/ -q
-```
+python api_server.py --checkpoint out/pretrain/best_ckpt.pt --model modern --port 8000
 
-### 6. 启动 API 服务（v0.3.0）
-
-```bash
-python api_server.py \
-  --checkpoint out/pretrain/best_ckpt.pt \
-  --model modern \
-  --port 8000
-
-# 测试
 curl http://localhost:8000/v1/completions \
   -H "Content-Type: application/json" \
   -d '{"prompt": "The future of AI is", "max_tokens": 50}'
 ```
 
----
-
-## 完整三阶段流水线 + 偏好对齐
+### 6. 回归测试
 
 ```bash
-# 预训练（推荐启用 EMA 和全局 shuffle）
+python -m pytest tests/ -q
+```
+
+---
+
+## 🔬 完整对齐流水线
+
+```bash
+# ① 预训练（EMA + checkpoint 自动清理）
 python training/train_pretrain.py --config config/pretrain.yaml --use_ema --keep_last_n 3
 
-# SFT（注入 CoT 格式推理能力）
+# ② SFT（注入 CoT 推理格式；--variant sft-only | sft-continued）
 python training/train_sft.py --config config/sft.yaml --init_from out/pretrain/best_ckpt.pt
 
-# GRPO 对齐（G4/G8 可选，KL 自适应）
+# ③ GRPO 对齐（组大小可调，--beta 为 KL 惩罚系数）
 python training/train_grpo.py --config config/grpo.yaml \
   --init_from out/sft/best_sft-only.pt \
-  --ref_from out/sft/best_sft-only.pt \
+  --ref_from  out/sft/best_sft-only.pt \
   --group_size 8
 
-# DPO 偏好对齐（从 GRPO 自动生成偏好对）
+# ④ DPO 偏好对齐（从 GRPO 轨迹自动生成偏好对 + 胜率评估）
 python training/train_dpo.py \
   --init_from out/sft/best_sft-only.pt \
   --preference_source grpo \
   --grpo_checkpoint out/grpo/best_grpo_g8.pt \
   --win_rate_eval
 
-# 评估
+# ⑤ 对齐评估（reward 分解 + KL）
 python evaluation/eval_alignment.py \
   --checkpoint out/grpo/best_grpo_g8.pt \
   --ref_checkpoint out/sft/best_sft-only.pt
 
-# 标准 Benchmark（v0.3.0）
-python evaluation/benchmark_suite.py \
+# ⑥ Benchmark（本地 PPL + 可选 lm-eval 下游任务）
+python evaluation/eval_benchmark.py \
   --checkpoint out/pretrain/best_ckpt.pt \
   --tasks mmlu,arc,hellaswag,gsm8k \
   --output_json out/benchmark_results.json
-
-# 长上下文测试（Needle-in-Haystack）
-python evaluation/needle_in_haystack.py \
-  --checkpoint out/pretrain/best_ckpt.pt \
-  --context_lengths 1024,2048,4096,8192
 ```
 
 ---
 
-## Hydra / OmegaConf 入口（可选）
+## 🧩 更多用法
+
+<details>
+<summary><b>Hydra 可组合配置入口</b></summary>
 
 ```bash
-python training/train_pretrain_hydra.py
+python training/train_pretrain_hydra.py                     # 默认配置
 python training/train_pretrain_hydra.py batch_size=16 n_layer=2
 python training/train_sft_hydra.py init_from=out/pretrain/best_ckpt.pt
 python training/train_grpo_hydra.py init_from=out/sft/best_sft-only.pt ref_from=out/sft/best_sft-only.pt
@@ -201,219 +198,260 @@ python training/train_dpo_hydra.py init_from=out/sft/best_sft-only.pt preference
 python inference/generate_hydra.py checkpoint=out/pretrain/best_ckpt.pt prompt="Hello"
 ```
 
----
+配置组位于 `config/hydra/`（model / training / optimizer / data 可自由组合）。
 
-## 项目结构
+</details>
 
-```
-nanogpt-modern/
-├── config/                  # YAML 配置 + Hydra 配置组合
-├── data/                    # 数据准备、加载、过滤、去重、混合、多语言、代码、CoT
-│   ├── prepare.py           # 多进程 shard 化预处理
-│   ├── filter.py            # 质量过滤（Length/Repetition/Regex/FastText）
-│   ├── dedup.py             # MinHash+LSH 去重（增量模式）
-│   ├── mixer.py             # 多源混合
-│   ├── openwebtext.py       # Memmap/Packing/DocBoundary + 全局 Shuffle
-│   ├── quality_filter.py    # 质量评分与分层采样（v0.3.0）
-│   ├── multilingual.py      # 多语言 tokenizer + 检测 + 采样（v0.3.0）
-│   ├── code.py              # 代码数据管道 + AST 过滤（v0.3.0）
-│   ├── arithmetic.py        # 算术数据集 + Chain-of-Thought（v0.3.0）
-│   └── chat_templates.py    # 对话模板系统（v0.3.0）
-├── model/                   # BaselineGPT / ModernGPT / KV Cache / 量化 / HF 兼容
-│   ├── modern_gpt.py        # ModernGPT（RMSNorm + SwiGLU + RoPE + GQA + MoE grouped GEMM）
-│   ├── baseline_gpt.py      # BaselineGPT（GPT-2 风格）
-│   ├── attention_utils.py   # SDPA 后端切换 + GQA 广播探测
-│   ├── flash_attention.py   # FlashAttention 封装
-│   ├── kv_cache_utils.py    # 环形缓存 + Paged KV Cache + **INT8/FP8 量化**（v0.3.0）
-│   ├── quantization.py      # INT8 / bitsandbytes 量化
-│   ├── paged_kv_cache.py    # 块表 KV Cache
-│   ├── ring_attention.py    # 序列并行 Ring Attention
-│   └── hf_model.py          # HuggingFace 兼容
-├── training/                # BaseTrainer + 预训练/SFT/GRPO/DPO/Iterative GRPO
-│   ├── trainer_base.py      # 统一训练抽象（DDP/FSDP/AMP/EMA/Early Stop）
-│   ├── train_pretrain.py    # 预训练
-│   ├── train_sft.py         # 监督微调
-│   ├── train_grpo.py        # GRPO 强化学习（批量化 + 梯度累积）
-│   ├── train_dpo.py         # DPO/IPO/KTO 偏好对齐（**完整训练 + 胜率评估**，v0.3.0）
-│   └── iterative_grpo.py  # Iterative GRPO
-├── inference/               # 生成与 benchmark 工具
-│   ├── generate.py          # 推理脚本（KV Cache / torch.compile / 投机解码）
-│   ├── generate_utils.py    # 采样工具
-│   ├── continuous_batching.py  # **连续批处理 + Prefix Cache**（v0.3.0）
-│   └── visualize_attention.py  # **注意力可视化 + Logit Lens**（v0.3.0）
-├── evaluation/              # 对齐评估与标准化 benchmark
-│   ├── eval_alignment.py    # 对齐质量评估
-│   ├── eval_benchmark.py    # 本地 PPL + lm-eval
-│   ├── benchmark_suite.py   # **标准 Benchmark 集成**（v0.3.0）
-│   ├── eval_win_rate.py     # **胜率评估**（v0.3.0）
-│   └── needle_in_haystack.py  # **长上下文 Needle-in-Haystack**（v0.3.0）
-├── rewards/                 # 规则奖励函数 + 格式/过程/正确性评分
-├── utils/                   # 配置、日志、checkpoint、LR 调度、RL/DPO 工具
-│   ├── config.py            # YAML + argparse + **Pydantic 校验**（v0.3.0）
-│   ├── config_models.py     # Pydantic 配置模型（v0.3.0）
-│   ├── checkpoint.py        # 完整 checkpoint 管理
-│   ├── logging.py           # wandb + TensorBoard 多后端日志
-│   ├── lr_scheduler.py      # cosine / linear / WSD / constant
-│   ├── rl_utils.py          # GRPO 工具
-│   ├── dpo_utils.py         # DPO/IPO/KTO 损失
-│   ├── monitoring.py        # **Loss Spike / 梯度范数 / 显存 / 吞吐监控**（v0.3.0）
-│   └── profiler.py          # **PyTorch Profiler + Chrome trace**（v0.3.0）
-├── tests/                   # 回归测试（234 passed + 新增）
-├── docs/                    # 技术报告、变更日志、实验记录、架构决策记录
-│   ├── TECH_REPORT.md       # 完整技术白皮书
-│   ├── CHANGELOG.md         # v0.2.0 → v0.3.0 变更日志、改进清单、已知限制、未来方向
-│   ├── EXPERIMENTS.md       # 实验记录与复现命令
-│   └── adr/                 # **架构决策记录**（v0.3.0）
-├── export_to_hf.py          # nanoGPT -> HuggingFace
-├── load_from_hf.py          # HuggingFace -> nanoGPT
-├── export_gguf.py           # 导出 GGUF
-├── export_to_onnx.py        # **ONNX 导出 + 验证**（v0.3.0）
-├── api_server.py            # **FastAPI OpenAI 兼容服务**（v0.3.0）
-├── profile_training.py      # **训练性能 Profiler**（v0.3.0）
-├── profile_inference.py     # **推理性能 Profiler**（v0.3.0）
-├── run_ablations.py         # 训练/推理消融自动化
-├── run_full_evaluation.py   # 全维度评估自动化
-├── Dockerfile               # **多阶段容器**（v0.3.0）
-├── docker-compose.yml       # **训练 + TensorBoard + API**（v0.3.0）
-├── .github/workflows/       # **CI/CD**（v0.3.0）
-│   └── ci.yml
-├── .pre-commit-config.yaml  # **预提交钩子**（v0.3.0）
-├── pyproject.toml           # 项目配置 + 可选依赖组
-└── README.md                # 本文档
-```
-
----
-
-## 模型架构对比
-
-| 维度 | BaselineGPT | ModernGPT |
-|------|-------------|-----------|
-| 归一化 | LayerNorm | RMSNorm（fused kernel） |
-| FFN | GELU (4×) | SwiGLU (8d/3) / **MoE grouped GEMM** |
-| 位置编码 | 可学习绝对 Embedding | RoPE + **NTK-aware 外推** |
-| Attention | MHA / SDPA/manual | MHA / **GQA grouped broadcast** / FlashAttention / Sliding Window / QK-Norm |
-| KV Cache | — | 原生 + ring/paged + **INT8/FP8 量化** |
-| MoE | — | 可选 top-1 gating + **分组 GEMM 优化** |
-| 预训练长度 | block_size | block_size + Ring Attention |
-| Pre/Post-Norm | 支持 | 支持 |
-| EMA | — | 内置 |
-
-### 参数量对齐（12L/512D）
-
-| 配置 | 总参数量 | KV Cache (B/tok) |
-|------|----------|------------------|
-| BaselineGPT | 54.6M | N/A |
-| ModernGPT MHA (n_kv=8) | 54.0M | 18,432 |
-| ModernGPT GQA-4KV | 51.7M | 9,216 (-50%) |
-| ModernGPT GQA-2KV | 50.5M | 4,608 (-75%) |
-| ModernGPT GQA-2KV + KV-INT8 | 50.5M | 2,304 (-87.5%) |
-
----
-
-## 文档索引
-
-| 文档 | 内容 |
-|------|------|
-| `docs/TECH_REPORT.md` | 完整技术白皮书：架构设计、详细模块、性能容量、Roadmap |
-| `docs/CHANGELOG.md` | v0.2.0 → v0.3.0 变更日志、改进清单、已知限制、未来方向 |
-| `docs/EXPERIMENTS.md` | 实验记录、复现命令、关键结论 |
-| `docs/adr/` | 架构决策记录（ADR）：为何选择 GRPO、grouped-broadcast、Hydra 等 |
-
----
-
-## 常用命令速查
-
-### 训练
+<details>
+<summary><b>训练速查</b></summary>
 
 ```bash
-# 现代模型 + GQA-2KV + EMA
-python training/train_pretrain.py --model modern --n_kv_head 2 --use_ema
+# 现代模型 + GQA-2KV + EMA + 梯度检查点
+python training/train_pretrain.py --model modern --n_kv_head 2 --use_ema --gradient_checkpointing
 
-# 基线模型（对照）
+# 基线对照组
 python training/train_pretrain.py --model baseline
 
 # 梯度累积（effective batch = 48）
 python training/train_pretrain.py --model modern --gradient_accumulation_steps 4
 
-# FSDP 多卡
-TORCH_DISTRIBUTED_DEBUG=DETAIL torchrun --nproc_per_node=4 training/train_pretrain.py --model modern --fsdp
+# FSDP 多卡（full / grad / no 三种分片策略）
+TORCH_DISTRIBUTED_DEBUG=DETAIL torchrun --nproc_per_node=4 \
+  training/train_pretrain.py --model modern --fsdp --fsdp_sharding_strategy full
 
-# 断点续训
+# 断点续训 / Early Stopping / WSD 调度
 python training/train_pretrain.py --model modern --resume out/pretrain/latest_ckpt.pt
+python training/train_pretrain.py --model modern --early_stopping_patience 5 --lr_schedule wsd
 
-# 启用监控（Loss Spike 检测 + 吞吐监控）
-python training/train_pretrain.py --model modern --use_monitoring
+# 文档 Packing（跨文档 attention mask）
+python training/train_pretrain.py --model modern --use_packing
+
+# Iterative GRPO（拒绝采样 + EMA 参考更新）
+python training/iterative_grpo.py \
+  --init_from out/sft/best_sft-only.pt --ref_from out/sft/best_sft-only.pt \
+  --rejection_interval 50 --ref_update_interval 100
 ```
 
-### 推理与评估
+</details>
+
+<details>
+<summary><b>推理 · 评估 · 性能速查</b></summary>
 
 ```bash
-# 推理消融
+# 推理消融（多长度 × 多样本，JSON 输出）
 python inference/generate.py --checkpoint out/pretrain/best_ckpt.pt \
   --max_new_tokens 200 400 600 --num_samples 30 --output_json out/ablation.json
 
-# 注意力可视化
-python inference/visualize_attention.py --checkpoint out/pretrain/best_ckpt.pt \
-  --prompt "The future of AI is" --output_dir out/viz/
+# 训练 / 推理性能 Profiler（Chrome trace + 显存报告）
+python profile_training.py --model modern --steps 20 --output_dir out/profile/
+python profile_inference.py --checkpoint out/pretrain/best_ckpt.pt --use_cache
 
-# 标准 Benchmark
-python evaluation/benchmark_suite.py --checkpoint out/pretrain/best_ckpt.pt \
-  --tasks mmlu,arc,hellaswag,gsm8k --output_json out/benchmark.json
+# 训练 / 推理消融矩阵一键运行
+python run_ablations.py --mode inference --checkpoint out/pretrain/best_ckpt.pt
+python run_ablations.py --mode train --max_iters 200
 
-# 胜率评估
-python evaluation/eval_win_rate.py --policy out/grpo/best_grpo_g8.pt \
-  --reference out/sft/best_sft-only.pt --num_samples 100
+# 全维度评估（pretrain/SFT/GRPO × easy/medium/hard）
+python run_full_evaluation.py
 ```
 
-### 导出
+</details>
+
+<details>
+<summary><b>导出与互操作</b></summary>
 
 ```bash
-# 导出 HuggingFace 格式
+# HuggingFace 格式（config.json + model.safetensors，可 round-trip 加载）
 python export_to_hf.py --checkpoint out/pretrain/best_ckpt.pt --out_dir hf/nanogpt-modern
+python load_from_hf.py --hf_dir hf/nanogpt-modern --out out/roundtrip.pt
 
-# 导出 GGUF
+# GGUF（内置无依赖 writer；Q4_0/Q5_0/Q6_K 类型枚举预留）
 python export_gguf.py --checkpoint out/pretrain/best_ckpt.pt \
   --out out/pretrain/best_ckpt.q8_0.gguf --quant q8_0
 
-# 导出 ONNX
+# ONNX（动态 batch/seq 轴 + ONNX Runtime 数值验证）
 python export_to_onnx.py --checkpoint out/pretrain/best_ckpt.pt \
-  --out out/pretrain/model.onnx --model modern
+  --out_path out/pretrain/model.onnx --model modern --validate
 ```
 
-### 容器化
+</details>
+
+<details>
+<summary><b>Python API：连续批处理 / Benchmark / 长上下文 / 可视化</b></summary>
+
+```python
+# 连续批处理服务引擎（请求队列 + 动态拼批 + Prefix Cache）
+from inference.continuous_batching import Request, RequestQueue, ContinuousBatchScheduler
+
+queue = RequestQueue()
+queue.enqueue(Request(prompt="The future of AI is", max_tokens=50, temperature=0.8))
+scheduler = ContinuousBatchScheduler(queue, model, device="cuda")
+# results = scheduler.run(...)  # GPU 持续满载，序列完成即拼入新请求
+
+# 标准 Benchmark 套件（封装 lm-eval）
+from evaluation.benchmark_suite import BenchmarkSuite
+suite = BenchmarkSuite(checkpoint="out/pretrain/best_ckpt.pt")
+suite.run(tasks=["mmlu", "gsm8k"], output_json="out/benchmark.json")
+suite.print_summary()
+
+# Needle-in-Haystack 长上下文检索（NTK-RoPE / Ring Attention 压力测试）
+from evaluation.needle_in_haystack import NeedleEvaluator
+evaluator = NeedleEvaluator(model, tokenizer, max_context_length=4096)
+results = evaluator.evaluate(depths=[0.0, 0.5, 1.0], num_trials=5)
+
+# 注意力热图 + Logit Lens 逐层诊断
+from inference.visualize_attention import AttentionVisualizer, LogitLens
+
+# 胜率评估（规则判官 / 长度惩罚判官）
+from evaluation.eval_win_rate import WinRateEvaluator, RuleJudge
+```
+
+</details>
+
+<details>
+<summary><b>Docker 容器化</b></summary>
 
 ```bash
-# 构建镜像
-docker build -t nanogpt-modern:latest .
+docker build -t nanogpt-modern:latest .   # 多阶段构建（base / dev / prod）
 
-# 启动训练 + TensorBoard + API
-docker-compose up
-
-# 仅训练
-docker-compose up train
+docker-compose up          # 训练 + TensorBoard(6006) + API(8000)
+docker-compose up train    # 仅训练
 ```
 
+</details>
+
 ---
 
-## 参考文献
+## 📊 实验与结果
+
+完整记录见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。快速验证环境：RTX 4060 Laptop (8GB) · PyTorch 2.4.1+cu121 · seed 1337。
+
+| 验证项 | 结果 |
+|--------|------|
+| 端到端流程 | 预训练 → SFT → GRPO → 评估 → 推理消融全部跑通 |
+| KV Cache 正确性 | cache / no-cache 输出 **bit-wise 一致** |
+| SFT 格式注入（3.3M 快速验证） | `<answer>` 格式遵从率 88–100%（模型容量不足以学会算术本身） |
+| 推理吞吐（3.3M，短序列） | ~140–240 tok/s（小模型下 Python 级 cache 管理开销 > 计算节省；50M + 长序列下 cache 优势显现） |
+| 训练确定性 | 固定种子重复训练 loss 曲线完全一致（`tests/test_determinism.py`） |
+
+> 参数量表中的 50M 配置为**目标规格**（数值精确计算）；小规模快速验证使用 3.3M 参数 + 合成数据，用于验证全技术栈可运行性与正确性。
+
+---
+
+## 📁 项目结构
+
+<details>
+<summary>展开完整目录树</summary>
+
+```
+nanogpt-modern/
+├── config/                  # YAML 配置 + Hydra 可组合配置
+│   ├── pretrain.yaml        # 预训练（12L/8H/512D, GQA-2KV, cosine + warmup）
+│   ├── sft.yaml             # SFT（sft-only / sft-continued）
+│   ├── grpo.yaml            # GRPO（G4, beta=0.04, PPO clip）
+│   ├── generate.yaml        # 推理
+│   └── hydra/               # Hydra 配置组（model / training / optimizer / data）
+├── data/                    # 数据管道
+│   ├── prepare.py           # 多进程 shard 化预处理
+│   ├── validate.py          # 数据完整性检查（解码抽样 + 直方图）
+│   ├── filter.py            # 质量过滤（Length/Repetition/Regex/FastText）
+│   ├── dedup.py             # MinHash+LSH 去重（增量签名持久化）
+│   ├── mixer.py             # 多源混合
+│   ├── openwebtext.py       # Memmap/Packing/DocBoundary + 全局 Shuffle
+│   ├── quality_filter.py    # 质量评分与分层采样
+│   ├── multilingual.py      # 多语言 tokenizer + 检测 + 加权采样
+│   ├── code.py              # 代码数据 + AST 语法过滤
+│   ├── arithmetic.py        # 算术 + Chain-of-Thought 数据集
+│   └── chat_templates.py    # 对话模板（chatml / llama-2 / gemma）
+├── model/                   # 模型
+│   ├── modern_gpt.py        # ModernGPT（RMSNorm/SwiGLU/RoPE/GQA/MoE/MTP）
+│   ├── baseline_gpt.py      # BaselineGPT（GPT-2 风格）
+│   ├── attention_utils.py   # SDPA 后端切换 + GQA broadcast 探测
+│   ├── flash_attention.py   # FlashAttention 封装
+│   ├── kv_cache_utils.py    # 环形缓存 + INT8/FP8 量化
+│   ├── paged_kv_cache.py    # Paged KV Cache（块表管理）
+│   ├── ring_attention.py    # 纯 PyTorch blockwise Ring Attention
+│   ├── quantization.py      # INT8 / bitsandbytes 权重量化
+│   └── hf_model.py          # HuggingFace 兼容层
+├── training/                # 训练（共享 BaseTrainer 抽象）
+│   ├── trainer_base.py      # DDP/FSDP/AMP/EMA/EarlyStop/ckpt 生命周期
+│   ├── train_pretrain.py    # 预训练
+│   ├── train_sft.py         # 监督微调
+│   ├── train_grpo.py        # GRPO（批量化 + 梯度累积）
+│   ├── train_dpo.py         # DPO/IPO/KTO（偏好对生成 + 胜率评估）
+│   ├── iterative_grpo.py    # 拒绝采样 + EMA 参考更新
+│   └── *_hydra.py           # Hydra 入口
+├── inference/               # 推理
+│   ├── generate.py          # CLI（KV Cache / compile / 投机解码 / 消融）
+│   ├── generate_utils.py    # 采样工具
+│   ├── continuous_batching.py  # 连续批处理引擎 + Prefix Cache（库 API）
+│   └── visualize_attention.py  # 注意力热图 + Logit Lens（库 API）
+├── evaluation/              # 评估
+│   ├── eval_alignment.py    # 对齐质量（reward 分解 + KL）
+│   ├── eval_benchmark.py    # 本地 PPL + lm-eval（CLI）
+│   ├── benchmark_suite.py   # Benchmark 套件（库 API）
+│   ├── eval_win_rate.py     # 胜率评估（库 API）
+│   └── needle_in_haystack.py   # 长上下文检索（库 API）
+├── rewards/                 # 规则奖励（格式/过程/正确性连续评分）
+├── utils/                   # 基础设施
+│   ├── config.py            # YAML + argparse 双向覆盖
+│   ├── config_models.py     # Pydantic 配置校验
+│   ├── checkpoint.py        # 完整 checkpoint 管理
+│   ├── logging.py           # wandb + TensorBoard 多后端
+│   ├── lr_scheduler.py      # cosine / linear / WSD / constant
+│   ├── rl_utils.py          # GRPO 工具
+│   ├── dpo_utils.py         # DPO/IPO/KTO 损失
+│   ├── monitoring.py        # Loss Spike 检测 / 梯度范数分层
+│   └── profiler.py          # PyTorch Profiler + Chrome trace
+├── tests/                   # 230+ 回归测试
+├── docs/                    # 白皮书 / 变更日志 / 实验记录 / 6 篇 ADR
+├── export_to_hf.py          # → HuggingFace 格式
+├── load_from_hf.py          # HuggingFace → 原生 checkpoint
+├── export_gguf.py           # → GGUF（无依赖 writer）
+├── export_to_onnx.py        # → ONNX（动态轴 + 验证）
+├── api_server.py            # FastAPI OpenAI 兼容服务
+├── profile_training.py      # 训练 Profiler
+├── profile_inference.py     # 推理 Profiler
+├── run_ablations.py         # 消融矩阵自动化
+├── run_full_evaluation.py   # 全维度评估自动化
+├── Dockerfile               # 多阶段容器（base / dev / prod）
+├── docker-compose.yml       # 训练 + TensorBoard + API
+└── .github/workflows/ci.yml # CI（lint + test + CPU 冒烟）
+```
+
+</details>
+
+---
+
+## 📚 文档索引
+
+| 文档 | 内容 |
+|------|------|
+| [docs/TECH_REPORT.md](docs/TECH_REPORT.md) | 技术白皮书：架构设计、模块详解、性能容量、Roadmap |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | v0.2.0 → v0.3.0 变更日志、42 项改进清单、已知限制 |
+| [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | 实验记录、复现命令、关键结论 |
+| [docs/adr/](docs/adr/README.md) | 架构决策记录：GQA grouped-broadcast、GRPO vs PPO、KV 量化、MoE grouped GEMM 等 |
+
+---
+
+## 📖 参考文献
 
 - [nanoGPT](https://github.com/karpathy/nanoGPT) — Andrej Karpathy
-- [RMSNorm] Root Mean Square Layer Normalization (Zhang & Sennrich, 2019)
-- [SwiGLU] GLU Variants Improve Transformer (Shazeer, 2020)
-- [RoPE] RoFormer: Enhanced Transformer with Rotary Position Embedding (Su et al., 2021)
-- [GQA] GQA: Training Generalized Multi-Query Transformer Models (Ainslie et al., 2023)
-- [GRPO] Group Relative Policy Optimization (DeepSeekMath, Shao et al., 2024)
-- [LLaMA] LLaMA: Open and Efficient Foundation Language Models (Touvron et al., 2023)
-- [DPO] Direct Preference Optimization (Rafailov et al., 2023)
-- [KIVI] KV Cache Quantization (Liu et al., 2024)
-- [vLLM] Efficient Memory Management for LLM Serving (Kwon et al., 2023)
+- RMSNorm — *Root Mean Square Layer Normalization* (Zhang & Sennrich, 2019)
+- SwiGLU — *GLU Variants Improve Transformer* (Shazeer, 2020)
+- RoPE — *RoFormer: Enhanced Transformer with Rotary Position Embedding* (Su et al., 2021)
+- GQA — *Training Generalized Multi-Query Transformer Models* (Ainslie et al., 2023)
+- LLaMA — *Open and Efficient Foundation Language Models* (Touvron et al., 2023)
+- GRPO — *DeepSeekMath* (Shao et al., 2024)
+- DPO — *Direct Preference Optimization* (Rafailov et al., 2023)
+- KIVI — *KV Cache Quantization* (Liu et al., 2024)
+- vLLM — *Efficient Memory Management for LLM Serving* (Kwon et al., 2023)
 
 ---
 
-## 许可
+## 📄 许可
 
-基于 nanoGPT 思想构建，仅供研究与学习使用。MIT License。
+基于 nanoGPT 思想构建，仅供研究与学习使用。[MIT License](LICENSE)。
 
 ---
 
-*版本: v0.3.0 | 最后更新: 2026-06-30*
+*v0.3.0 · 最后更新 2026-10*

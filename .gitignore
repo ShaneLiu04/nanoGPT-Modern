@@ -18,6 +18,7 @@ out/
 # Data
 data/openwebtext/
 data/openwebtext_test/
+data/owt_parquet/
 *.bin
 *.idx
 

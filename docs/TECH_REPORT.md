@@ -142,7 +142,7 @@ nanoGPT-Modern 的设计目标正是填补这一空白：在**可完整复现的
 2. **全栈可观测**：训练 loss、推理吞吐、KV Cache 显存、对齐准确率等指标可在同一套代码中横向对比
 3. **优雅降级**：所有第三方依赖（flash-attn、bitsandbytes）均有运行时探测和静默回退，纯 PyTorch 路径始终可用
 4. **配置即代码**：所有超参通过 YAML 文件管理，CLI 可嵌套覆盖，实验配置自动保存以确保可复现
-5. **模板方法 + 钩子扩展**：`BaseTrainer` 定义固定生命周期，子类覆盖钩子；`GRPOTrainer` 进一步提供 `on_step_end` / `on_eval_end` 供迭代扩展
+5. **模板方法 + 钩子扩展**：`BaseTrainer` 定义固定生命周期（含 `on_step_end` 监控/记录钩子），子类覆盖钩子；`GRPOTrainer` 进一步提供 `on_rollout_end` / `on_eval_end` 供迭代扩展
 
 ### 4.2 整体架构视图
 

@@ -16,6 +16,10 @@ num_experts: 1
 moe_aux_loss_factor: 0.01
 moe_capacity_factor: 1.25
 
+# Ablation architecture switches (AR-v0.4.0-experiments / FR3)
+position_encoding: rope   # rope | learned (absolute PE, hard cap at block_size)
+ffn_variant: swiglu       # swiglu (8d/3) | gelu (GPT-2-style 4x)
+
 qk_norm: false
 attn_temperature: 1.0
 rmsnorm_eps: 1.0e-6
