@@ -108,8 +108,8 @@ pip install -e ".[dev,eval,quant,hf]"    # 开发 / lm-eval / 量化 / HF 兼容
 ### 2. 准备数据
 
 ```bash
-python data/prepare.py --split train
-python data/prepare.py --split val
+python data/prepare.py --split train --full   # --full = 全量 7,913,597 docs（省略则默认 1M 子集！）
+python data/prepare.py --split val --full         # val 全量 10K docs（与默认等价，显式化避免歧义）
 python data/validate.py data/openwebtext/train.bin   # 抽样解码 + token 直方图检查
 
 # 可选：生成全局随机索引，训练时全局 shuffle（v0.3.0）

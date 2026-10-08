@@ -118,9 +118,9 @@
 # 1. 环境
 pip install -r requirements.txt
 
-# 2. 数据准备（真实 OpenWebText）
-python data/prepare.py --split train
-python data/prepare.py --split val
+# 2. 数据准备（真实 OpenWebText；--full = 全量 7,913,597 docs，省略则默认 1M 子集）
+python data/prepare.py --split train --full
+python data/prepare.py --split val --full
 python data/validate.py data/openwebtext/train.bin
 
 # 3. 预训练（50M 参数，18k iters）

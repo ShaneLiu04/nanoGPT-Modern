@@ -28,6 +28,23 @@ from pathlib import Path
 import numpy as np
 
 
+def resolve_max_docs(split: str, max_docs, full: bool):
+    """Resolve the effective document limit.
+
+    Priority: explicit ``--max_docs`` > ``--full`` (no limit, returns ``None``)
+    > split-dependent default (1,000,000 for train / 10,000 for val).
+
+    The default caps are a silent-subset trap for reproduction: the full train
+    split has ~7.9M docs, so bare ``--split train`` yields a 1M-doc subset that
+    does NOT match the canonical ``train.bin``. Use ``--full`` for that.
+    """
+    if max_docs is not None:
+        return max_docs
+    if full:
+        return None
+    return 1_000_000 if split == "train" else 10_000
+
+
 def get_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", type=str, default="data/openwebtext")
@@ -36,7 +53,16 @@ def get_args(argv=None):
         "--max_docs",
         type=int,
         default=None,
-        help="Max docs to process (default: 1M for train, 10K for val)",
+        help="Max docs to process. Default when omitted: 1,000,000 for train / "
+        "10,000 for val — NOT the full dataset (full train split has ~7,913,597 "
+        "docs). Use --full to process everything, or pass an explicit value.",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Process the FULL split with no document limit (overrides the "
+        "default 1M-train/10K-val caps; an explicit --max_docs still wins). "
+        "Required to reproduce the canonical train.bin (7,913,597 docs).",
     )
     parser.add_argument(
         "--shard_size", type=int, default=100_000_000, help="Target tokens per shard"
@@ -441,9 +467,8 @@ def _prepare_map_mode(args, tokenizer, dtype):
     )
     ds = _load_mixed_dataset(args, streaming=False)
 
-    default_max = 1_000_000 if args.split == "train" else 10_000
-    max_docs = args.max_docs if args.max_docs is not None else default_max
-    if max_docs and hasattr(ds, "__len__") and len(ds) > max_docs:  # type: ignore[arg-type]
+    max_docs = resolve_max_docs(args.split, args.max_docs, args.full)
+    if max_docs is not None and hasattr(ds, "__len__") and len(ds) > max_docs:
         ds = ds.select(range(max_docs))
 
     if quality_filter is not None:
@@ -522,11 +547,15 @@ def _prepare_streaming_mode(args, tokenizer, dtype):
 
     ds = _load_mixed_dataset(args, streaming=True)
 
-    default_max = 1_000_000 if args.split == "train" else 10_000
-    max_docs = args.max_docs if args.max_docs is not None else default_max
-    print(
-        f"Target: up to {max_docs:,} documents, shards of ~{args.shard_size:,} tokens"
-    )
+    max_docs = resolve_max_docs(args.split, args.max_docs, args.full)
+    if max_docs is not None:
+        print(
+            f"Target: up to {max_docs:,} documents, shards of ~{args.shard_size:,} tokens"
+        )
+    else:
+        print(
+            f"Target: FULL split (no doc limit), shards of ~{args.shard_size:,} tokens"
+        )
 
     writer = _ShardWriter(
         output_dir=args.output_dir,
@@ -560,7 +589,7 @@ def _prepare_streaming_mode(args, tokenizer, dtype):
         batch = []
 
     for doc in ds:
-        if doc_count >= max_docs:
+        if max_docs is not None and doc_count >= max_docs:
             break
         batch.append(doc.get("text", ""))
         doc_count += 1
