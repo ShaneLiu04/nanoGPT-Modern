@@ -2,6 +2,6 @@
 # OpenWebText data loading defaults.
 
 data_dir: data/openwebtext
-num_workers: 4
+num_workers: 0
 shuffle_buffer: null
 use_packing: false

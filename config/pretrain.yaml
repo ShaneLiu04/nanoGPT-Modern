@@ -30,7 +30,7 @@ grad_clip: 1.0
 
 # Data
 data_dir: data/openwebtext
-num_workers: 4
+num_workers: 0         # 0 = main-process loading: strict global-shuffle order; Windows multi-worker spawn is unreliable
 shuffle_buffer:       # chunk-level buffer shuffle size (None = min(10000, chunks))
 use_packing: false    # pack multiple short documents per sequence with cross-doc mask
 
