@@ -1270,8 +1270,8 @@ use_wandb: false
   □ 可选: pip install -e ".[eval,quant]"
 
 □ 数据准备
-  □ python data/prepare.py --split train
-  □ python data/prepare.py --split val
+  □ python data/prepare.py --split train --full
+  □ python data/prepare.py --split val --full
   □ python data/validate.py data/openwebtext/train.bin
 
 □ 预训练
