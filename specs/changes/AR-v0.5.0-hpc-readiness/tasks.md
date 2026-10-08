@@ -113,6 +113,15 @@
 - 遗留发现：`continuous_batching.generate_batch` 解码首步将 prompt 尾 token 重复喂入（此时 KV 已含整个 prompt）——off-by-one 独立缺陷，已记入 T014 备注（重构时一并修复）；`_generate_speculative_batched` 的 fallback 机制使 batch 投机 temp=0 断言不稳健，UT 以接口级+单序列端到端覆盖
 - 持久化：commit + gitee 推送（新工作流规则：每个 AR 结束后推送 https://gitee.com/liu-xingyan04/nano-gpt-modern）
 
+### 2026-10-08 会话记录（gitee 瘦身镜像同步）
+
+- 完成工作：落地 `tools/gitee_mirror.py`，全量历史首次推上 gitee（29 commit + 148 seed = 169 链元素，远端 `main`=167accb0，默认分支已切 main，临时 refs 全清）
+- **关键教训（git 协议本质）**：pack 协商是 **commit 祖先级差集**而非对象级去重——独立 seed 链对真实 commit 的包体毫无缩减（实测恒 402KB）。正解：把 seed commits **织入镜像链**（镜像 commit 以 seed 链尾为 parent），链上相邻元素差集天然受控，逐元素推送每包 ≤49KB
+- **传输度量修正**：wire size 文本取 gz（pack 内 zlib≈gz）、图片取 raw（png 不可压）；批切分按「累加不超 42KB」上限式（非 flush-≥ 阈值式，后者允许 42+单 blob 超限）；`fig4_performance.png` 77KB>58KB 图片阈值纳入 quantize（此前仅 >95KB 触发漏网）
+- 替换规则：fig1-4 PIL quantize（195/115/114/77KB → 43/44/40/33KB）、uv.lock×2 → stub（附 `uv lock` 再生指引）；镜像链确定性（seed committer date 取原 commit author date）保证重跑增量跳过
+- 远端不可保真项：5 blob 替换 + commit parent 指向 seed 链（author/date/message 逐字保留）；本地历史零改动，gitee 为内容镜像
+- 固化规则：**每个 AR 结束后运行 `python tools/gitee_mirror.py`**（幂等增量；BDWAF ~100KB POST 上限、SSH 22 封锁、NTLM 代理 `proxyhk.huawei.com:8080` 环境约束内置）
+
 ## 阶段门控记录
 
 > 由 sdd-phase-gate skill 在阶段门控审查后追加，记录每轮审查结果（PASS/FAIL + 轮次）。格式见 sdd-phase-gate SKILL.md Step 6。
