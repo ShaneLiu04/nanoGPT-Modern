@@ -46,6 +46,31 @@ def get_args():
         default=None,
         help="Number of KV heads for GQA (default: n_head for MHA)",
     )
+    parser.add_argument(
+        "--position_encoding",
+        type=str,
+        default="rope",
+        choices=["rope", "learned"],
+        help="Position encoding: RoPE (default) or learnable absolute embedding",
+    )
+    parser.add_argument(
+        "--ffn_variant",
+        type=str,
+        default="swiglu",
+        choices=["swiglu", "gelu"],
+        help="FFN variant: SwiGLU 8d/3 (default) or GPT-2-style GELU 4x",
+    )
+    parser.add_argument(
+        "--qk_norm",
+        action="store_true",
+        help="Enable per-head QK-Norm (attention stabilization)",
+    )
+    parser.add_argument(
+        "--num_experts",
+        type=int,
+        default=1,
+        help="Number of MoE experts in the FFN (1 = dense)",
+    )
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--learning_rate", type=float, default=6e-4)
     parser.add_argument("--max_iters", type=int, default=18000)
@@ -125,6 +150,22 @@ def get_args():
         help="MemmapDataset shuffle buffer size (default: 10000 or dataset size)",
     )
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument(
+        "--exp_id",
+        type=str,
+        default=None,
+        help="Experiment ID for structured metrics (default: basename of --out_dir)",
+    )
+    parser.add_argument(
+        "--no_metrics",
+        action="store_true",
+        help="Disable structured metrics.jsonl / manifest.json recording",
+    )
+    parser.add_argument(
+        "--no_monitoring",
+        action="store_true",
+        help="Disable loss-spike detection and grad-norm monitoring",
+    )
     parser.add_argument(
         "--config", type=str, default=None, help="Path to YAML config file"
     )
@@ -225,6 +266,10 @@ class PretrainTrainer(BaseTrainer):
                     use_ring_attention=args.use_ring_attention,
                     ring_block_size_q=args.ring_block_size_q,
                     ring_block_size_kv=args.ring_block_size_kv,
+                    position_encoding=getattr(args, "position_encoding", "rope"),
+                    ffn_variant=getattr(args, "ffn_variant", "swiglu"),
+                    qk_norm=getattr(args, "qk_norm", False),
+                    num_experts=getattr(args, "num_experts", 1),
                 )
                 self.model = ModernGPT(config)
             self.model = self.model.to(self.device)
@@ -398,8 +443,10 @@ class PretrainTrainer(BaseTrainer):
                 if args.grad_clip > 0:
                     if self.scaler is not None and self.scaler.is_enabled():
                         self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), args.grad_clip
+                    self._step_grad_norm = float(
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(), args.grad_clip
+                        )
                     )
 
                 if self.scaler is not None and self.scaler.is_enabled():
@@ -436,6 +483,13 @@ class PretrainTrainer(BaseTrainer):
                         "train/tokens_per_sec": tokens_per_sec,
                     },
                     self.iter_num,
+                )
+                self.on_step_end(
+                    self.iter_num,
+                    lossf,
+                    lr=lr,
+                    tokens_per_sec=tokens_per_sec,
+                    grad_norm=getattr(self, "_step_grad_norm", None),
                 )
                 self.log_memory_stats(self.iter_num)
                 running_loss = 0.0
@@ -476,6 +530,15 @@ class PretrainTrainer(BaseTrainer):
                         f"Early stopping triggered at iter {self.iter_num} "
                         f"(val loss did not improve for {args.early_stopping_patience} evals)"
                     )
+                    self.finalize_recorder(
+                        "completed",
+                        {
+                            "best_val_loss": self.best_val_loss,
+                            "final_val_loss": losses["val"],
+                            "steps": self.iter_num,
+                            "early_stopped": True,
+                        },
+                    )
                     return
 
             self.iter_num += 1
@@ -490,6 +553,14 @@ class PretrainTrainer(BaseTrainer):
             if losses["val"] < self.best_val_loss:
                 self.best_val_loss = losses["val"]
                 self._save_checkpoint("best_ckpt.pt")
+            self.finalize_recorder(
+                "completed",
+                {
+                    "best_val_loss": self.best_val_loss,
+                    "final_val_loss": losses["val"],
+                    "steps": self.iter_num,
+                },
+            )
 
 
 def main():

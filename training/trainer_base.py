@@ -15,7 +15,7 @@ import random
 import warnings
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
-
+from functools import partial
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -26,7 +26,9 @@ from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 from utils.checkpoint import save_checkpoint, load_checkpoint, get_rng_state
 from utils.config import to_dict
+from utils.experiment import ExperimentRecorder
 from utils.logging import Logger
+from utils.monitoring import GradientNormMonitor, LossSpikeDetector
 
 
 def save_run_config(args, out_dir, filename="config.yaml"):
@@ -90,21 +92,24 @@ def set_seed(seed, rank=0):
         torch.cuda.manual_seed_all(seed)
 
 
+def _seed_worker(worker_id, base_seed=0, rank=0):
+    # In non-distributed mode ``rank`` is -1; treat it as 0 for seeding.
+    effective_rank = rank if rank >= 0 else 0
+    worker_seed = base_seed + effective_rank * 1000 + worker_id
+    set_seed(worker_seed)
+
+
 def make_worker_init_fn(base_seed=0, rank=0):
     """Return a DataLoader ``worker_init_fn`` for deterministic per-worker seeds.
 
     Usage::
 
         DataLoader(..., worker_init_fn=make_worker_init_fn(args.seed, rank))
+
+    Returns a ``functools.partial`` over a module-level function so that it
+    remains picklable under Windows spawn-based DataLoader workers.
     """
-
-    def _worker_init(worker_id):
-        # In non-distributed mode ``rank`` is -1; treat it as 0 for seeding.
-        effective_rank = rank if rank >= 0 else 0
-        worker_seed = base_seed + effective_rank * 1000 + worker_id
-        set_seed(worker_seed)
-
-    return _worker_init
+    return partial(_seed_worker, base_seed=base_seed, rank=rank)
 
 
 def infer_device(device_arg, local_rank):
@@ -359,6 +364,9 @@ class BaseTrainer(ABC):
         self.ctx = nullcontext()
         self.logger = None
         self.ckpt_manager = None
+        self.recorder = None
+        self.spike_detector = None
+        self.grad_monitor = None
 
         # Template-method orchestration: subclasses override the protected hooks
         # below instead of re-implementing __init__.  This guarantees that data,
@@ -373,6 +381,8 @@ class BaseTrainer(ABC):
         self._setup_checkpointing()
         self._setup_logger()
         self._maybe_resume()
+        self._setup_recorder()
+        self._setup_monitors()
 
     def _init_state(self):
         """Initialize training state variables.  Subclasses may override."""
@@ -409,6 +419,137 @@ class BaseTrainer(ABC):
     def _maybe_resume(self):
         """Load checkpoint if --resume is set.  Subclasses may override."""
         pass
+
+    def _setup_recorder(self):
+        """Create the ExperimentRecorder for structured metrics (master only).
+
+        Metrics land in ``<out_dir>/experiments/<exp_id>/`` where ``exp_id``
+        defaults to the basename of ``out_dir``.  Recorder failures degrade
+        to a warning and never block training.
+        """
+        self.recorder = None
+        if not self.master_process:
+            return
+        if getattr(self.args, "no_metrics", False):
+            return
+        out_dir = str(getattr(self.args, "out_dir", "out"))
+        exp_id = getattr(self.args, "exp_id", None) or os.path.basename(out_dir) or "exp"
+        exp_dir = os.path.join(out_dir, "experiments", exp_id)
+        resume = bool(getattr(self.args, "resume", None))
+        try:
+            self.recorder = ExperimentRecorder(
+                exp_dir=exp_dir,
+                exp_id=exp_id,
+                config=to_dict(self.args),
+                resume=resume,
+            )
+        except Exception as exc:  # recording must never block training
+            warnings.warn(
+                f"ExperimentRecorder setup failed ({exc}); "
+                "continuing without structured metrics.",
+                RuntimeWarning,
+            )
+            self.recorder = None
+
+    def _setup_monitors(self):
+        """Build the loss-spike / grad-norm monitors (master only).
+
+        ``--no_monitoring`` leaves both as None (spike detection disabled);
+        construction failures degrade to a warning and never block training.
+        """
+        self.spike_detector = None
+        self.grad_monitor = None
+        if not self.master_process:
+            return
+        if getattr(self.args, "no_monitoring", False):
+            return
+        try:
+            self.spike_detector = LossSpikeDetector()
+        except Exception as exc:
+            warnings.warn(
+                f"LossSpikeDetector setup failed ({exc}); "
+                "continuing without spike detection.",
+                RuntimeWarning,
+            )
+            self.spike_detector = None
+        try:
+            self.grad_monitor = GradientNormMonitor(self.logger)
+        except Exception as exc:
+            warnings.warn(
+                f"GradientNormMonitor setup failed ({exc}); "
+                "continuing without grad-norm monitoring.",
+                RuntimeWarning,
+            )
+            self.grad_monitor = None
+
+    def on_step_end(self, step, loss, lr=None, grad_norm=None, tokens_per_sec=None):
+        """Monitoring + structured-recording hook for one logged train step.
+
+        Order (design.md §4.2 flow B): grad-norm acquisition -> spike
+        detection (with optional LR auto-reduction) -> record_step.  Every
+        monitoring failure degrades to a warning; recording and training are
+        never interrupted.
+        """
+        if not self.master_process:
+            return
+        loss = float(loss)
+
+        # --- monitoring path ---
+        if grad_norm is None and self.model is not None:
+            if self.grad_monitor is not None:
+                try:
+                    norms = self.grad_monitor.compute(self.model, step)
+                    grad_norm = float(norms.get("total_norm", 0.0))
+                except Exception as exc:
+                    warnings.warn(
+                        f"GradientNormMonitor.compute failed ({exc}); "
+                        "grad_norm omitted for this step.",
+                        RuntimeWarning,
+                    )
+                    grad_norm = None
+
+        if self.spike_detector is not None:
+            try:
+                result = self.spike_detector.update(loss, step)
+                if result.get("spike_detected"):
+                    print(f"[WARN] {result.get('message', 'loss spike detected')}")
+                    factor = result.get("lr_multiplier")
+                    if factor is not None and self.optimizer is not None:
+                        # Multiply the *current* lr; the next scheduler.step()
+                        # overwrites it with the scheduled value.
+                        for group in self.optimizer.param_groups:
+                            group["lr"] = group["lr"] * factor
+                    if self.recorder is not None:
+                        self.recorder.record_event(
+                            "loss_spike",
+                            step,
+                            loss=loss,
+                            z_score=result.get("z_score"),
+                            lr_reduce_factor=factor,
+                            window_mean=result.get("window_mean"),
+                            window_std=result.get("window_std"),
+                        )
+            except Exception as exc:
+                warnings.warn(
+                    f"LossSpikeDetector.update failed ({exc}); "
+                    "spike detection skipped for this step.",
+                    RuntimeWarning,
+                )
+
+        # --- record path ---
+        if self.recorder is not None:
+            fields = {"loss": loss}
+            if lr is not None:
+                fields["lr"] = lr
+            if grad_norm is not None:
+                fields["grad_norm"] = grad_norm
+            if tokens_per_sec is not None:
+                fields["tokens_per_sec"] = tokens_per_sec
+            if torch.cuda.is_available():
+                fields["mem_gb"] = round(
+                    torch.cuda.max_memory_allocated() / 1024**3, 3
+                )
+            self.recorder.record_step(step, **fields)
 
     def setup_amp(self, use_bf16=True):
         """Initialize mixed precision context and GradScaler."""
@@ -502,13 +643,30 @@ class BaseTrainer(ABC):
             keep_last_n=getattr(self.args, "keep_last_n", 0),
         )
 
+    # Eval tags dual-written to the ExperimentRecorder as eval events
+    # (tag -> metrics.jsonl field name).
+    _RECORDER_EVAL_TAGS = {
+        "val/loss": "val_loss",
+        "val/mean_reward": "mean_reward",
+        "val/accuracy": "val_accuracy",
+    }
+
     def log_scalars(self, scalars, step):
         if self.logger is not None:
             self.logger.log_scalars(scalars, step)
+        if self.recorder is not None:
+            for tag, value in scalars.items():
+                field = self._RECORDER_EVAL_TAGS.get(tag)
+                if field:
+                    self.recorder.record_eval(step, **{field: float(value)})
 
     def log_scalar(self, tag, value, step):
         if self.logger is not None:
             self.logger.log_scalar(tag, value, step)
+        if self.recorder is not None:
+            field = self._RECORDER_EVAL_TAGS.get(tag)
+            if field:
+                self.recorder.record_eval(step, **{field: float(value)})
 
     def log_text(self, tag, text, step):
         if self.logger is not None:
@@ -536,12 +694,31 @@ class BaseTrainer(ABC):
             )
         return self.ckpt_manager.load(path, strict=strict)
 
+    def finalize_recorder(self, status="completed", final_metrics=None):
+        """Finalize the ExperimentRecorder; no-op when recording is disabled.
+
+        ``wall_time_s`` is filled in automatically (since the original start)
+        when not supplied by the caller.
+        """
+        if self.recorder is None or self.recorder.finalized:
+            return
+        final_metrics = dict(final_metrics or {})
+        if "wall_time_s" not in final_metrics:
+            wall = self.recorder.wall_time()
+            if wall is not None:
+                final_metrics["wall_time_s"] = wall
+        self.recorder.finalize(status, final_metrics)
+
     @abstractmethod
     def train(self):
         """Main training loop. Must be implemented by subclasses."""
         raise NotImplementedError
 
     def cleanup(self):
+        # A recorder still in "running" state at cleanup time means train()
+        # ended without finalize() (interrupt or crash) — mark it as such.
+        if self.recorder is not None and not self.recorder.finalized:
+            self.recorder.finalize("interrupted", {})
         if self.logger is not None:
             self.logger.close()
         cleanup_distributed()

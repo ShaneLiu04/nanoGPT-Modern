@@ -94,6 +94,22 @@ def get_args():
         help="Resume from a checkpoint saved by this script",
     )
     parser.add_argument(
+        "--exp_id",
+        type=str,
+        default=None,
+        help="Experiment ID for structured metrics (default: basename of --out_dir)",
+    )
+    parser.add_argument(
+        "--no_metrics",
+        action="store_true",
+        help="Disable structured metrics.jsonl / manifest.json recording",
+    )
+    parser.add_argument(
+        "--no_monitoring",
+        action="store_true",
+        help="Disable loss-spike detection and grad-norm monitoring",
+    )
+    parser.add_argument(
         "--config", type=str, default=None, help="Path to YAML config file"
     )
     parser.add_argument(
@@ -271,8 +287,10 @@ class SFTTrainer(BaseTrainer):
                     if args.grad_clip > 0:
                         if self.scaler is not None and self.scaler.is_enabled():
                             self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(), args.grad_clip
+                        self._step_grad_norm = float(
+                            torch.nn.utils.clip_grad_norm_(
+                                self.model.parameters(), args.grad_clip
+                            )
                         )
 
                     if self.scaler is not None and self.scaler.is_enabled():
@@ -302,6 +320,12 @@ class SFTTrainer(BaseTrainer):
                         },
                         self.global_step,
                     )
+                    self.on_step_end(
+                        self.global_step,
+                        raw_loss,
+                        lr=lr,
+                        grad_norm=getattr(self, "_step_grad_norm", None),
+                    )
 
                 # Evaluation + checkpointing
                 if self.global_step % args.eval_interval == 0 and self.master_process:
@@ -321,6 +345,10 @@ class SFTTrainer(BaseTrainer):
         if self.master_process:
             self.save_checkpoint(
                 f"final_{args.variant}.pt", self.global_step, self.best_val_loss
+            )
+            self.finalize_recorder(
+                "completed",
+                {"best_val_loss": self.best_val_loss, "steps": self.global_step},
             )
 
 

@@ -93,6 +93,8 @@ class LossSpikeDetector:
             z_score = 0.0
 
         result["z_score"] = round(z_score, 3)
+        result["window_mean"] = round(mean, 6)
+        result["window_std"] = round(std, 6)
 
         if z_score > self.threshold and mean > 0.0:
             self._spike_count += 1

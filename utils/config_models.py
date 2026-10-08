@@ -62,6 +62,8 @@ class ModernGPTModelConfig(ModelConfig):
     intermediate_size: Optional[int] = None
     norm_position: Literal["pre", "post"] = "pre"
     num_experts: int = 1
+    position_encoding: Literal["rope", "learned"] = "rope"
+    ffn_variant: Literal["swiglu", "gelu"] = "swiglu"
     gradient_checkpointing: bool = False
     qk_norm: bool = False
     attn_temperature: float = 1.0
@@ -92,8 +94,14 @@ class ModernGPTModelConfig(ModelConfig):
 
     @model_validator(mode="after")
     def _check_gqa(self) -> ModernGPTModelConfig:
-        """Ensure n_head is divisible by n_kv_head."""
-        assert self.n_kv_head is not None
+        """Ensure n_head is divisible by n_kv_head.
+
+        ``n_kv_head=None`` (the default; field validators do not run on
+        defaults in pydantic v2) falls back to ``n_head`` here so that
+        ``ModernGPTModelConfig()`` is constructible.
+        """
+        if self.n_kv_head is None:
+            self.n_kv_head = self.n_head
         if self.n_head % self.n_kv_head != 0:
             raise ValueError(
                 f"n_head ({self.n_head}) must be divisible by n_kv_head ({self.n_kv_head})"
@@ -105,14 +113,32 @@ class ModernGPTModelConfig(ModelConfig):
         return self
 
     @model_validator(mode="after")
+    def _check_ablation_combos(self) -> ModernGPTModelConfig:
+        """Reject invalid ablation-switch combinations with readable messages."""
+        if self.position_encoding == "learned" and self.rope_scaling is not None:
+            raise ValueError(
+                "learned 绝对位置编码不支持 NTK 缩放，请去掉 rope_scaling "
+                "(position_encoding='learned' is incompatible with rope_scaling)"
+            )
+        if self.ffn_variant == "gelu" and self.num_experts > 1:
+            raise ValueError(
+                "ffn_variant='gelu' 不支持 MoE，请使用 ffn_variant='swiglu' "
+                "或 num_experts=1"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _check_intermediate_size(self) -> ModernGPTModelConfig:
         """Auto-compute intermediate_size when None, aligned to multiple_of."""
         if self.intermediate_size is None:
-            raw = int(8 / 3 * self.n_embd)
-            multiple_of = 128
-            self.intermediate_size = (
-                (raw + multiple_of - 1) // multiple_of
-            ) * multiple_of
+            if self.ffn_variant == "gelu":
+                self.intermediate_size = 4 * self.n_embd
+            else:
+                raw = int(8 / 3 * self.n_embd)
+                multiple_of = 128
+                self.intermediate_size = (
+                    (raw + multiple_of - 1) // multiple_of
+                ) * multiple_of
         return self
 
 
