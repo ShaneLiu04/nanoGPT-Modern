@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanogpt-modern"
-version = "0.2.0"
+version = "0.3.0"
 description = "端到端轻量级大语言模型训练-推理-对齐全栈框架"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -42,6 +42,7 @@ dependencies = [
 eval = ["lm-eval>=0.4.0"]
 quant = ["bitsandbytes>=0.41.0", "gguf>=0.6.0"]
 hf = ["transformers"]
+plot = ["matplotlib>=3.7.0"]
 dev = ["pytest", "black", "ruff", "mypy", "types-PyYAML"]
 
 [project.scripts]
@@ -64,6 +65,8 @@ nanogpt-train-dpo-hydra = "training.train_dpo_hydra:main"
 nanogpt-train-iterative-grpo-hydra = "training.iterative_grpo_hydra:main"
 nanogpt-generate-hydra = "inference.generate_hydra:main"
 nanogpt-eval-benchmark-hydra = "evaluation.eval_benchmark_hydra:main"
+# Component ablation orchestrator (AR-v0.4.0 FR4)
+nanogpt-ablations = "run_component_ablations:main"
 
 
 # Mypy is not able to narrow PyTorch module/Tensor unions in these modules;

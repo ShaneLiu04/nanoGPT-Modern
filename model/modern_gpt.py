@@ -260,17 +260,23 @@ class CausalSelfAttention(nn.Module):
 
         # RoPE operates on per-head dimension (shared by Q and K heads).
         # Allow NTK-aware extrapolation by scaling the maximum cached length.
-        rope_factor = 1.0
-        rope_scaling = getattr(config, "rope_scaling", None) or {}
-        if rope_scaling.get("type") == "ntk":
-            rope_factor = rope_scaling.get("factor", 1.0)
-        max_seq_len = int(config.block_size * max(2.0, rope_factor))
-        self.rope = RotaryEmbedding(
-            self.head_dim,
-            max_seq_len=max_seq_len,
-            base=getattr(config, "rope_theta", 10000.0),
-            rope_scaling=rope_scaling,
-        )
+        # With position_encoding="learned" (absolute PE) no rotary module is
+        # created and attention skips apply_rope entirely.
+        self.position_encoding = getattr(config, "position_encoding", "rope")
+        if self.position_encoding == "rope":
+            rope_factor = 1.0
+            rope_scaling = getattr(config, "rope_scaling", None) or {}
+            if rope_scaling.get("type") == "ntk":
+                rope_factor = rope_scaling.get("factor", 1.0)
+            max_seq_len = int(config.block_size * max(2.0, rope_factor))
+            self.rope = RotaryEmbedding(
+                self.head_dim,
+                max_seq_len=max_seq_len,
+                base=getattr(config, "rope_theta", 10000.0),
+                rope_scaling=rope_scaling,
+            )
+        else:
+            self.rope = None
         # GQA broadcast strategy: determines how KV heads are expanded to match
         # Q heads without copying.  One of:
         #   "auto"    — probe at runtime (default), resolves to raw/grouped/repeat
@@ -339,19 +345,24 @@ class CausalSelfAttention(nn.Module):
         else:
             past_len = past_kv[0].shape[2]
         total_len = past_len + T
-        cos_full, sin_full = self.rope(q, seq_len=start_pos + total_len)
-
-        q_cos = cos_full[start_pos + past_len : start_pos + total_len]
-        q_sin = sin_full[start_pos + past_len : start_pos + total_len]
-        q_embed = apply_rotary_pos_emb_single(q, q_cos, q_sin)
-
-        if past_len > 0:
-            k_cos = cos_full[start_pos + past_len : start_pos + total_len]
-            k_sin = sin_full[start_pos + past_len : start_pos + total_len]
+        if self.position_encoding == "learned":
+            # Absolute position embedding: no rotary transform is applied.
+            q_embed = q
+            k_embed = k
         else:
-            k_cos = cos_full[start_pos : start_pos + total_len]
-            k_sin = sin_full[start_pos : start_pos + total_len]
-        k_embed = apply_rotary_pos_emb_single(k, k_cos, k_sin)
+            cos_full, sin_full = self.rope(q, seq_len=start_pos + total_len)
+
+            q_cos = cos_full[start_pos + past_len : start_pos + total_len]
+            q_sin = sin_full[start_pos + past_len : start_pos + total_len]
+            q_embed = apply_rotary_pos_emb_single(q, q_cos, q_sin)
+
+            if past_len > 0:
+                k_cos = cos_full[start_pos + past_len : start_pos + total_len]
+                k_sin = sin_full[start_pos + past_len : start_pos + total_len]
+            else:
+                k_cos = cos_full[start_pos : start_pos + total_len]
+                k_sin = sin_full[start_pos : start_pos + total_len]
+            k_embed = apply_rotary_pos_emb_single(k, k_cos, k_sin)
 
         # --- KV cache: concatenate with past ---
         if past_kv is not None:
@@ -758,6 +769,27 @@ class SwiGLU(nn.Module):
         return out, aux_loss
 
 
+class GELUFFN(nn.Module):
+    """GPT-2-style feed-forward network for the ffn_variant="gelu" ablation.
+
+    ``fc (n_embd -> 4*n_embd) -> GELU -> proj (4*n_embd -> n_embd)`` with no
+    biases: per-layer parameter count is exactly ``2 * n_embd * 4 * n_embd``.
+    Forward returns ``(out, aux_loss)`` to match the SwiGLU interface used by
+    :class:`Block` (aux is always a zero scalar for the dense variant).
+    """
+
+    def __init__(self, config: ModernGPTConfig):
+        super().__init__()
+        hidden = config.intermediate_size
+        self.fc = nn.Linear(config.n_embd, hidden, bias=False)
+        self.proj = nn.Linear(hidden, config.n_embd, bias=False)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        out = self.proj(F.gelu(self.fc(x)))
+        return self.dropout(out), torch.zeros((), device=x.device, dtype=x.dtype)
+
+
 class Block(nn.Module):
     """Transformer block with configurable Pre-Norm / Post-Norm.
 
@@ -782,7 +814,10 @@ class Block(nn.Module):
         self.ln_1 = RMSNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = RMSNorm(config.n_embd)
-        self.mlp = SwiGLU(config)
+        if getattr(config, "ffn_variant", "swiglu") == "gelu":
+            self.mlp = GELUFFN(config)
+        else:
+            self.mlp = SwiGLU(config)
 
     def forward(
         self,
@@ -926,6 +961,8 @@ class ModernGPTConfig:
         kv_cache_block_size: int = 16,
         kv_cache_dtype: str = "bf16",
         gqa_broadcast: str = "auto",
+        position_encoding: str = "rope",
+        ffn_variant: str = "swiglu",
     ):
         # --- architecture ---
         self.vocab_size = vocab_size
@@ -946,11 +983,22 @@ class ModernGPTConfig:
         self.n_kv_head = n_kv_head
         self._n_rep = n_head // n_kv_head
 
-        # --- SwiGLU (with multiple-of alignment for GPU efficiency) ---
+        # --- FFN variant (ablation switch: SwiGLU vs GPT-2-style GELU 4x) ---
+        if ffn_variant not in ("swiglu", "gelu"):
+            raise ValueError(
+                f"ffn_variant must be 'swiglu' or 'gelu', got '{ffn_variant}'"
+            )
+        self.ffn_variant = ffn_variant
+
+        # --- FFN hidden size (with multiple-of alignment for GPU efficiency) ---
         if intermediate_size is None:
-            raw = int(8 / 3 * n_embd)
-            multiple_of = 128  # LLaMA-style alignment
-            intermediate_size = ((raw + multiple_of - 1) // multiple_of) * multiple_of
+            if self.ffn_variant == "gelu":
+                # GPT-2 style: plain 4x expansion, no alignment needed.
+                intermediate_size = 4 * n_embd
+            else:
+                raw = int(8 / 3 * n_embd)
+                multiple_of = 128  # LLaMA-style alignment
+                intermediate_size = ((raw + multiple_of - 1) // multiple_of) * multiple_of
         self.intermediate_size = intermediate_size
 
         # --- normalization ---
@@ -962,6 +1010,11 @@ class ModernGPTConfig:
 
         # --- MoE (experimental) ---
         self.num_experts = num_experts
+        if self.ffn_variant == "gelu" and num_experts > 1:
+            raise ValueError(
+                "ffn_variant='gelu' does not support MoE; use ffn_variant='swiglu' "
+                "when num_experts > 1"
+            )
         self.moe_aux_loss_factor = moe_aux_loss_factor
         self.moe_capacity_factor = moe_capacity_factor
 
@@ -1002,6 +1055,17 @@ class ModernGPTConfig:
         self.rmsnorm_eps = rmsnorm_eps
 
         # --- RoPE / position encoding ---
+        if position_encoding not in ("rope", "learned"):
+            raise ValueError(
+                f"position_encoding must be 'rope' or 'learned', "
+                f"got '{position_encoding}'"
+            )
+        self.position_encoding = position_encoding
+        if position_encoding == "learned" and rope_scaling is not None:
+            raise ValueError(
+                "position_encoding='learned' (absolute PE) does not support "
+                "rope_scaling (NTK extrapolation); remove rope_scaling"
+            )
         self.rope_theta = rope_theta
         self.rope_scaling = rope_scaling
 
@@ -1057,6 +1121,8 @@ class ModernGPTConfig:
             "kv_cache_block_size": getattr(self, "kv_cache_block_size", 16),
             "kv_cache_dtype": getattr(self, "kv_cache_dtype", "bf16"),
             "gqa_broadcast": getattr(self, "gqa_broadcast", "auto"),
+            "position_encoding": getattr(self, "position_encoding", "rope"),
+            "ffn_variant": getattr(self, "ffn_variant", "swiglu"),
         }
 
     @classmethod
@@ -1119,14 +1185,17 @@ class ModernGPT(nn.Module):
         super().__init__()
         self.config = config
 
-        self.transformer = nn.ModuleDict(
-            dict(
-                wte=nn.Embedding(config.vocab_size, config.n_embd),
-                drop=nn.Dropout(config.dropout),
-                h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-                ln_f=RMSNorm(config.n_embd),
-            )
+        modules = dict(
+            wte=nn.Embedding(config.vocab_size, config.n_embd),
+            drop=nn.Dropout(config.dropout),
+            h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f=RMSNorm(config.n_embd),
         )
+        if getattr(config, "position_encoding", "rope") == "learned":
+            # GPT-2-style learnable absolute position embedding (ablation:
+            # +block_size*n_embd params; hard context cap at block_size).
+            modules["wpe"] = nn.Embedding(config.block_size, config.n_embd)
+        self.transformer = nn.ModuleDict(modules)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight
 
@@ -1149,7 +1218,13 @@ class ModernGPT(nn.Module):
         # --- log attention backend ---
         self._log_attention_backend()
         for pn, p in self.named_parameters():
-            if pn.endswith("o_proj.weight") or pn.endswith("down_proj.weight"):
+            # Residual-output projections get the GPT-2-style depth-scaled init.
+            # "mlp.proj.weight" is the GELUFFN counterpart of SwiGLU's down_proj.
+            if (
+                pn.endswith("o_proj.weight")
+                or pn.endswith("down_proj.weight")
+                or pn.endswith("mlp.proj.weight")
+            ):
                 torch.nn.init.normal_(
                     p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
                 )
@@ -1235,11 +1310,38 @@ class ModernGPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         max_len = self.config.effective_block_size
+        learned_pe = getattr(self.config, "position_encoding", "rope") == "learned"
+        if learned_pe and t > self.config.block_size:
+            raise ValueError(
+                f"learned position encoding: sequence length {t} exceeds "
+                f"block_size {self.config.block_size}"
+            )
         assert (
             t <= max_len
         ), f"Cannot forward sequence of length {t}, effective block size is {max_len}"
 
         tok_emb = self.transformer.wte(idx)
+        if learned_pe:
+            # Absolute positions: the j-th current token sits at absolute
+            # index start_pos + past_len + j (mirrors the RoPE slice logic),
+            # independent of any cache trimming offsets.
+            if past_kvs is not None:
+                first = past_kvs[0]
+                if isinstance(first, list):
+                    past_len = sum(bk.shape[2] for bk, _ in first)
+                else:
+                    past_len = first[0].shape[2]
+            else:
+                past_len = 0
+            pos_end = start_pos + past_len + t
+            if pos_end > self.config.block_size:
+                raise ValueError(
+                    f"learned position encoding supports at most "
+                    f"block_size={self.config.block_size} absolute positions, "
+                    f"got {pos_end}"
+                )
+            positions = torch.arange(start_pos + past_len, pos_end, device=device)
+            tok_emb = tok_emb + self.transformer.wpe(positions)
         x = self.transformer.drop(tok_emb)
 
         new_past_kvs: Any = [] if use_cache else None
