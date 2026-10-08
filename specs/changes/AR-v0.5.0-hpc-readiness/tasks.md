@@ -15,7 +15,7 @@
 | ID | 任务描述 | 依赖 | 状态 | 备注 |
 |----|---------|------|------|------|
 | T001 | FR1 依赖与环境固化：pyproject 补 server/validate extras、torch pin ~=2.5、uv.lock 重新同步、Dockerfile/compose 现代化、CI 补 lock 检查 + Docker build job | - | passing | 2026-10-08 完成；torch 收紧为 `~=2.5,<2.9` 消除 cu13 分裂 |
-| T002 | FR2 数据迁移：修复 prepare.py --max_docs 复现陷阱、新增 docs/MIGRATION.md（必带清单/验证/冒烟/冗余清理）、本机干净环境演练 ≤1h | T001 | pending | 演练为本 AR 可移植性验收 |
+| T002 | FR2 数据迁移：修复 prepare.py --max_docs 复现陷阱、新增 docs/MIGRATION.md（必带清单/验证/冒烟/冗余清理）、本机干净环境演练 ≤1h | T001 | passing | 2026-10-08 完成；演练核心链路 2m17s |
 | T003 | FR3a 断点续跑：编排器组内自动 --resume（ckpt 探测/架构校验/降级重跑/resumed_from_iter）、训练 RNG 恢复 + resume_offset 真实推进 + early_stop_counter、新增 --ckpt_interval | - | pending | 云抢占刚需，TDD |
 | T004 | FR3b 运行管理：日志轮转（RotatingFileHandler）、metrics.jsonl 心跳 watchdog、编排器失败 webhook 通知（缺 URL 静默） | T003 | pending | 降级哲学与现有一致 |
 | T005 | FR4a Paged KV 双 bug 修复（get_cache 逐层 / block table 逐层 append）+ n_layer=2 回归测试；generate 四处 max_cache_len → effective_block_size（NTK 解锁） | - | pending | v0.4.0 推理实验硬前提 |
@@ -73,6 +73,15 @@
 - 修改文件：pyproject.toml（torch `~=2.5,<2.9` + server/validate extras）、requirements.txt（派生标注）、docker-compose.yml（`runtime: nvidia` → `gpus: all`，删过时 version 键）、Dockerfile（基础镜像 cuda 12.1→12.8 对齐 torch 2.8 cu128 默认变体 + cu12x 变体命令注释 + prod stage 补 `.[server]`）、.github/workflows/ci.yml（新增 lock-and-docker job：`uv lock --check` + `docker build`）、uv.lock（重生成：provides-extras 全 7 extras、torch 统一 2.8.0 消除 cu13 分裂）、tests/test_static_contracts.py（新增，7 用例）
 - 测试：test_static_contracts 7/7（1 importorskip 后本机装 fastapi 验证 import api_server OK）；全量回归 342 passed / 2 skipped / 1 已知红灯 deselect（基线 335+2 无回归）
 - 备注：uv 需内部镜像源（`--index-url http://mirrors.tools.huawei.com/pypi/simple/`，直连 pypi 隧道失败）；api_server 的 fastapi `on_event` 弃用 warning 为既有代码，T015 接线时现代化；覆盖率口径不适用（配置文件任务，无新增运行时模块）
+
+### 2026-10-08 会话记录（T002）
+
+- 完成任务：T002 数据迁移 runbook 与复现陷阱修复（标准任务，Red/Green 分离）
+- 修改文件：data/prepare.py（新增 `resolve_max_docs()` + `--full` flag + help 明示默认 1M 陷阱语义；map/streaming 两模式接线）、docs/MIGRATION.md（新增：必带清单 17.1GB/环境重建/30s 数据验证/冒烟判据/编排器启动/冗余清理 39.1GB/数据重建/排障表/演练记录）、README.md + docs/EXPERIMENTS.md + docs/TECH_REPORT.md（6 处复现命令加 `--full`）、tests/test_prepare_full_mode.py（4 用例）+ tests/test_migration_runbook.py（3 用例）
+- 演练验收（FR2-AC1）：干净 venv（UV_PROJECT_ENVIRONMENT 隔离）核心链路 **2m17s**（uv sync 1m20s + validate 27s + 50 步冒烟 30s）≤1h 达标；val loss 10.835→10.741；产物判据全过（latest_ckpt/best_ckpt/metrics.jsonl 5 train + 2 eval 事件）
+- 演练发现并固化两个平台差异（写入排障表）：① Windows PyPI torch wheel 为 CPU-only（Linux manylinux 自带 cu128，云不受影响）；② `train_pretrain.py:110` argparse 默认 `--num_workers 4` 在 Windows 触发 spawn 竞态崩溃——runbook 冒烟命令显式 `--num_workers 0` 双平台通用，分层默认留 T009
+- 测试：新增 7 用例全过；全量回归 349 passed / 2 skipped（零回归）；测试侧修正 1 处误报（usage 行含 --full 触发 help 语义断言，过滤为选项描述行）
+- 备注：`--split train --full` 全量重建一致性未实际重跑（8.9B token 重建 2-4h，由 resolve_max_docs 单测 + idx 判据表覆盖）；冗余目录清理命令已文档化但本机未删（数据仍被 v0.4.0 潜在重建使用）
 
 ## 阶段门控记录
 
