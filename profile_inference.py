@@ -119,10 +119,8 @@ def main():
                     temperature=args.temperature,
                     top_k=args.top_k,
                     use_cache=args.use_cache,
+                    on_token=inf_prof.step,
                 )
-            # Record one step per token (approximate).
-            for _ in range(args.max_new_tokens):
-                inf_prof.step()
             print(
                 f"Run {run + 1}: generated {out.shape[1] - prompt_ids.shape[1]} tokens"
             )

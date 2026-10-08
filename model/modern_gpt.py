@@ -6,7 +6,7 @@ Supports KV Cache for efficient autoregressive generation.
 from __future__ import annotations
 
 import math
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -1180,6 +1180,128 @@ class ModernGPTConfig:
         )
 
 
+def _mask_logits(
+    logits: torch.Tensor,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+) -> torch.Tensor:
+    """Apply top-k / top-p (nucleus) masking to ``logits`` [B, V] or [B, T, V]."""
+    if top_k is not None and top_k > 0:
+        k = min(top_k, logits.size(-1))
+        v, _ = torch.topk(logits, k, dim=-1)
+        logits[logits < v[..., -1:]] = -float("Inf")
+    if top_p is not None and top_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+        sorted_probs = F.softmax(sorted_logits, dim=-1)
+        cum_probs = torch.cumsum(sorted_probs, dim=-1)
+        sorted_mask = cum_probs > top_p
+        sorted_mask[..., 1:] = sorted_mask[..., :-1].clone()
+        sorted_mask[..., 0] = False
+        sorted_logits[sorted_mask] = -float("Inf")
+        logits = sorted_logits.scatter(-1, sorted_indices, sorted_logits)
+    return logits
+
+
+def _sample(
+    logits: torch.Tensor,
+    temperature: float,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+) -> torch.Tensor:
+    """Sample one token per row from ``logits`` [B, V]; temperature==0 is greedy."""
+    if temperature == 0:
+        return logits.argmax(dim=-1, keepdim=True)
+    if temperature > 0 and temperature != 1.0:
+        logits = logits / temperature
+    logits = _mask_logits(logits, top_k, top_p)
+    probs = F.softmax(logits, dim=-1)
+    return torch.multinomial(probs, num_samples=1)
+
+
+def _draft_sample(
+    logits: torch.Tensor, temperature: float
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Sample a draft token and return ``(token, draft_dist)``.
+
+    ``token`` is [B, 1]; ``draft_dist`` is the full tempered draft
+    distribution [B, V].  At temperature==0 the draft is greedy and the
+    distribution is a point mass at the argmax token (selected-token
+    probability 1.0), as the speculative acceptance ratio requires.
+    """
+    if temperature == 0:
+        tok = logits.argmax(dim=-1, keepdim=True)
+        p_d = torch.zeros_like(logits)
+        p_d.scatter_(-1, tok, 1.0)
+        return tok, p_d
+    if temperature != 1.0:
+        logits = logits / temperature
+    p_d = F.softmax(logits, dim=-1)
+    tok = torch.multinomial(p_d, num_samples=1)
+    return tok, p_d
+
+
+def _verify(
+    draft_tokens: torch.Tensor,
+    target_logits: torch.Tensor,
+    draft_probs: torch.Tensor,
+    temperature: float,
+) -> Tuple[List[torch.Tensor], int]:
+    """Verify drafted tokens against the target distribution (batch size 1).
+
+    ``draft_tokens`` is [1, gamma]; ``target_logits`` is [1, gamma, V] aligned
+    so that ``target_logits[:, i]`` is the target distribution for position
+    ``i``; ``draft_probs`` is [1, gamma, V], the full tempered draft
+    distribution.  Returns ``(accepted, n_accepted)`` where ``accepted`` holds
+    the accepted draft prefix followed, on rejection, by one token resampled
+    from ``norm(relu(p_t - q_d))``.
+    """
+    if draft_probs.dim() != 3 or draft_probs.shape[-1] != target_logits.shape[-1]:
+        raise ValueError(
+            "draft/target vocab mismatch: draft_probs shape "
+            f"{tuple(draft_probs.shape)} vs target vocab {target_logits.shape[-1]}"
+        )
+    V = target_logits.size(-1)
+    if draft_tokens.numel() and (
+        draft_tokens.max().item() >= V or draft_tokens.min().item() < 0
+    ):
+        raise ValueError(
+            f"draft token id {int(draft_tokens.max().item())} outside target vocab {V}"
+        )
+    B, gamma = draft_tokens.shape
+    if temperature == 0:
+        p_t = torch.zeros_like(target_logits)
+        p_t.scatter_(-1, target_logits.argmax(dim=-1, keepdim=True), 1.0)
+    elif temperature == 1.0:
+        p_t = F.softmax(target_logits, dim=-1)
+    else:
+        p_t = F.softmax(target_logits / temperature, dim=-1)
+
+    accepted: List[torch.Tensor] = []
+    n_accepted = 0
+    for i in range(gamma):
+        tok_i = draft_tokens[:, i]
+        p_t_tok = p_t[:, i, :].gather(-1, tok_i.unsqueeze(-1)).squeeze(-1)
+        p_d_tok = draft_probs[:, i, :].gather(-1, tok_i.unsqueeze(-1)).squeeze(-1)
+        ratio = torch.where(
+            p_d_tok > 0,
+            torch.clamp(p_t_tok / p_d_tok.clamp(min=1e-12), max=1.0),
+            torch.zeros_like(p_t_tok),
+        )
+        if bool((torch.rand(B, device=draft_tokens.device) < ratio).all()):
+            accepted.append(tok_i.unsqueeze(-1))
+            n_accepted += 1
+        else:
+            residual = torch.relu(p_t[:, i, :] - draft_probs[:, i, :])
+            denom = residual.sum(dim=-1, keepdim=True)
+            if bool((denom > 0).all()):
+                residual = residual / denom
+            else:
+                residual = p_t[:, i, :]
+            accepted.append(torch.multinomial(residual, num_samples=1))
+            break
+    return accepted, n_accepted
+
+
 class ModernGPT(nn.Module):
     def __init__(self, config: ModernGPTConfig):
         super().__init__()
@@ -1454,6 +1576,7 @@ class ModernGPT(nn.Module):
         draft_tokens: int = 4,
         draft_temperature: float = 0.0,
         draft_top_k: Optional[int] = 1,
+        on_token: Optional[Callable[[torch.Tensor], None]] = None,
     ) -> torch.Tensor:
         """Autoregressive generation with KV Cache, batch support, and early stopping.
 
@@ -1510,7 +1633,9 @@ class ModernGPT(nn.Module):
             ``eos_token_id`` for sequences that finished before the limit.
         """
         B = idx.size(0)
-        max_cache_len = self.config.block_size
+        max_cache_len = getattr(
+            self.config, "effective_block_size", self.config.block_size
+        )
 
         # ---- speculative decoding path ----
         if draft_model is not None:
@@ -1526,6 +1651,7 @@ class ModernGPT(nn.Module):
                     top_k=top_k,
                     top_p=top_p,
                     eos_token_id=eos_token_id,
+                    on_token=on_token,
                 )
             else:
                 return self._generate_speculative_batched(
@@ -1539,6 +1665,7 @@ class ModernGPT(nn.Module):
                     top_k=top_k,
                     top_p=top_p,
                     eos_token_id=eos_token_id,
+                    on_token=on_token,
                 )
 
         # ---- normalize compile flag ----
@@ -1584,6 +1711,7 @@ class ModernGPT(nn.Module):
                     top_k=top_k,
                     top_p=top_p,
                     eos_token_id=eos_token_id,
+                    on_token=on_token,
                 )
             import warnings
 
@@ -1640,28 +1768,6 @@ class ModernGPT(nn.Module):
         def _all_done():
             return eos_token_id is not None and finished.all().item()
 
-        # ---- helper: token sampling ----
-        def _sample(logits):
-            if temperature > 0 and temperature != 1.0:
-                logits = logits / temperature
-            if top_k is not None:
-                k = min(top_k, logits.size(-1))
-                v, _ = torch.topk(logits, k, dim=-1)
-                logits[logits < v[:, [-1]]] = -float("Inf")
-            if top_p is not None and top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(
-                    logits, descending=True, dim=-1
-                )
-                sorted_probs = F.softmax(sorted_logits, dim=-1)
-                cum_probs = torch.cumsum(sorted_probs, dim=-1)
-                sorted_mask = cum_probs > top_p
-                sorted_mask[:, 1:] = sorted_mask[:, :-1].clone()
-                sorted_mask[:, 0] = False
-                sorted_logits[sorted_mask] = -float("Inf")
-                logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
-            probs = F.softmax(logits, dim=-1)
-            return torch.multinomial(probs, num_samples=1)
-
         # ---- helper: per-sequence repetition penalty ----
         def _rep_penalty(logits, history):
             if repetition_penalty is None or repetition_penalty == 1.0:
@@ -1703,10 +1809,12 @@ class ModernGPT(nn.Module):
                 logits, _, _ = _forward(idx_cond, use_cache=False, start_pos=start_pos)
                 logits = logits[:, -1, :]
                 _rep_penalty(logits, idx_out)
-                idx_next = _sample(logits)
+                idx_next = _sample(logits, temperature, top_k, top_p)
                 _mark_finished(idx_next)
                 idx_next = _apply_finish(idx_next)
                 idx_out = torch.cat([idx_out, idx_next], dim=1)
+                if on_token is not None:
+                    on_token(idx_next)
             return idx_out
 
         # ============================================================
@@ -1759,9 +1867,11 @@ class ModernGPT(nn.Module):
         # --- first generated token ---
         logits = logits[:, -1, :]
         _rep_penalty(logits, idx)
-        idx_next = _sample(logits)  # [B, 1]
+        idx_next = _sample(logits, temperature, top_k, top_p)  # [B, 1]
         _mark_finished(idx_next)
         idx_out = torch.cat([idx, idx_next], dim=1)  # [B, prompt_len + 1]
+        if on_token is not None:
+            on_token(idx_next)
 
         # --- decode loop ---
         for _ in range(max_new_tokens - 1):
@@ -1790,11 +1900,13 @@ class ModernGPT(nn.Module):
 
             logits = logits[:, -1, :]
             _rep_penalty(logits, idx_out)
-            idx_next = _sample(logits)  # [B, 1]
+            idx_next = _sample(logits, temperature, top_k, top_p)  # [B, 1]
             _mark_finished(idx_next)
             idx_next = _apply_finish(idx_next)
 
             idx_out = torch.cat([idx_out, idx_next], dim=1)
+            if on_token is not None:
+                on_token(idx_next)
 
         return idx_out
 
@@ -1807,6 +1919,7 @@ class ModernGPT(nn.Module):
         top_k: Optional[int],
         top_p: Optional[float],
         eos_token_id: Optional[int],
+        on_token: Optional[Callable[[torch.Tensor], None]] = None,
     ) -> torch.Tensor:
         """Single-token fullgraph compile path used by ``generate(compile='fullgraph')``.
 
@@ -1821,29 +1934,9 @@ class ModernGPT(nn.Module):
 
         B = idx.size(0)
         device = idx.device
-        max_cache_len = self.config.block_size
-
-        # ---- sampling helper (captured as constants by the compiled step) ----
-        def _sample(logits: torch.Tensor) -> torch.Tensor:
-            if temperature > 0 and temperature != 1.0:
-                logits = logits / temperature
-            if top_k is not None:
-                k = min(top_k, logits.size(-1))
-                v, _ = torch.topk(logits, k, dim=-1)
-                logits[logits < v[:, [-1]]] = -float("Inf")
-            if top_p is not None and top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(
-                    logits, descending=True, dim=-1
-                )
-                sorted_probs = F.softmax(sorted_logits, dim=-1)
-                cum_probs = torch.cumsum(sorted_probs, dim=-1)
-                sorted_mask = cum_probs > top_p
-                sorted_mask[:, 1:] = sorted_mask[:, :-1].clone()
-                sorted_mask[:, 0] = False
-                sorted_logits[sorted_mask] = -float("Inf")
-                logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
-            probs = F.softmax(logits, dim=-1)
-            return torch.multinomial(probs, num_samples=1)
+        max_cache_len = getattr(
+            self.config, "effective_block_size", self.config.block_size
+        )
 
         def _decode_step(
             x: torch.Tensor,
@@ -1857,7 +1950,7 @@ class ModernGPT(nn.Module):
                 use_cache=True,
                 start_pos=start_pos,
             )
-            tok = _sample(logits[:, -1, :])
+            tok = _sample(logits[:, -1, :], temperature, top_k, top_p)
             # Mask finished sequences so they keep emitting eos_token_id.
             if eos_token_id is not None:
                 tok = torch.where(
@@ -1907,7 +2000,7 @@ class ModernGPT(nn.Module):
 
         # ---- first token (eager, so the compiled step always sees [B, 1]) ----
         finished = torch.zeros(B, dtype=torch.bool, device=device)
-        idx_next = _sample(logits[:, -1, :])
+        idx_next = _sample(logits[:, -1, :], temperature, top_k, top_p)
         if eos_token_id is not None:
             finished = finished | (idx_next.squeeze(-1) == eos_token_id)
             idx_next = torch.where(
@@ -1916,6 +2009,8 @@ class ModernGPT(nn.Module):
                 idx_next,
             )
         idx_out = torch.cat([idx, idx_next], dim=1)
+        if on_token is not None:
+            on_token(idx_next)
 
         # ---- fullgraph-friendly decode loop: no data-dependent break ----
         for _ in range(max_new_tokens - 1):
@@ -1961,6 +2056,8 @@ class ModernGPT(nn.Module):
             if eos_token_id is not None:
                 finished = finished | (tok.squeeze(-1) == eos_token_id)
             idx_out = torch.cat([idx_out, tok], dim=1)
+            if on_token is not None:
+                on_token(tok)
 
         return idx_out
 
@@ -1977,6 +2074,7 @@ class ModernGPT(nn.Module):
         top_k: Optional[int],
         top_p: Optional[float],
         eos_token_id: Optional[int],
+        on_token: Optional[Callable[[torch.Tensor], None]] = None,
     ) -> torch.Tensor:
         """Speculative decoding (draft-then-verify) for batch size 1.
 
@@ -1994,64 +2092,13 @@ class ModernGPT(nn.Module):
             )
         device = idx.device
         prompt_len = idx.size(1)
-        max_cache_len = self.config.block_size
+        max_cache_len = getattr(
+            self.config, "effective_block_size", self.config.block_size
+        )
         if prompt_len + max_new_tokens > max_cache_len - 1:
             raise ValueError(
                 "Speculative decoding requires prompt_len + max_new_tokens <= block_size - 1"
             )
-
-        def _sample(
-            logits: torch.Tensor, temp: float, k: Optional[int], p: Optional[float]
-        ) -> torch.Tensor:
-            if temp > 0 and temp != 1.0:
-                logits = logits / temp
-            if k is not None and k > 0:
-                kk = min(k, logits.size(-1))
-                v, _ = torch.topk(logits, kk, dim=-1)
-                logits[logits < v[:, [-1]]] = -float("Inf")
-            if p is not None and p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(
-                    logits, descending=True, dim=-1
-                )
-                sorted_probs = F.softmax(sorted_logits, dim=-1)
-                cum_probs = torch.cumsum(sorted_probs, dim=-1)
-                sorted_mask = cum_probs > p
-                sorted_mask[:, 1:] = sorted_mask[:, :-1].clone()
-                sorted_mask[:, 0] = False
-                sorted_logits[sorted_mask] = -float("Inf")
-                logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
-            probs = F.softmax(logits, dim=-1)
-            return torch.multinomial(probs, num_samples=1)
-
-        def _draft_sample(logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-            """Greedy or sampled draft token + its probability under the draft model.
-
-            The returned probability is taken from the *original* softmax distribution
-            (before top-k masking) so that the speculative acceptance ratio is
-            mathematically correct.
-            """
-            if (
-                draft_temperature is not None
-                and draft_temperature > 0
-                and draft_temperature != 1.0
-            ):
-                logits = logits / draft_temperature
-            # Original probabilities used for the acceptance ratio.
-            orig_probs = F.softmax(logits, dim=-1)
-            # Top-k mask is applied only for sampling.
-            sample_logits = logits
-            if draft_top_k is not None and draft_top_k > 0:
-                sample_logits = logits.clone()
-                kk = min(draft_top_k, sample_logits.size(-1))
-                v, _ = torch.topk(sample_logits, kk, dim=-1)
-                sample_logits[sample_logits < v[:, [-1]]] = -float("Inf")
-            sample_probs = F.softmax(sample_logits, dim=-1)
-            if draft_temperature == 0.0:
-                tok = sample_probs.argmax(dim=-1, keepdim=True)
-            else:
-                tok = torch.multinomial(sample_probs, num_samples=1)
-            p_tok = orig_probs.gather(-1, tok).squeeze(-1)
-            return tok, p_tok
 
         head_dim = self.config.n_embd // self.config.n_head
         dtype = next(self.parameters()).dtype
@@ -2120,12 +2167,13 @@ class ModernGPT(nn.Module):
             draft_chunk: List[torch.Tensor] = []
             draft_probs: List[torch.Tensor] = []
             gamma = min(draft_tokens, max_new_tokens - generated)
-            hit_eos = False
             logits_for_next = current_draft_logits
             for i in range(gamma):
-                tok, p_tok = _draft_sample(logits_for_next)
+                tok, p_d = _draft_sample(
+                    _mask_logits(logits_for_next, draft_top_k, None), draft_temperature
+                )
                 draft_chunk.append(tok)
-                draft_probs.append(p_tok)
+                draft_probs.append(p_d)
                 # Run the draft model with the sampled token to obtain its KV
                 # and the logits for the following position.
                 logits_d, _, next_kv_d = draft_model(
@@ -2139,7 +2187,6 @@ class ModernGPT(nn.Module):
                 draft_cache.advance(1)
                 logits_for_next = logits_d[:, -1, :]
                 if eos_token_id is not None and tok.item() == eos_token_id:
-                    hit_eos = True
                     break
             gamma = len(draft_chunk)
             if gamma == 0:
@@ -2153,53 +2200,32 @@ class ModernGPT(nn.Module):
                 use_cache=True,
                 start_pos=target_cache.start_pos,
             )
-            # logits_t[:, i, :] is p_t(· | context + d_1..d_{i+1}), i.e. it
-            # predicts d_{i+2}.  Therefore p_t(d_i | context + d_1..d_{i-1})
-            # is current_target_logits for i==0 and logits_t[:, i-1, :] for i>=1.
-
-            # ---- acceptance loop ----
-            accepted_tokens: List[torch.Tensor] = []
-            n_accepted = 0
-            rejected = False
-            for i in range(gamma):
-                tok_i = draft_ids[:, i]  # [B]
-                if i == 0:
-                    logits_for_tok = current_target_logits
-                else:
-                    logits_for_tok = logits_t[:, i - 1, :]
-                p_t = F.softmax(logits_for_tok, dim=-1)[:, tok_i]
-                p_d = draft_probs[i]
-                ratio = torch.clamp(p_t / p_d, max=1.0)
-                accept = torch.rand(B, device=device) < ratio
-                if accept.all().item():
-                    accepted_tokens.append(tok_i.unsqueeze(-1))
-                    n_accepted += 1
-                    if hit_eos and i == gamma - 1:
-                        # Draft hit eos at its last generated position and the
-                        # target agrees; generation ends after appending eos.
-                        break
-                else:
-                    # Rejection: sample from q(x) = normalize(max(0, p_target(x) - p_draft(x)))
-                    p_t_dist = F.softmax(logits_for_tok[0, :], dim=-1)  # [V]
-                    p_d_dist = torch.zeros_like(p_t_dist)
-                    p_d_dist[tok_i[0]] = p_d[0]
-                    q = torch.relu(p_t_dist - p_d_dist)
-                    q = q / q.sum()
-                    replace = torch.multinomial(q, num_samples=1).unsqueeze(0)  # [1, 1]
-                    accepted_tokens.append(replace)
-                    rejected = True
-                    break
-            else:
-                # All draft tokens accepted.  Sample one extra token only if we
-                # have not already reached the generation budget.
-                if generated + gamma < max_new_tokens:
-                    extra = _sample(logits_t[:, -1, :], temperature, top_k, top_p)
-                    accepted_tokens.append(extra)
+            # aligned_target_logits[:, i] is the target distribution for draft
+            # position i: current_target_logits for i==0 and logits_t[:, i-1]
+            # for i>=1 (logits_t[:, i] predicts d_{i+2}).
+            aligned_target_logits = torch.cat(
+                [current_target_logits.unsqueeze(1), logits_t[:, :-1, :]], dim=1
+            )
+            aligned_target_logits = _mask_logits(
+                aligned_target_logits, top_k, top_p
+            )
+            draft_probs_stack = torch.stack(draft_probs, dim=1)  # [B, gamma, V]
+            accepted_tokens, n_accepted = _verify(
+                draft_ids, aligned_target_logits, draft_probs_stack, temperature
+            )
+            rejected = len(accepted_tokens) > n_accepted
+            # All draft tokens accepted: sample one extra token only if we
+            # have not already reached the generation budget.
+            if not rejected and generated + gamma < max_new_tokens:
+                extra = _sample(logits_t[:, -1, :], temperature, top_k, top_p)
+                accepted_tokens.append(extra)
 
             # ---- append accepted tokens to output ----
             for tok_t in accepted_tokens:
                 idx_out = torch.cat([idx_out, tok_t], dim=1)
                 generated += 1
+                if on_token is not None:
+                    on_token(tok_t)
                 if eos_token_id is not None and tok_t.item() == eos_token_id:
                     return idx_out
 
@@ -2281,6 +2307,7 @@ class ModernGPT(nn.Module):
         top_k: Optional[int],
         top_p: Optional[float],
         eos_token_id: Optional[int],
+        on_token: Optional[Callable[[torch.Tensor], None]] = None,
     ) -> torch.Tensor:
         """Speculative decoding with batch > 1 support.
 
@@ -2295,56 +2322,13 @@ class ModernGPT(nn.Module):
         B = idx.size(0)
         device = idx.device
         prompt_len = idx.size(1)
-        max_cache_len = self.config.block_size
+        max_cache_len = getattr(
+            self.config, "effective_block_size", self.config.block_size
+        )
         if prompt_len + max_new_tokens > max_cache_len - 1:
             raise ValueError(
                 "Speculative decoding requires prompt_len + max_new_tokens <= block_size - 1"
             )
-
-        def _sample(
-            logits: torch.Tensor, temp: float, k: Optional[int], p: Optional[float]
-        ) -> torch.Tensor:
-            if temp > 0 and temp != 1.0:
-                logits = logits / temp
-            if k is not None and k > 0:
-                kk = min(k, logits.size(-1))
-                v, _ = torch.topk(logits, kk, dim=-1)
-                logits[logits < v[:, [-1]]] = -float("Inf")
-            if p is not None and p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(
-                    logits, descending=True, dim=-1
-                )
-                sorted_probs = F.softmax(sorted_logits, dim=-1)
-                cum_probs = torch.cumsum(sorted_probs, dim=-1)
-                sorted_mask = cum_probs > p
-                sorted_mask[:, 1:] = sorted_mask[:, :-1].clone()
-                sorted_mask[:, 0] = False
-                sorted_logits[sorted_mask] = -float("Inf")
-                logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
-            probs = F.softmax(logits, dim=-1)
-            return torch.multinomial(probs, num_samples=1)
-
-        def _draft_sample(logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-            if (
-                draft_temperature is not None
-                and draft_temperature > 0
-                and draft_temperature != 1.0
-            ):
-                logits = logits / draft_temperature
-            orig_probs = F.softmax(logits, dim=-1)
-            sample_logits = logits
-            if draft_top_k is not None and draft_top_k > 0:
-                sample_logits = logits.clone()
-                kk = min(draft_top_k, sample_logits.size(-1))
-                v, _ = torch.topk(sample_logits, kk, dim=-1)
-                sample_logits[sample_logits < v[:, [-1]]] = -float("Inf")
-            sample_probs = F.softmax(sample_logits, dim=-1)
-            if draft_temperature == 0.0:
-                tok = sample_probs.argmax(dim=-1, keepdim=True)
-            else:
-                tok = torch.multinomial(sample_probs, num_samples=1)
-            p_tok = orig_probs.gather(-1, tok).squeeze(-1)
-            return tok, p_tok
 
         head_dim = self.config.n_embd // self.config.n_head
         dtype = next(self.parameters()).dtype
@@ -2424,9 +2408,11 @@ class ModernGPT(nn.Module):
                 gamma = min(draft_tokens, max_new_tokens - generated[b])
                 logits_next = current_draft_logits[b]
                 for _ in range(gamma):
-                    tok, p_tok = _draft_sample(logits_next)
+                    tok, p_d = _draft_sample(
+                        _mask_logits(logits_next, draft_top_k, None), draft_temperature
+                    )
                     draft_chunk.append(tok)
-                    draft_probs.append(p_tok)
+                    draft_probs.append(p_d)
                     logits_d, _, next_kv_d = draft_model(
                         tok,
                         past_kvs=draft_caches[b].get_cache(),
@@ -2457,40 +2443,27 @@ class ModernGPT(nn.Module):
                     target_caches[b].update(li, next_kv_t[li][0], next_kv_t[li][1])
                 target_caches[b].advance(gamma)
 
-                # Acceptance loop
-                accepted = 0
-                rejected = False
-                for i in range(gamma):
-                    tok_i = draft_ids[:, i]
-                    if i == 0:
-                        logits_for_tok = current_target_logits[b]
-                    else:
-                        logits_for_tok = logits_t[:, i - 1, :]
-                    p_t = F.softmax(logits_for_tok, dim=-1)[:, tok_i]
-                    p_d = draft_probs[i]
-                    ratio = torch.clamp(p_t / p_d, max=1.0)
-                    if torch.rand(1, device=device) < ratio:
-                        accepted += 1
-                        accepted_total[b] += 1
-                        idx_out[b] = torch.cat([idx_out[b], tok_i.unsqueeze(0)], dim=1)
-                        generated[b] += 1
-                        if eos_token_id is not None and tok_i.item() == eos_token_id:
-                            finished[b] = True
-                            break
-                    else:
-                        p_t_dist = F.softmax(logits_for_tok[0, :], dim=-1)
-                        p_d_dist = torch.zeros_like(p_t_dist)
-                        p_d_dist[tok_i[0]] = p_d[0]
-                        q = torch.relu(p_t_dist - p_d_dist)
-                        if q.sum() > 0:
-                            q = q / q.sum()
-                        else:
-                            q = p_t_dist
-                        replace = torch.multinomial(q, num_samples=1).unsqueeze(0)
-                        idx_out[b] = torch.cat([idx_out[b], replace], dim=1)
-                        generated[b] += 1
-                        rejected = True
-                        break
+                # Acceptance via the shared _verify interface
+                aligned_target_logits = torch.cat(
+                    [current_target_logits[b].unsqueeze(1), logits_t[:, :-1, :]],
+                    dim=1,
+                )
+                aligned_target_logits = _mask_logits(
+                    aligned_target_logits, top_k, top_p
+                )
+                draft_probs_stack = torch.stack(draft_probs, dim=1)  # [1, gamma, V]
+                accepted_tokens, accepted = _verify(
+                    draft_ids, aligned_target_logits, draft_probs_stack, temperature
+                )
+                accepted_total[b] += accepted
+                rejected = len(accepted_tokens) > accepted
+                for tok_t in accepted_tokens:
+                    idx_out[b] = torch.cat([idx_out[b], tok_t], dim=1)
+                    generated[b] += 1
+                    if on_token is not None:
+                        on_token(tok_t)
+                    if eos_token_id is not None and tok_t.item() == eos_token_id:
+                        finished[b] = True
 
                 # Update target cache based on acceptance
                 if rejected:
@@ -2550,6 +2523,8 @@ class ModernGPT(nn.Module):
                     tok = _sample(current_target_logits[b], temperature, top_k, top_p)
                     idx_out[b] = torch.cat([idx_out[b], tok], dim=1)
                     generated[b] += 1
+                    if on_token is not None:
+                        on_token(tok)
                     if eos_token_id is not None and tok.item() == eos_token_id:
                         finished[b] = True
                     logits_next, _, next_kv_t = self(

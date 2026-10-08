@@ -18,9 +18,9 @@
 | T002 | FR2 数据迁移：修复 prepare.py --max_docs 复现陷阱、新增 docs/MIGRATION.md（必带清单/验证/冒烟/冗余清理）、本机干净环境演练 ≤1h | T001 | passing | 2026-10-08 完成；演练核心链路 2m17s |
 | T003 | FR3a 断点续跑：编排器组内自动 --resume（ckpt 探测/架构校验/降级重跑/resumed_from_iter）、训练 RNG 恢复 + resume_offset 真实推进 + early_stop_counter、新增 --ckpt_interval | - | passing | 云抢占刚需，TDD |
 | T004 | FR3b 运行管理：日志轮转（RotatingFileHandler）、metrics.jsonl 心跳 watchdog、编排器失败 webhook 通知（缺 URL 静默） | T003 | passing | 降级哲学与现有一致 |
-| T005 | FR4a Paged KV 双 bug 修复（get_cache 逐层 / block table 逐层 append）+ n_layer=2 回归测试；generate 四处 max_cache_len → effective_block_size（NTK 解锁） | - | pending | v0.4.0 推理实验硬前提 |
-| T006 | FR4b 投机解码分布修正（greedy p_d=point mass/完整 q 残差/温度统一）+ 分布等价性测试（draft==target KL→0）；temperature=0 → greedy 三处 | - | pending | 接受率不再虚高 |
-| T007 | FR4c profile_inference 假 per-token 计时修复（挂入真实 decode 回调） | - | pending | 微型任务 |
+| T005 | FR4a Paged KV 双 bug 修复（get_cache 逐层 / block table 逐层 append）+ n_layer=2 回归测试；generate 四处 max_cache_len → effective_block_size（NTK 解锁） | - | passing | 2026-10-08 完成；与 T006/T007 同会话合并交付 |
+| T006 | FR4b 投机解码分布修正（greedy p_d=point mass/完整 q 残差/温度统一）+ 分布等价性测试（draft==target KL→0）；temperature=0 → greedy 三处 | - | passing | 2026-10-08 完成；统计验收 TVD≈0.07 vs bug 0.82 |
+| T007 | FR4c profile_inference 假 per-token 计时修复（挂入真实 decode 回调） | - | passing | 2026-10-08 完成；含 generate.py benchmark 加固（CPU perf_counter/warmup≥3/p50-p99） |
 | T008 | FR8a GQA enable_gqa=True（torch≥2.5 探测回退）+ GQA 探测移出首 forward（compile 图断裂修复）+ TF32 推广全部 5 训练器 | - | pending | |
 | T009 | FR8b 数据路径（non_blocking/persistent_workers/num_workers 环境分层）+ eval 瘦身（batch 放大/多卡 allreduce/去 .item() sync） | - | pending | |
 | T022 | FR8c EMA foreach 批量更新 + micro-step 去 all_reduce/.item() 同步 + 异步 checkpoint（staged+线程，保持原子性，失败回退同步） | T009 | pending | 异步 ckpt 需独立验证原子性回退 |
@@ -28,7 +28,7 @@
 | T011 | FR9b FSDP 补齐：auto_wrap_policy/use_orig_params/compile 顺序/FSDP checkpoint 修复（死代码接线或 DCP）+ 分布式 round-trip 测试 | T008,T010 | pending | |
 | T012 | FR6 MoE 向量化重写（方案 B）：参数改单张量 `Parameter[E,H,C]`（gate/up/down 各一）+ load/save 翻译 hook（磁盘格式不变）、定容 padded bmm `[E,cap,C]` 零 Python 循环（cap 语义与现行 int 截断对齐，容量丢弃 token 输出 0）、compile 兼容；验收 loss atol=1e-5 + ≥2x 基准对比 | - | pending | kernel 级，TDD；旧 ckpt 双向兼容为设计锁定项（B1） |
 | T013 | FR5 KV decode 去 cat（方案 B）：`KVCacheManager` 新增 `layout="append"` 追加式预分配缓冲 + `get_cache()` 返回 `[:pos]` 视图直喂 SDPA（零拷贝）、int8 惰性反量化切片、滑窗 mask 向量化；`pos ≥ max_cache_len` 切 ring 驱逐语义回退路径（`evicted` 标记，B5）；flash wrapper 仅可选分支（包存在才启用）；验收输出逐位一致 + ≥1.5x | T005 | pending | kernel 级；append vs 旧 cat 路径逐 token 等价测试先行 |
-| T014 | FR7a 连续批处理 iteration-level 重构：槽位回收/prefill 插入/**左对齐 padding**（右侧 pad 不参与 KV 写入）/RoPE 位置按各序列真实长度/**PrefixCache 与 _init_decode_compile 删除**（设计决策：不留死代码）/批量采样张量化（`[B]` 温度张量，消灭逐序列 Python 循环） | T006,T013 | pending | ~300 行调度器重写；必须保留/继承 T006 的 temperature=0 greedy 语义，验收补 greedy 确定性断言 |
+| T014 | FR7a 连续批处理 iteration-level 重构：槽位回收/prefill 插入/**左对齐 padding**（右侧 pad 不参与 KV 写入）/RoPE 位置按各序列真实长度/**PrefixCache 与 _init_decode_compile 删除**（设计决策：不留死代码）/批量采样张量化（`[B]` 温度张量，消灭逐序列 Python 循环） | T006,T013 | pending | ~300 行调度器重写；必须保留/继承 T006 的 temperature=0 greedy 语义，验收补 greedy 确定性断言；**T005 定向新发现**：`generate_batch` 解码首步将 prompt 尾 token 重复喂入（KV 已含整个 prompt）——off-by-one 独立缺陷，重构时一并修复 |
 | T015 | FR7b api_server 接线新调度器（asyncio.to_thread/线程安全队列）+ 补齐或删除 --continuous_batching 声称 | T014 | pending | |
 | T016 | FR10 根目录收编：导出 4 脚本 → tools/、profile 2 脚本 → tools/、编排脚本处置（[project.scripts] 与测试路径同步）、删除死文件（run_inference_ablation.py/generate_experiment_log.py/logs_prepare*.txt） | - | pending | 删除前全库引用检查 |
 | T017 | FR11a training/args.py 公共 flag 提取（23 个重复 flag，~350 行净删） | - | pending | 可与 A 阶段并行提前 |
@@ -101,6 +101,17 @@
 - 测试：tests/test_run_management.py 8 用例（stall 告警+精确消息+去抖/健康与数据不足三态/webhook 缺 URL 静默/成功失败路径断言请求体与 Content-Type/RotatingFileHandler 落盘+类型+asctime 格式/notify_failures 消息与空跳过/编排器启停 watchdog（stop==start）/线程生命周期 daemon+join+stop 幂等）——Red 8 失败 → Green 8/8；全量回归 369 passed / 2 skipped（361 基线 + 8 新增，零回归）
 - 冒烟验收（FR3b healthy 路径）：真实编排器 + 真 watchdog 线程跑 tiny 训练 40 步——completed、全程无 `[watchdog]` 告警、`out/ablation-baseline/logs/train.log` 落盘（0 bytes 属正常：健康跑无 warning 输出）
 - 备注：watchdog stall 真实路径由 UT mock ts 覆盖（冒烟仅验证 healthy）；`NANOGPT_WEBHOOK_URL` 变量名已定契约（MIGRATION.md 环境清单可后续补文档，T021 收尾时统一交叉引用）
+
+### 2026-10-08 会话记录（T005+T006+T007 合并交付）
+
+- 完成任务：T005 FR4a + T006 FR4b + T007 FR4c（标准任务，Red/Green 分离 + 冒烟；三任务同属 FR4 推理正确性且缺陷互相咬合——temp=0 greedy 是投机逐位等价的前置——故同会话 TDD 连续交付）
+- Red：两个并行子代理产出 3 个测试文件 21 用例，全部命中目标缺陷（paged 3：get_cache 逐层视图/块表跨层隔离/ring-paged 逐步 logits 等价；speculative 11：temp=0 三入口确定性/draft==target greedy 逐位等价/`_draft_sample`+`_verify` 接口数学性质 5 例/draft≠target 统计等价 TVD<0.25；profile 7：on_token 回调契约/真实计时/已知延迟序列统计/benchmark CPU 分位+warmup≥3 隔离）。基线对照证实既有 paged/speculative 测试在 n_layer=1 下恰好掩盖双 bug
+- 修改文件：model/paged_kv_cache.py（Bug1：get_cache 改 `[self._get_layer_blocks(li) for li in range(n_layers)]`；Bug2：update 改「按需确保容量」语义——`needed_blocks = ceil((seq_len+S)/block_size)` 表不足才 append + 写入沿块路径 `block_no = pos // block_size` 索引，消除逐层重复 append）；model/modern_gpt.py（新增模块级 `_mask_logits`/`_sample`/`_draft_sample`/`_verify` 四接口，主路径/fullgraph/投机单序列/投机 batched 四处闭包全部收敛到模块级；`temperature==0 → argmax`；greedy draft p_d=point mass；残差 `norm(relu(p_t−q_d))` 用完整调温 draft 分布；验证 softmax 同温；vocab 不一致/draft token 越界 ValueError；generate 四处 `max_cache_len` → `getattr(config, "effective_block_size", block_size)`（主入口/fullgraph/speculative×2）；`on_token: Optional[Callable]` per-token 回调贯穿主路径 no-cache/cache/fullgraph/投机/fallback 全路径）；inference/generate_utils.py + inference/continuous_batching.py（`_sample_logits`/`BatchGenerator._sample` 补 `temperature==0 → argmax`）；utils/profiler.py（summary 增 `mean_ms`；`step(token=None)` 兼容回调签名）；inference/generate.py（benchmark：CPU 路径 perf_counter 计时修 UnboundLocalError 崩溃、warmup 1→3 次且不入统计、顶层 `p50_ms/p95_ms/p99_ms` 分位键单调）；profile_inference.py（删除「生成后循环补 step」假计时，改 `on_token=inf_prof.step` 真实 per-token 计时）
+- **关键实现决策（投机分布正确性核心）**：`_verify` 只按温度调温不够——target/draft 的接受分布必须是**与直接生成相同的有效采样分布**（经 top_k/top_p mask 后）。修复中既有测试 `test_speculative_self_draft_matches_target_greedy`（top_k=1 场景）先失败暴露此点：解法是提取 `_mask_logits`（支持 [B,V] 与 [B,T,V]），调用侧先 mask 再传入 `_draft_sample`/`_verify`，接口签名维持 design §4.3.5 原样；验证侧 target_logits 对齐由 `cat([current_target_logits, logits_t[:, :-1]])` 构造，消灭原版 i==0/i>=1 分支重复
+- 测试：21 新用例 Red→Green 全转绿；测试侧修正 1 处构造缺陷（`_fake_step` 未接受回调 token 参数）；全量回归 **390 passed / 2 skipped**（369 基线 + 21 新增，零回归）
+- NTK 冒烟（FR4-AC4）：`rope_scaling={"type":"ntk","factor":4}`、block_size=32 → effective 128，生成 40 token（>block_size）ring 与 paged 路径均成功且逐位一致
+- 遗留发现：`continuous_batching.generate_batch` 解码首步将 prompt 尾 token 重复喂入（此时 KV 已含整个 prompt）——off-by-one 独立缺陷，已记入 T014 备注（重构时一并修复）；`_generate_speculative_batched` 的 fallback 机制使 batch 投机 temp=0 断言不稳健，UT 以接口级+单序列端到端覆盖
+- 持久化：commit + gitee 推送（新工作流规则：每个 AR 结束后推送 https://gitee.com/liu-xingyan04/nano-gpt-modern）
 
 ## 阶段门控记录
 

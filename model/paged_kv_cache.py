@@ -161,32 +161,21 @@ class PagedKVCacheManager:
         B, _, S, _ = new_k.shape
         for b in range(B):
             write_pos = self._seq_len[b]
-            pos_in_block = write_pos % self.block_size
-            remaining = S
-            write_offset = 0
-
-            while remaining > 0:
-                if pos_in_block == 0:
-                    # Start a new block at this sequence's block boundary.
-                    self._block_tables[b].append(self._allocate_block(b))
-                elif not self._block_tables[b]:
-                    self._block_tables[b].append(self._allocate_block(b))
-
-                block_idx = self._block_tables[b][-1]
-                room = self.block_size - pos_in_block
-                chunk = min(room, remaining)
-
+            end_pos = write_pos + S
+            needed_blocks = (end_pos + self.block_size - 1) // self.block_size
+            while len(self._block_tables[b]) < needed_blocks:
+                self._block_tables[b].append(self._allocate_block(b))
+            for write_offset in range(S):
+                pos = write_pos + write_offset
+                block_no = pos // self.block_size
+                pos_in_block = pos % self.block_size
+                block_idx = self._block_tables[b][block_no]
                 self._k[layer_idx][
-                    b, block_idx, :, pos_in_block : pos_in_block + chunk, :
-                ] = new_k[b, :, write_offset : write_offset + chunk, :]
+                    b, block_idx, :, pos_in_block, :
+                ] = new_k[b, :, write_offset, :]
                 self._v[layer_idx][
-                    b, block_idx, :, pos_in_block : pos_in_block + chunk, :
-                ] = new_v[b, :, write_offset : write_offset + chunk, :]
-
-                write_pos += chunk
-                write_offset += chunk
-                remaining -= chunk
-                pos_in_block = write_pos % self.block_size
+                    b, block_idx, :, pos_in_block, :
+                ] = new_v[b, :, write_offset, :]
 
     def advance(self, delta: int) -> None:
         """Advance the logical cache length after all layers are written."""
@@ -259,8 +248,7 @@ class PagedKVCacheManager:
         """Return cached K/V as a list of blocks per layer."""
         if not self._k or all(length == 0 for length in self._seq_len):
             return []
-        layer_blocks = self._get_layer_blocks(0)
-        return [layer_blocks for _ in range(self.n_layers)]
+        return [self._get_layer_blocks(li) for li in range(self.n_layers)]
 
     def get_cache_contiguous(self):
         """Return cached K/V as single contiguous tensors per layer."""
