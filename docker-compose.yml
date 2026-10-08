@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # Training container with GPU access
   train:
@@ -9,9 +7,8 @@ services:
       target: dev
     image: nanogpt-modern:dev
     container_name: nanogpt-train
-    runtime: nvidia
+    gpus: all
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
     volumes:
       - ./data:/workspace/data:ro
@@ -53,9 +50,9 @@ services:
       target: prod
     image: nanogpt-modern:prod
     container_name: nanogpt-api
-    runtime: nvidia
+    gpus: all
     environment:
-      - NVIDIA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
     ports:
       - "8000:8000"
     volumes:

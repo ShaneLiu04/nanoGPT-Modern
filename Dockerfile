@@ -4,7 +4,10 @@
 # ---------------------------------------------------------------------------
 # Base image
 # ---------------------------------------------------------------------------
-FROM nvidia/cuda:12.1-devel-ubuntu22.04 AS base
+# CUDA 12.8 aligns with the PyPI default torch 2.8 wheel variant (cu128).
+# For other cu12x variants install explicitly, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu126
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -42,13 +45,17 @@ COPY . /workspace
 
 # Default to running pytest for CI/dev workflows
 CMD ["pytest", "-xvs", "--tb=short"]
-
 # ---------------------------------------------------------------------------
 # Prod stage: minimal runtime (no dev tools)
 # ---------------------------------------------------------------------------
+
 FROM base AS prod
 
 COPY . /workspace
+
+# The api service (docker-compose.yml `api`) serves api_server.py, which needs
+# the `server` extra (fastapi/uvicorn/pydantic) — installed here explicitly.
+RUN pip install --no-cache-dir -e ".[server]"
 
 # Run pretrain as default (override with docker run args)
 CMD ["python", "-m", "training.train_pretrain", "--help"]
