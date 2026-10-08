@@ -418,15 +418,28 @@ def main() -> None:
         print(f"[gitee-mirror] mirror head: {head_mirror[:12]} (push skipped)")
         return
 
-    # remote refs already present count as "have" for thin-pack negotiation
+    # remote refs already present count as "have" for thin-pack negotiation;
+    # ancestry matters (git negotiates by commit walk), so expand each remote
+    # ref to its full ancestor set - this keeps re-runs incremental even after
+    # the _sm* chain refs are cleaned up (main survives and covers the chain)
     remote_refs = subprocess.run(
         ["git", "-C", MIRROR_DIR, "ls-remote", REMOTE_NAME],
         capture_output=True, text=True,
     ).stdout
-    remote_known = [l.split()[0] for l in remote_refs.strip().splitlines() if l.strip()]
+    ref_shas = [l.split()[0] for l in remote_refs.strip().splitlines() if l.strip()]
     remote_ref_names = [
         l.split()[1] for l in remote_refs.strip().splitlines() if l.strip()
     ]
+    known: set[str] = set()
+    for sha in set(ref_shas):
+        r = subprocess.run(
+            ["git", "-C", MIRROR_DIR, "rev-list", sha],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            known.update(r.stdout.split())
+    if known:
+        print(f"[gitee-mirror] {len(known)} commits already on remote", flush=True)
 
     # stale _sm* refs from earlier seeding experiments collide with the new
     # chain ref names (non-fast-forward) - delete them first
@@ -437,12 +450,13 @@ def main() -> None:
             if not ok and "remote ref does not exist" not in out:
                 print(f"  stale cleanup {short}: {out[:120]}", flush=True)
 
+    haves = list(ref_shas)
     n = 0
     for sha in chain.push_seq:
-        if sha in remote_known:
+        if sha in known:
             continue
         n += 1
-        kb = pack_kb(sha, remote_known)
+        kb = pack_kb(sha, haves)
         if kb > PACK_BUDGET_KB:
             die(
                 f"chain element {sha[:8]} pack {kb:.0f}KB exceeds budget "
@@ -451,8 +465,8 @@ def main() -> None:
         ok, out = push(f"{sha}:refs/heads/_sm{n}")
         if not ok:
             die(f"push chain element {sha[:8]} failed ({kb:.0f}KB):\n{out}")
-        remote_known.append(sha)
-        print(f"  chain[{n}] {sha[:8]} ok ({kb:.0f}KB)")
+        haves.append(sha)
+        print(f"  chain[{n}] {sha[:8]} ok ({kb:.0f}KB)", flush=True)
 
     ok, out = push(f"{head_mirror}:refs/heads/main")
     print("[gitee-mirror] main push:", "ok" if ok else f"FAILED\n{out}")
