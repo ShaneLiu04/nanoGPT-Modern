@@ -9,6 +9,7 @@ resumable training.
 import os
 import time
 import argparse
+import warnings
 
 import torch
 import torch.distributed as dist
@@ -26,6 +27,7 @@ from training.trainer_base import (
 )
 from utils.lr_scheduler import LRScheduler
 from utils.config import parse_args_with_config
+from utils.checkpoint import set_rng_state
 
 
 def get_args():
@@ -88,6 +90,13 @@ def get_args():
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--eval_interval", type=int, default=1000)
     parser.add_argument("--eval_iters", type=int, default=200)
+    parser.add_argument(
+        "--ckpt_interval",
+        type=int,
+        default=0,
+        help="Save latest_ckpt.pt every N iters between eval points "
+        "(0 = follow eval_interval)",
+    )
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument(
@@ -216,6 +225,9 @@ class PretrainTrainer(BaseTrainer):
         worker_init = (
             make_worker_init_fn(args.seed, self.rank) if args.num_workers > 0 else None
         )
+        # Prefer the persisted global shuffle index so chunk order (and
+        # therefore resume_offset semantics) is deterministic across runs.
+        train_shuffle_idx = os.path.join(args.data_dir, "train.bin.shuffle.idx")
         self.train_loader = get_dataloader(
             args.data_dir,
             "train",
@@ -226,6 +238,9 @@ class PretrainTrainer(BaseTrainer):
             worker_init_fn=worker_init,
             use_packing=args.use_packing,
             shuffle_buffer=args.shuffle_buffer,
+            shuffle_idx_path=(
+                train_shuffle_idx if os.path.exists(train_shuffle_idx) else None
+            ),
         )
         self.val_loader = get_dataloader(
             args.data_dir,
@@ -327,9 +342,30 @@ class PretrainTrainer(BaseTrainer):
             extra = self.load_checkpoint(args.resume)
             self.iter_num = extra.get("iter_num", 0)
             self.best_val_loss = extra.get("best_val_loss", float("inf"))
-            self.resume_offset = extra.get("resume_offset", 0)
+            offset = extra.get("consumed_chunks")
+            if offset is None:
+                offset = extra.get("resume_offset", 0)
+            self.resume_offset = int(offset)
+            self.early_stop_counter = int(extra.get("early_stop_counter", 0))
+            saved_world_size = extra.get("world_size")
+            if (
+                saved_world_size is not None
+                and int(saved_world_size) != max(self.world_size, 1)
+            ):
+                warnings.warn(
+                    f"Checkpoint was saved with world_size={saved_world_size} but "
+                    f"this run has world_size={max(self.world_size, 1)}; "
+                    "resume_offset is a per-rank logical position, so the "
+                    "data stream may repeat or skip chunks.",
+                    RuntimeWarning,
+                )
             # Data loader needs to be rebuilt with the resumed offset.
             self._build_data()
+            # Rebuilding the loaders consumes torch RNG (per-iterator base
+            # seeds); re-restore so the resumed run continues the exact RNG
+            # stream of the save point.
+            if "rng_state" in extra:
+                set_rng_state(extra["rng_state"])
 
     def _forward(self, batch):
         """Forward pass compatible with both model types and optional document_ids."""
@@ -387,6 +423,12 @@ class PretrainTrainer(BaseTrainer):
             rng_state=get_rng_state(),
             resume_offset=self.resume_offset,
             ema_shadow=ema_shadow,
+            extra_state={
+                "early_stop_counter": self.early_stop_counter,
+                "consumed_chunks": self.resume_offset,
+                "world_size": max(self.world_size, 1),
+                "rank": self.rank if self.rank >= 0 else 0,
+            },
         )
 
     def _save_ema_checkpoint(self):
@@ -412,13 +454,83 @@ class PretrainTrainer(BaseTrainer):
             for param_group in self.optimizer.param_groups:
                 param_group["lr"] = lr
 
+            # --- Eval / checkpoint boundary (top of the iteration) ---
+            # Invariant preserved here: ``iter_num == k`` means k iterations
+            # are fully completed and the data position is exactly
+            # ``resume_offset``; a checkpoint saved at this point resumes
+            # with zero batch repetition or loss (design §4.2.2).
+            if (
+                self.iter_num > 0
+                and self.iter_num % args.eval_interval == 0
+                and self.master_process
+            ):
+                losses = self.estimate_loss()
+                print(
+                    f"iter {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
+                )
+                self.log_scalars(
+                    {
+                        "val/loss": losses["val"],
+                        "train/avg_loss": losses["train"],
+                    },
+                    self.iter_num,
+                )
+
+                if losses["val"] < self.best_val_loss:
+                    self.best_val_loss = losses["val"]
+                    self._save_checkpoint("best_ckpt.pt")
+                    self.early_stop_counter = 0
+                else:
+                    self.early_stop_counter += 1
+
+                self._save_checkpoint("latest_ckpt.pt")
+                self._save_ema_checkpoint()
+
+                if (
+                    args.early_stopping_patience > 0
+                    and self.early_stop_counter >= args.early_stopping_patience
+                ):
+                    print(
+                        f"Early stopping triggered at iter {self.iter_num} "
+                        f"(val loss did not improve for {args.early_stopping_patience} evals)"
+                    )
+                    self.finalize_recorder(
+                        "completed",
+                        {
+                            "best_val_loss": self.best_val_loss,
+                            "final_val_loss": losses["val"],
+                            "steps": self.iter_num,
+                            "early_stopped": True,
+                        },
+                    )
+                    return
+
+            # Off-eval checkpoint cadence (--ckpt_interval, 0 = follow
+            # eval_interval; eval points already save latest_ckpt.pt above).
+            ckpt_every = getattr(args, "ckpt_interval", 0) or args.eval_interval
+            if (
+                ckpt_every > 0
+                and self.iter_num > 0
+                and self.iter_num % ckpt_every == 0
+                and self.iter_num % args.eval_interval != 0
+                and self.master_process
+            ):
+                self._save_checkpoint("latest_ckpt.pt")
+
             try:
                 batch = next(self.train_iter)
             except StopIteration:
+                # Epoch wrap: restart from the head of the (shuffled) stream.
+                self.resume_offset = 0
+                dataset = getattr(self.train_loader, "dataset", None)
+                if dataset is not None and hasattr(dataset, "load_state_dict"):
+                    dataset.load_state_dict({"resume_offset": 0})
                 self.train_iter = iter(self.train_loader)
                 batch = next(self.train_iter)
 
             batch = [t.to(self.device) for t in batch]
+            # Track the data position for exact resume (chunks consumed).
+            self.resume_offset += batch[0].shape[0]
 
             with self.ctx:
                 _, loss, _ = self._forward(batch)
@@ -494,52 +606,6 @@ class PretrainTrainer(BaseTrainer):
                 self.log_memory_stats(self.iter_num)
                 running_loss = 0.0
                 running_count = 0
-
-            if (
-                self.iter_num > 0
-                and self.iter_num % args.eval_interval == 0
-                and self.master_process
-            ):
-                losses = self.estimate_loss()
-                print(
-                    f"iter {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
-                )
-                self.log_scalars(
-                    {
-                        "val/loss": losses["val"],
-                        "train/avg_loss": losses["train"],
-                    },
-                    self.iter_num,
-                )
-
-                if losses["val"] < self.best_val_loss:
-                    self.best_val_loss = losses["val"]
-                    self._save_checkpoint("best_ckpt.pt")
-                    self.early_stop_counter = 0
-                else:
-                    self.early_stop_counter += 1
-
-                self._save_checkpoint("latest_ckpt.pt")
-                self._save_ema_checkpoint()
-
-                if (
-                    args.early_stopping_patience > 0
-                    and self.early_stop_counter >= args.early_stopping_patience
-                ):
-                    print(
-                        f"Early stopping triggered at iter {self.iter_num} "
-                        f"(val loss did not improve for {args.early_stopping_patience} evals)"
-                    )
-                    self.finalize_recorder(
-                        "completed",
-                        {
-                            "best_val_loss": self.best_val_loss,
-                            "final_val_loss": losses["val"],
-                            "steps": self.iter_num,
-                            "early_stopped": True,
-                        },
-                    )
-                    return
 
             self.iter_num += 1
 

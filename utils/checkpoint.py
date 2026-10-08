@@ -30,6 +30,10 @@ def save_checkpoint(
     ema_shadow=None,
     rng_state=None,
     resume_offset=0,
+    early_stop_counter=None,
+    consumed_chunks=None,
+    world_size=None,
+    rank=None,
 ):
     """Save a training checkpoint.
 
@@ -52,6 +56,14 @@ def save_checkpoint(
         RNG state bundle produced by ``get_rng_state``.
     resume_offset : int, optional
         Data loader resume offset.
+    early_stop_counter : int, optional
+        Non-improving eval count for early stopping.
+    consumed_chunks : int, optional
+        Logical chunks consumed so far (data-position resume marker).
+    world_size : int, optional
+        Distributed world size the run was checkpointed under.
+    rank : int, optional
+        Distributed rank that wrote the checkpoint.
 
     Returns
     -------
@@ -79,6 +91,14 @@ def save_checkpoint(
         checkpoint["rng_state"] = rng_state
     if resume_offset:
         checkpoint["resume_offset"] = resume_offset
+    if early_stop_counter is not None:
+        checkpoint["early_stop_counter"] = early_stop_counter
+    if consumed_chunks is not None:
+        checkpoint["consumed_chunks"] = consumed_chunks
+    if world_size is not None:
+        checkpoint["world_size"] = world_size
+    if rank is not None:
+        checkpoint["rank"] = rank
 
     path = os.path.join(out_dir, filename)
     # Write to a temporary file and atomically rename to avoid corrupt
@@ -106,7 +126,8 @@ def load_checkpoint(path, model, optimizer=None, device="cpu", strict=True):
     dict
         Always contains ``iter_num`` and ``best_val_loss``.  May also
         contain ``scaler``, ``scheduler``, ``ema_shadow``, ``rng_state``,
-        and ``resume_offset`` when present in the checkpoint.
+        ``resume_offset``, ``early_stop_counter``, ``consumed_chunks``,
+        ``world_size``, and ``rank`` when present in the checkpoint.
     """
     checkpoint = torch.load(path, map_location=device, weights_only=False)
 
@@ -120,7 +141,17 @@ def load_checkpoint(path, model, optimizer=None, device="cpu", strict=True):
         "best_val_loss": checkpoint.get("best_val_loss", float("inf")),
     }
 
-    for key in ("scaler", "scheduler", "ema_shadow", "rng_state", "resume_offset"):
+    for key in (
+        "scaler",
+        "scheduler",
+        "ema_shadow",
+        "rng_state",
+        "resume_offset",
+        "early_stop_counter",
+        "consumed_chunks",
+        "world_size",
+        "rank",
+    ):
         if key in checkpoint:
             extra[key] = checkpoint[key]
 

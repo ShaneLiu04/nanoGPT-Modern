@@ -24,7 +24,12 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
-from utils.checkpoint import save_checkpoint, load_checkpoint, get_rng_state
+from utils.checkpoint import (
+    save_checkpoint,
+    load_checkpoint,
+    get_rng_state,
+    set_rng_state,
+)
 from utils.config import to_dict
 from utils.experiment import ExperimentRecorder
 from utils.logging import Logger
@@ -238,12 +243,16 @@ class CheckpointManager:
         rng_state=None,
         resume_offset=None,
         ema_shadow=None,
+        extra_state=None,
     ):
         """Save a checkpoint with full training state.
 
         Optional overrides for ``rng_state``, ``resume_offset`` and
         ``ema_shadow`` are useful when the trainer keeps these values outside
         of the manager (e.g. ``PretrainTrainer.resume_offset``).
+        ``extra_state`` carries additional resume keys
+        (``early_stop_counter`` / ``consumed_chunks`` / ``world_size`` /
+        ``rank``) that are persisted when present and not None.
         """
         model_src = self.model
         # If model is wrapped by DDP, unwrap for checkpointing.
@@ -268,6 +277,12 @@ class CheckpointManager:
                 except Exception:
                     pass
 
+        extra_kwargs = {}
+        if extra_state:
+            for key in ("early_stop_counter", "consumed_chunks", "world_size", "rank"):
+                if key in extra_state and extra_state[key] is not None:
+                    extra_kwargs[key] = extra_state[key]
+
         path = save_checkpoint(
             model_src,
             self.optimizer,
@@ -283,6 +298,7 @@ class CheckpointManager:
             resume_offset=(
                 resume_offset if resume_offset is not None else self.resume_offset
             ),
+            **extra_kwargs,
         )
 
         if self.keep_last_n > 0 and not self._is_protected(filename):
@@ -301,7 +317,10 @@ class CheckpointManager:
     def load(self, path, strict=True):
         """Load a checkpoint and return auxiliary state.
 
-        Handles unwrapping DDP models automatically.
+        Handles unwrapping DDP models automatically.  When the checkpoint
+        carries an ``rng_state`` bundle, it is restored via
+        ``set_rng_state`` so a resumed run continues the exact RNG stream
+        of the save point.
         """
         model_src = self.model
         if isinstance(model_src, DDP):
@@ -327,6 +346,8 @@ class CheckpointManager:
             # If the caller keeps a reference to the dict, update in place.
             self.ema_shadow.clear()
             self.ema_shadow.update(extra["ema_shadow"])
+        if "rng_state" in extra:
+            set_rng_state(extra["rng_state"])
         if "resume_offset" in extra:
             self.resume_offset = extra["resume_offset"]
 

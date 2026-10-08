@@ -16,7 +16,7 @@
 |----|---------|------|------|------|
 | T001 | FR1 依赖与环境固化：pyproject 补 server/validate extras、torch pin ~=2.5、uv.lock 重新同步、Dockerfile/compose 现代化、CI 补 lock 检查 + Docker build job | - | passing | 2026-10-08 完成；torch 收紧为 `~=2.5,<2.9` 消除 cu13 分裂 |
 | T002 | FR2 数据迁移：修复 prepare.py --max_docs 复现陷阱、新增 docs/MIGRATION.md（必带清单/验证/冒烟/冗余清理）、本机干净环境演练 ≤1h | T001 | passing | 2026-10-08 完成；演练核心链路 2m17s |
-| T003 | FR3a 断点续跑：编排器组内自动 --resume（ckpt 探测/架构校验/降级重跑/resumed_from_iter）、训练 RNG 恢复 + resume_offset 真实推进 + early_stop_counter、新增 --ckpt_interval | - | pending | 云抢占刚需，TDD |
+| T003 | FR3a 断点续跑：编排器组内自动 --resume（ckpt 探测/架构校验/降级重跑/resumed_from_iter）、训练 RNG 恢复 + resume_offset 真实推进 + early_stop_counter、新增 --ckpt_interval | - | passing | 云抢占刚需，TDD |
 | T004 | FR3b 运行管理：日志轮转（RotatingFileHandler）、metrics.jsonl 心跳 watchdog、编排器失败 webhook 通知（缺 URL 静默） | T003 | pending | 降级哲学与现有一致 |
 | T005 | FR4a Paged KV 双 bug 修复（get_cache 逐层 / block table 逐层 append）+ n_layer=2 回归测试；generate 四处 max_cache_len → effective_block_size（NTK 解锁） | - | pending | v0.4.0 推理实验硬前提 |
 | T006 | FR4b 投机解码分布修正（greedy p_d=point mass/完整 q 残差/温度统一）+ 分布等价性测试（draft==target KL→0）；temperature=0 → greedy 三处 | - | pending | 接受率不再虚高 |
@@ -82,6 +82,16 @@
 - 演练发现并固化两个平台差异（写入排障表）：① Windows PyPI torch wheel 为 CPU-only（Linux manylinux 自带 cu128，云不受影响）；② `train_pretrain.py:110` argparse 默认 `--num_workers 4` 在 Windows 触发 spawn 竞态崩溃——runbook 冒烟命令显式 `--num_workers 0` 双平台通用，分层默认留 T009
 - 测试：新增 7 用例全过；全量回归 349 passed / 2 skipped（零回归）；测试侧修正 1 处误报（usage 行含 --full 触发 help 语义断言，过滤为选项描述行）
 - 备注：`--split train --full` 全量重建一致性未实际重跑（8.9B token 重建 2-4h，由 resolve_max_docs 单测 + idx 判据表覆盖）；冗余目录清理命令已文档化但本机未删（数据仍被 v0.4.0 潜在重建使用）
+
+### 2026-10-08 会话记录（T003）
+
+- 完成任务：T003 FR3a 断点续跑强化（标准任务，Red/Green 分离 + 端到端演练）
+- 修改文件：run_component_ablations.py（新增 `find_group_checkpoint` 三态探测 / `_arch_matches`+`ckpt_matches_group` 架构校验（model_type↔--model、n_kv_head（None→n_head 回退、baseline 跳过）、num_experts/position_encoding/ffn_variant 默认值比对）/ `build_train_command` 加 `resume_from` 注入 `--resume` / `run_train_stage` resume 决策 + 失败降级无 --resume 重跑一次 + `resumed_from_iter` 返回键 / `_group_overrides` YAML+flags 合并比对 / markdown 表新增 Resumed From Iter 列 + JSON summary 挂载）；utils/checkpoint.py（save_checkpoint 新 kwargs `early_stop_counter/consumed_chunks/world_size/rank`，load_checkpoint extra 透传同键）；training/trainer_base.py（import set_rng_state；CheckpointManager.save 加 `extra_state` 透传；load 接线 `set_rng_state(extra["rng_state"])`）；training/train_pretrain.py（`--ckpt_interval` flag（0=跟随 eval_interval）；`_build_data` train loader 显式传 `train.bin.shuffle.idx`（存在时，落实全局 shuffle 确定性 resume）；`_maybe_resume` 恢复 consumed_chunks（优先）/resume_offset/early_stop_counter + world_size 不一致 WARN + 重建 loader 后重放 RNG；训练循环：每 batch `resume_offset += batch_size`、epoch StopIteration 回绕双侧重置（trainer+dataset）、eval/ckpt 保存点整体上移至 body 头部）
+- **关键修复（演练发现）**：原 eval/ckpt 保存点在 body 中部（batch 消费+step 后、iter_num++ 前），ckpt 存 `(iter=k, offset=(k+1)·B)`，resume 从 body(k) 头部重跑 → 最后一个 batch 恒重复训练一次（演练实测 consumed=404≠400）。修复 = 保存点上移至 body 头部，建立不变式「ckpt(iter=k) ⇔ 已完成 k 次迭代且数据位置=k·B」，resume 零重复零丢失；顺带 eval 语义自洽化（iter k 的 val loss = k 步模型而非 k+1 步）
+- **关键修复（UT 发现）**：`_maybe_resume` 中 load（回卷 RNG）后 `_build_data` 重建 DataLoader 会消耗 torch RNG（iterator base seed，实测 2 draw）→ 构造结束 RNG 偏移；修复 = 重建后重放 `set_rng_state(extra["rng_state"])`
+- 测试：tests/test_orchestrator_resume.py（6 用例：completed 回归守卫/三态探测/架构校验/命令注入/降级重跑/resumed_from_iter）+ tests/test_resume_integrity.py（5 用例：RNG 行为+接线双断言/offset 推进+恢复后首 batch 逐元素相等/early_stop 往返+旧格式默认/ckpt_interval=5 两时点落盘 vs =0 跟随 eval/旧 ckpt 缺键默认）——Red 9 失败 2 守卫通过 → Green 11/11；全量回归 361 passed / 2 skipped（零回归）
+- 演练验收（FR3a 业务场景 E1 抢占）：真实 tiny 训练（CPU，2000 chunks 顺序 shuffle.idx）→ ckpt_interval=20 轮询至 iter≥40 强杀（manifest=running）→ 编排器重投递自动 `[resume] from iter 40` → 续跑至 100；断言全过：manifest completed/steps=100、final ckpt consumed=160+60×4=400 **精确对账**（修复前 404）、metrics.jsonl 轨迹 0..95 连续无重复、resumed_from_iter=40>0、「最多丢一个 ckpt_interval」成立
+- 备注：resume 失败降级重跑路径由 UT monkeypatch 覆盖（演练走 happy path）；`estimate_loss` 迭代 train_loader 从 dataset.resume_offset（构造值）取样为 v0.4.0 既有行为，非本任务范围；epoch 回绕重置为新增语义（原实现 dataset.resume_offset 不复位导致回绕起点漂移）
 
 ## 阶段门控记录
 
