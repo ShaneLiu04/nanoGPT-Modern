@@ -17,7 +17,7 @@
 | T004 | FR3b ModernGPT `ffn_variant=gelu4x` 开关 + 非法组合校验 | - | passing | 与 T003 可并行 |
 | T005 | FR4 run_component_ablations.py：7 组配置、断点续跑、失败隔离、汇总表（JSON+Markdown） | T001,T003,T004 | passing | 用小模型做集成测试 |
 | T006 | FR5 全量 OpenWebText 数据准备：下载、bin 化、validate、全局 shuffle 索引 | - | passing | 长时执行任务，2-5h |
-| T007 | FR6+E7 执行 7 组 50M × 18k iters 消融训练（baseline/modern-full/no-rope/no-swiglu/mha/moe/qk-norm） | T005,T006 | pending | 跨多会话，断点续跑 |
+| T007 | FR6+E7 执行 7 组 50M × 18k iters 消融训练（baseline/modern-full/no-rope/no-swiglu/mha/moe/qk-norm） | T005,T006 | in_progress | 跨多会话，断点续跑；已启动，见 2026-10-08 会话记录 |
 | T008 | FR8 推理实验：KV cache 矩阵、投机解码、连续批处理、torch.compile，结果 JSON | T007 | pending | 依赖 modern-full checkpoint |
 | T009 | FR9 长上下文实验：NTK ppl-vs-长度曲线、Needle heatmap 数据 | T007 | pending | 依赖 modern-full checkpoint |
 | T010 | FR10 对齐实验：SFT → GRPO(G4/G8) → DPO 胜率，全部在 50M checkpoint 上 | T007 | pending | 依赖 modern-full checkpoint |
@@ -92,6 +92,16 @@
 - 设计门控：用户选择跳过（自动化指示）
 - 组件详设：`specs/component-detail-design/` 不存在，Step 7 按规则跳过
 - 任务分解经与 design.md §3 功能点对照确认对齐（T001-T013 ↔ FR1-FR13 ↔ 功能点 1-18），无需调整
+
+### 2026-10-08 T007 启动（FR6+E7，执行型任务）
+
+- **环境问题根因与修复**：Windows 下训练在首次 eval（iter 10）必崩——`estimate_loss` 重新迭代 DataLoader 时 spawn 新 worker 报 `OSError [Errno 22]`；最小复现确认触发条件为「旧 iterator 的 4 个 worker 存活 + CUDA 已初始化时再次并发 spawn」（Windows multiprocessing spawn 竞态）。修复：`config/pretrain.yaml` 与 `config/hydra/defaults/data/openwebtext.yaml` 的 `num_workers: 4 → 0`。依据：① GPU 步进 ~0.5 it/s 为瓶颈，memmap 主进程加载零影响（smoke 实测 tok/s 持平 ~6100）；② `MemmapDataset`（IterableDataset）多 worker 时各 worker 取全局 shuffle 置换的连续切片交错读取，`num_workers=0` 才严格按全局 shuffle 索引顺序遍历，更符合设计 §4.2.2「数据顺序由全局 shuffle 索引锁定」
+- **验证**：smoke 20 iters 完整跑通（exit=0，manifest status=completed，final_metrics 含 best/final val loss/steps/wall_time_s）；orchestrator 端到端 2 组 × 15 iters 冒烟通过（summary.md 全列正确：baseline 64.086M/modern-full 59.561M 参数、Δ%、tok/s、峰值显存）；全量回归 336 passed, 2 skipped（无回归）；test_hydra_config 两配置一致性保持
+- **正式训练已启动**：`python run_component_ablations.py --stage all --out_root out` 以 detached 进程运行（编排器 PID 21308），日志 `out/ablation-runner.out.log`/`.err.log`（块缓冲，周期落盘）；GPU 99% 利用率确认 baseline 组训练中；Windows 睡眠/休眠已确认禁用（AC timeout=0）
+- **吞吐估算**：~6100 tok/s → 单组 18k iters ≈ 10.5h + eval 开销，7 组总计 ≈ 75h（跨多会话）
+- **已知风险**：modern-full 峰值显存 15.49GB/16GB（WDDM 共享显存溢出可跑通）；**moe 组 +~78M 参数（×16B 优化器状态 ≈ +1.25GB）有 OOM/降速风险**——编排器失败隔离保证其余 6 组完成，若 moe 失败需后续单独处理（候选：--gradient_checkpointing）
+- **断点续跑语义**：manifest status=="completed" 的组自动跳过；中断组内可用 latest_ckpt.pt（每 1000 iters 保存）手动 `--resume` 恢复
+- **提交**：41ac0cf（T001-T006 累积工作 + .gitignore data/owt_parquet/）+ 本次 num_workers 配置修复
 
 ## 阶段门控记录
 
