@@ -156,8 +156,12 @@ class InferenceProfiler:
         self._start = time.perf_counter()
         return self
 
-    def step(self):
-        """Call once per generated token to record incremental timing."""
+    def step(self, token=None):
+        """Call once per generated token to record incremental timing.
+
+        ``token`` (the freshly generated ``[B, 1]`` LongTensor) is accepted
+        for use as a ``generate(on_token=...)`` callback and is ignored.
+        """
         now = time.perf_counter()
         self.times.append(now - self._start)
         self._start = now
@@ -179,6 +183,7 @@ class InferenceProfiler:
         return {
             "tokens": n,
             "total_sec": total,
+            "mean_ms": (total / n) * 1000.0,
             "median_ms": median * 1000.0,
             "p95_ms": p95 * 1000.0,
             "max_ms": sorted_t[-1] * 1000.0,
