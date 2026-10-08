@@ -1,4 +1,8 @@
-torch>=2.0.0
+# NOTE: This file is derived from pyproject.toml ([project.dependencies]) —
+# 本文件由 pyproject.toml 派生，仅作传统工具链参考，请勿直接编辑。
+# Single source of truth: pyproject.toml / uv.lock.
+
+torch>=2.5,<3.0
 numpy
 tiktoken
 tensorboard

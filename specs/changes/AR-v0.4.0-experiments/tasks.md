@@ -17,7 +17,7 @@
 | T004 | FR3b ModernGPT `ffn_variant=gelu4x` 开关 + 非法组合校验 | - | passing | 与 T003 可并行 |
 | T005 | FR4 run_component_ablations.py：7 组配置、断点续跑、失败隔离、汇总表（JSON+Markdown） | T001,T003,T004 | passing | 用小模型做集成测试 |
 | T006 | FR5 全量 OpenWebText 数据准备：下载、bin 化、validate、全局 shuffle 索引 | - | passing | 长时执行任务，2-5h |
-| T007 | FR6+E7 执行 7 组 50M × 18k iters 消融训练（baseline/modern-full/no-rope/no-swiglu/mha/moe/qk-norm） | T005,T006 | in_progress | 跨多会话，断点续跑；已启动，见 2026-10-08 会话记录 |
+| T007 | FR6+E7 执行 7 组 50M × 18k iters 消融训练（baseline/modern-full/no-rope/no-swiglu/mha/moe/qk-norm） | T005,T006 | pending | 2026-10-08 本机算力不足中止（见当日记录②）；训练迁移至高算力环境执行，local 产物可 --resume 续跑 |
 | T008 | FR8 推理实验：KV cache 矩阵、投机解码、连续批处理、torch.compile，结果 JSON | T007 | pending | 依赖 modern-full checkpoint |
 | T009 | FR9 长上下文实验：NTK ppl-vs-长度曲线、Needle heatmap 数据 | T007 | pending | 依赖 modern-full checkpoint |
 | T010 | FR10 对齐实验：SFT → GRPO(G4/G8) → DPO 胜率，全部在 50M checkpoint 上 | T007 | pending | 依赖 modern-full checkpoint |
@@ -102,6 +102,13 @@
 - **已知风险**：modern-full 峰值显存 15.49GB/16GB（WDDM 共享显存溢出可跑通）；**moe 组 +~78M 参数（×16B 优化器状态 ≈ +1.25GB）有 OOM/降速风险**——编排器失败隔离保证其余 6 组完成，若 moe 失败需后续单独处理（候选：--gradient_checkpointing）
 - **断点续跑语义**：manifest status=="completed" 的组自动跳过；中断组内可用 latest_ckpt.pt（每 1000 iters 保存）手动 `--resume` 恢复
 - **提交**：41ac0cf（T001-T006 累积工作 + .gitignore data/owt_parquet/）+ 本次 num_workers 配置修复
+
+### 2026-10-08 T007 中止与策略调整（记录②）
+
+- **本机实测**：Quadro RTX 5000 (sm_75/16GB) 训练速率 ~34 min/1k iters → 单组 ~10.2h、7 组 ≈ 71h+；用户重启机器中止训练（不可长期占用本机）
+- **中断点**：baseline 组 step 4610/18000（4 个 eval 点：val_loss 6.02→4.77，train loss 10.9→4.68），`latest_ckpt.pt`（step 4000）+ metrics.jsonl 完整保留，manifest status=running
+- **决策**：T007（及依赖 checkpoint 的 T008-T010）迁移至高算力环境执行；本 AR 转向「框架优化 + 可移植性夯实」（新 AR 承接），为迁移做工程准备
+- **保留资产**：全量数据（data/openwebtext 17GB bin + shuffle idx）、T001-T006 全部代码/测试（336 passed）、中断组 checkpoint 可 --resume 续跑、编排器断点续跑语义
 
 ## 阶段门控记录
 

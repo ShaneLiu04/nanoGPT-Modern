@@ -24,7 +24,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "torch>=2.0.0",
+    # ~=2.5 locks the SDPA enable_gqa lower bound (torch>=2.5); the <2.9 cap keeps
+    # resolution on the cu12x wheel series and avoids silent cu13 forks per Python version.
+    "torch~=2.5, <2.9",
     "numpy",
     "tiktoken",
     "tensorboard",
@@ -43,6 +45,8 @@ eval = ["lm-eval>=0.4.0"]
 quant = ["bitsandbytes>=0.41.0", "gguf>=0.6.0"]
 hf = ["transformers"]
 plot = ["matplotlib>=3.7.0"]
+server = ["fastapi>=0.100.0", "uvicorn>=0.23.0", "pydantic>=2.0"]
+validate = ["pydantic>=2.0"]
 dev = ["pytest", "black", "ruff", "mypy", "types-PyYAML"]
 
 [project.scripts]
