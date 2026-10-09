@@ -22,7 +22,7 @@
 | T006 | FR4b 投机解码分布修正（greedy p_d=point mass/完整 q 残差/温度统一）+ 分布等价性测试（draft==target KL→0）；temperature=0 → greedy 三处 | - | passing | 2026-10-08 完成；统计验收 TVD≈0.07 vs bug 0.82 |
 | T007 | FR4c profile_inference 假 per-token 计时修复（挂入真实 decode 回调） | - | passing | 2026-10-08 完成；含 generate.py benchmark 加固（CPU perf_counter/warmup≥3/p50-p99） |
 | T008 | FR8a GQA enable_gqa=True（torch≥2.5 探测回退）+ GQA 探测移出首 forward（compile 图断裂修复）+ TF32 推广全部 5 训练器 | - | passing | 2026-10-09 完成；旧惰性探测在 torch≥2.5 上从未启用原生内核（探测不传 enable_gqa） |
-| T009 | FR8b 数据路径（non_blocking/persistent_workers/num_workers 环境分层）+ eval 瘦身（batch 放大/多卡 allreduce/去 .item() sync） | - | pending | |
+| T009 | FR8b 数据路径（non_blocking/persistent_workers/num_workers 环境分层）+ eval 瘦身（batch 放大/多卡 allreduce/去 .item() sync） | - | passing | 2026-10-09 完成；发现 persistent_workers 与 estimate_loss/epoch-wrap 的两个隐蔽冲突并安全绕开 |
 | T022 | FR8c EMA foreach 批量更新 + micro-step 去 all_reduce/.item() 同步 + 异步 checkpoint（staged+线程，保持原子性，失败回退同步） | T009 | pending | 异步 ckpt 需独立验证原子性回退 |
 | T010 | FR9a DDP 数据 rank 分片（互斥切片 + resume_offset 分片语义）+ no_sync/static_graph/gradient_as_bucket_view | T009 | pending | 正确性级修复 |
 | T011 | FR9b FSDP 补齐：auto_wrap_policy/use_orig_params/compile 顺序/FSDP checkpoint 修复（死代码接线或 DCP）+ 分布式 round-trip 测试 | T008,T010 | pending | |
@@ -130,6 +130,15 @@
 - **关键收获（旧惰性探测的双重缺陷）**：① 探测调用本身不传 `enable_gqa`——torch≥2.5 上 raw 探测必然失败（SDPA 对不同头数要求显式 enable_gqa），生产路径从未用上原生 GQA 内核，一直降级 grouped；② 首 forward 中跑真实 SDPA 探测既是 torch.compile 图断裂源，也在首次推理引入设备探测开销。新方案两级防线：构造期 inspect 签名静态判定（零设备副作用、compile 安全）+ 运行期 try/except 一次性降级（B8 版本回退/E6 运行异常均覆盖）
 - 测试：Red 20 failed / 2 passed（2 个 passed 为显式 grouped/repeat 回归守卫，docstring 注明预期）→ Green 22/22；全量回归 **412 passed / 2 skipped**（390 基线 + 22 新增，零回归）
 - 备注：E6 降级为实例级永久性（`_gqa_mode` 改 grouped 后不再重试 native）；FR8-AC3 grep 语义由源码断言测试固化（5 训练器源码含 `enable_tf32()`）；hydra 变体经主脚本 import 自动获益；TF32 模块级调用使「import 训练器即生效」，测试通过 sys.modules.pop 强制重导入验证因果
+
+### 2026-10-09 会话记录（T009）
+
+- 完成任务：T009 FR8b 训练配置级性能优化·其二（标准任务，Red/Green 分离）
+- 修改文件：data/openwebtext.py（新增 `default_num_workers()`：nt→0 / posix→4；`get_dataloader` 的 `num_workers=None` 环境分层解析 + 新增 `persistent_workers=None` 自动 `(nw>0)` + 显式覆盖优先、`pin_memory=True` 参数化）；training/train_pretrain.py（argparse `--num_workers` 默认 4→None、新增 `--eval_batch_size` 默认 None→2×batch；`_build_data` 局部解析不污染 args、新增 `train_eval_loader`（train split/eval 批/构造时 resume_offset/同 shuffle_idx）、val_loader 改 eval 批、train_loader 显式 `persistent_workers=False`；`estimate_loss` 重写：device 张量累积 `loss.detach()` 零逐 iter `.item()`、分布式 SUM all_reduce + /world_size、每 split 单次 mean().item()、batch `non_blocking=True`；eval 边界与收尾 eval 全 rank 化（master gate 从调用条件移除），best_val/early_stop 全 rank 一致推进，print/log/save 仍 master-only；`_forward`/训练批 `.to(device, non_blocking=True)`）；tests/test_training_perf_flags.py（追加 15 用例 + 自包含 tiny 数据/args helper）
+- **关键发现（persistent_workers 两个隐蔽冲突，均绕开）**：① torch 的 persistent DataLoader 对每次 `iter()` 复用并 `_reset` 同一迭代器——estimate_loss 若继续迭代 train_loader 会**重置训练流**（破坏 T003 零重复不变量）→ 引入独立 `train_eval_loader`（复现旧「新鲜迭代器=构造时窗口」语义）；② epoch wrap 靠 `dataset.load_state_dict(新 offset)` 传递回绕位置，但 persistent worker **不会重新 pickle dataset**（worker 持旧副本）→ train_loader 必须恒 `persistent_workers=False`，val/train_eval（每 eval 重建迭代器、dataset 无中途变异）才安全启用
+- **关键发现（Green 期修正 2 处）**：① 实现初版 `if self.distributed and dist.is_available() and dist.is_initialized()` 三重守卫超出契约（既有惯例 L608 仅查 `self.distributed`，分布式标志仅在 dist 初始化后为 True）→ 对齐惯例；② `_build_data` 初版回写 `args.eval_batch_size` 污染命名空间（测试断言构造后 args 仍无该键）→ 改局部变量
+- 测试：Red 15 failed / 22 passed（T008 用例零影响）→ Green 37/37；全量回归 **427 passed / 2 skipped**（412 基线 + 15 新增，零回归，含 T003 resume 精确对账/编排器/监控集成全过）
+- 备注：train_eval_loader 的窗口在 epoch wrap 后不再跟随回绕（独立 dataset 实例），train-split eval 语义为「构造时窗口近似」，仅用于日志，val 语义不变；multi-GPU allreduce 在 loader 未分片时各 rank 值相同（分片属 T010），本任务先消除「非 master 空转」；micro-step 逐步 all_reduce/.item()（L609）属 T022 范围未动
 
 ## 阶段门控记录
 

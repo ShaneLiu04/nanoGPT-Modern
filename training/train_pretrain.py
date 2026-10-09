@@ -18,7 +18,7 @@ import torch.distributed as dist
 from model.attention_utils import set_attention_backend, print_attention_backend
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
-from data.openwebtext import get_dataloader
+from data.openwebtext import default_num_workers, get_dataloader
 from training.trainer_base import (
     BaseTrainer,
     enable_tf32,
@@ -120,7 +120,18 @@ def get_args():
         choices=["full", "grad", "no"],
         help="FSDP sharding: full (params+grads+opt), grad (grads+opt), no (DDP-like)",
     )
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=None,
+        help="DataLoader workers; default is env-tiered (Windows 0, Linux 4, FR8b)",
+    )
+    parser.add_argument(
+        "--eval_batch_size",
+        type=int,
+        default=None,
+        help="Eval-time batch size; default is 2x train batch_size (FR8b)",
+    )
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
@@ -225,35 +236,69 @@ class PretrainTrainer(BaseTrainer):
 
     def _build_data(self):
         args = self.args
+        # FR8b: env-tiered num_workers default + 2x eval batch (explicit
+        # CLI values win over both defaults).  Resolved locally — the
+        # args namespace is not mutated.
+        num_workers = args.num_workers
+        if num_workers is None:
+            num_workers = default_num_workers()
+        eval_batch_size = getattr(args, "eval_batch_size", None)
+        if not eval_batch_size:
+            eval_batch_size = 2 * args.batch_size
         resume_offset = getattr(self, "resume_offset", 0)
         worker_init = (
-            make_worker_init_fn(args.seed, self.rank) if args.num_workers > 0 else None
+            make_worker_init_fn(args.seed, self.rank) if num_workers > 0 else None
         )
         # Prefer the persisted global shuffle index so chunk order (and
         # therefore resume_offset semantics) is deterministic across runs.
         train_shuffle_idx = os.path.join(args.data_dir, "train.bin.shuffle.idx")
+        shuffle_idx_path = (
+            train_shuffle_idx if os.path.exists(train_shuffle_idx) else None
+        )
+        # The training loader keeps persistent_workers=False: epoch wrap
+        # propagates the reset resume_offset via dataset.load_state_dict,
+        # and persistent workers never re-pickle the dataset, so wrap
+        # would silently keep the stale offset.
         self.train_loader = get_dataloader(
             args.data_dir,
             "train",
             args.batch_size,
             args.block_size,
-            args.num_workers,
+            num_workers,
             resume_offset=resume_offset,
             worker_init_fn=worker_init,
             use_packing=args.use_packing,
             shuffle_buffer=args.shuffle_buffer,
-            shuffle_idx_path=(
-                train_shuffle_idx if os.path.exists(train_shuffle_idx) else None
-            ),
+            shuffle_idx_path=shuffle_idx_path,
+            persistent_workers=False,
         )
+        # Eval loaders batch 2x and keep workers alive across eval rounds.
         self.val_loader = get_dataloader(
             args.data_dir,
             "val",
-            args.batch_size,
+            eval_batch_size,
             args.block_size,
-            args.num_workers,
+            num_workers,
             worker_init_fn=worker_init,
             use_packing=args.use_packing,
+        )
+        # Dedicated train-split loader for estimate_loss: iterating the
+        # training loader from estimate_loss would _reset the persistent
+        # iterator (torch reuses one iterator per DataLoader with
+        # persistent_workers) and restart the training stream mid-run.
+        # This loader reproduces the same construction-time window the
+        # old fresh-iterator behavior sampled from.
+        self.train_eval_loader = get_dataloader(
+            args.data_dir,
+            "train",
+            eval_batch_size,
+            args.block_size,
+            num_workers,
+            resume_offset=resume_offset,
+            worker_init_fn=worker_init,
+            use_packing=args.use_packing,
+            shuffle_buffer=args.shuffle_buffer,
+            shuffle_idx_path=shuffle_idx_path,
         )
         self.train_iter = iter(self.train_loader)
 
@@ -375,7 +420,7 @@ class PretrainTrainer(BaseTrainer):
         """Forward pass compatible with both model types and optional document_ids."""
         if len(batch) == 3:
             input_ids, targets, document_ids = batch
-            document_ids = document_ids.to(self.device)
+            document_ids = document_ids.to(self.device, non_blocking=True)
         else:
             input_ids, targets = batch
             document_ids = None
@@ -387,17 +432,28 @@ class PretrainTrainer(BaseTrainer):
 
     @torch.no_grad()
     def estimate_loss(self):
+        """Eval loss with an async-friendly data path (FR8b).
+
+        Losses accumulate as a device tensor (no per-iteration
+        ``.item()`` host sync); under DDP every rank evaluates and the
+        per-split vector is all-reduced (SUM / world_size) so non-master
+        ranks contribute instead of idling.  Each split performs a
+        single ``.item()`` on the reduced mean.
+        """
         self.model.eval()
         out = {}
-        for split, loader in [("train", self.train_loader), ("val", self.val_loader)]:
-            losses = torch.zeros(self.args.eval_iters)
+        for split, loader in [("train", self.train_eval_loader), ("val", self.val_loader)]:
+            losses = torch.zeros(self.args.eval_iters, device=self.device)
             for k, batch in enumerate(loader):
                 if k >= self.args.eval_iters:
                     break
-                batch = [t.to(self.device) for t in batch]
+                batch = [t.to(self.device, non_blocking=True) for t in batch]
                 with self.ctx:
                     _, loss, _ = self._forward(batch)
-                losses[k] = loss.item()
+                losses[k] = loss.detach()
+            if self.distributed:
+                dist.all_reduce(losses, op=dist.ReduceOp.SUM)
+                losses = losses / max(self.world_size, 1)
             out[split] = losses.mean().item()
         self.model.train()
         return out
@@ -460,50 +516,55 @@ class PretrainTrainer(BaseTrainer):
             # are fully completed and the data position is exactly
             # ``resume_offset``; a checkpoint saved at this point resumes
             # with zero batch repetition or loss (design §4.2.2).
-            if (
-                self.iter_num > 0
-                and self.iter_num % args.eval_interval == 0
-                and self.master_process
-            ):
+            # FR8b: every rank evaluates (estimate_loss all-reduces), so
+            # non-master ranks contribute instead of idling; best-val and
+            # early-stop tracking advance identically on all ranks, and
+            # only the side effects (print/log/save) stay master-only.
+            if self.iter_num > 0 and self.iter_num % args.eval_interval == 0:
                 losses = self.estimate_loss()
-                print(
-                    f"iter {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
-                )
-                self.log_scalars(
-                    {
-                        "val/loss": losses["val"],
-                        "train/avg_loss": losses["train"],
-                    },
-                    self.iter_num,
-                )
 
                 if losses["val"] < self.best_val_loss:
                     self.best_val_loss = losses["val"]
-                    self._save_checkpoint("best_ckpt.pt")
                     self.early_stop_counter = 0
+                    if self.master_process:
+                        self._save_checkpoint("best_ckpt.pt")
                 else:
                     self.early_stop_counter += 1
 
-                self._save_checkpoint("latest_ckpt.pt")
-                self._save_ema_checkpoint()
+                if self.master_process:
+                    print(
+                        f"iter {self.iter_num}: train loss {losses['train']:.4f}, "
+                        f"val loss {losses['val']:.4f}"
+                    )
+                    self.log_scalars(
+                        {
+                            "val/loss": losses["val"],
+                            "train/avg_loss": losses["train"],
+                        },
+                        self.iter_num,
+                    )
+                    self._save_checkpoint("latest_ckpt.pt")
+                    self._save_ema_checkpoint()
 
                 if (
                     args.early_stopping_patience > 0
                     and self.early_stop_counter >= args.early_stopping_patience
                 ):
-                    print(
-                        f"Early stopping triggered at iter {self.iter_num} "
-                        f"(val loss did not improve for {args.early_stopping_patience} evals)"
-                    )
-                    self.finalize_recorder(
-                        "completed",
-                        {
-                            "best_val_loss": self.best_val_loss,
-                            "final_val_loss": losses["val"],
-                            "steps": self.iter_num,
-                            "early_stopped": True,
-                        },
-                    )
+                    if self.master_process:
+                        print(
+                            f"Early stopping triggered at iter {self.iter_num} "
+                            f"(val loss did not improve for "
+                            f"{args.early_stopping_patience} evals)"
+                        )
+                        self.finalize_recorder(
+                            "completed",
+                            {
+                                "best_val_loss": self.best_val_loss,
+                                "final_val_loss": losses["val"],
+                                "steps": self.iter_num,
+                                "early_stopped": True,
+                            },
+                        )
                     return
 
             # Off-eval checkpoint cadence (--ckpt_interval, 0 = follow
@@ -529,7 +590,7 @@ class PretrainTrainer(BaseTrainer):
                 self.train_iter = iter(self.train_loader)
                 batch = next(self.train_iter)
 
-            batch = [t.to(self.device) for t in batch]
+            batch = [t.to(self.device, non_blocking=True) for t in batch]
             # Track the data position for exact resume (chunks consumed).
             self.resume_offset += batch[0].shape[0]
 
@@ -610,8 +671,10 @@ class PretrainTrainer(BaseTrainer):
 
             self.iter_num += 1
 
+        # Final eval: every rank participates (estimate_loss all-reduces);
+        # side effects stay master-only.
+        losses = self.estimate_loss()
         if self.master_process:
-            losses = self.estimate_loss()
             print(
                 f"final: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
             )
