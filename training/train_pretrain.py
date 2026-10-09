@@ -10,6 +10,7 @@ import os
 import time
 import argparse
 import warnings
+from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
@@ -255,6 +256,17 @@ class PretrainTrainer(BaseTrainer):
         shuffle_idx_path = (
             train_shuffle_idx if os.path.exists(train_shuffle_idx) else None
         )
+        # FR9a: DDP data parallelism — each rank consumes a mutually
+        # exclusive strided slice of the global shuffled train stream
+        # (rank r takes positions r, r+W, r+2W, ...).  Only the train
+        # split is sharded: val/train_eval stay unsharded so every rank
+        # evaluates the same data and estimate_loss's SUM/world_size
+        # all_reduce remains a correct mean.  resume_offset semantics
+        # become per-rank local (ranks run in lockstep via DDP, so all
+        # ranks' local offsets are equal and the master's checkpointed
+        # value restores every rank correctly).
+        shard_world_size = max(self.world_size, 1)
+        shard_rank = max(self.rank, 0)
         # The training loader keeps persistent_workers=False: epoch wrap
         # propagates the reset resume_offset via dataset.load_state_dict,
         # and persistent workers never re-pickle the dataset, so wrap
@@ -271,6 +283,8 @@ class PretrainTrainer(BaseTrainer):
             shuffle_buffer=args.shuffle_buffer,
             shuffle_idx_path=shuffle_idx_path,
             persistent_workers=False,
+            shard_rank=shard_rank,
+            shard_world_size=shard_world_size,
         )
         # Eval loaders batch 2x and keep workers alive across eval rounds.
         self.val_loader = get_dataloader(
@@ -405,9 +419,14 @@ class PretrainTrainer(BaseTrainer):
                     f"Checkpoint was saved with world_size={saved_world_size} but "
                     f"this run has world_size={max(self.world_size, 1)}; "
                     "resume_offset is a per-rank logical position, so the "
-                    "data stream may repeat or skip chunks.",
+                    "saved offset cannot be interpreted under a different "
+                    "shard layout. Restarting from this rank's shard head.",
                     RuntimeWarning,
                 )
+                # The saved offset is meaningless under a different shard
+                # layout — restart from the head of this rank's shard
+                # (design: WARN + reset, FR9a).
+                self.resume_offset = 0
             # Data loader needs to be rebuilt with the resumed offset.
             self._build_data()
             # Rebuilding the loaders consumes torch RNG (per-iterator base
@@ -609,10 +628,27 @@ class PretrainTrainer(BaseTrainer):
             if accum_steps > 1:
                 loss = loss / accum_steps
 
-            if self.scaler is not None and self.scaler.is_enabled():
-                self.scaler.scale(loss).backward()
-            else:
-                loss.backward()
+            # FR9a: skip the DDP gradient all_reduce on non-final
+            # micro-steps of an accumulation window — gradients are
+            # synced once, by the final micro-step's backward.
+            # (micro_step is the pre-increment count of consumed
+            # micro-steps in the current window.)
+            is_final_micro = (micro_step + 1) % accum_steps == 0
+            sync_ctx = (
+                self.model.no_sync()
+                if (
+                    self.distributed
+                    and accum_steps > 1
+                    and not is_final_micro
+                    and hasattr(self.model, "no_sync")
+                )
+                else nullcontext()
+            )
+            with sync_ctx:
+                if self.scaler is not None and self.scaler.is_enabled():
+                    self.scaler.scale(loss).backward()
+                else:
+                    loss.backward()
 
             micro_step += 1
             # Accumulate the window loss as a device tensor; the single

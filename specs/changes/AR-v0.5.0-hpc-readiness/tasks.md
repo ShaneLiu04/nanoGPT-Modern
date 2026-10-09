@@ -24,7 +24,7 @@
 | T008 | FR8a GQA enable_gqa=True（torch≥2.5 探测回退）+ GQA 探测移出首 forward（compile 图断裂修复）+ TF32 推广全部 5 训练器 | - | passing | 2026-10-09 完成；旧惰性探测在 torch≥2.5 上从未启用原生内核（探测不传 enable_gqa） |
 | T009 | FR8b 数据路径（non_blocking/persistent_workers/num_workers 环境分层）+ eval 瘦身（batch 放大/多卡 allreduce/去 .item() sync） | - | passing | 2026-10-09 完成；发现 persistent_workers 与 estimate_loss/epoch-wrap 的两个隐蔽冲突并安全绕开 |
 | T022 | FR8c EMA foreach 批量更新 + micro-step 去 all_reduce/.item() 同步 + 异步 checkpoint（staged+线程，保持原子性，失败回退同步） | T009 | passing | 2026-10-09 完成；异步 ckpt 原子性回退已独立验证（B10 串行排队 + E5 失败回退用例） |
-| T010 | FR9a DDP 数据 rank 分片（互斥切片 + resume_offset 分片语义）+ no_sync/static_graph/gradient_as_bucket_view | T009 | pending | 正确性级修复 |
+| T010 | FR9a DDP 数据 rank 分片（互斥切片 + resume_offset 分片语义）+ no_sync/static_graph/gradient_as_bucket_view | T009 | passing | 2026-10-09 完成；跨步切片零丢弃（优于 DistributedSampler padding/drop）；static_graph+no_sync 兼容性待 GPU 冒烟验证 |
 | T011 | FR9b FSDP 补齐：auto_wrap_policy/use_orig_params/compile 顺序/FSDP checkpoint 修复（死代码接线或 DCP）+ 分布式 round-trip 测试 | T008,T010 | pending | |
 | T012 | FR6 MoE 向量化重写（方案 B）：参数改单张量 `Parameter[E,H,C]`（gate/up/down 各一）+ load/save 翻译 hook（磁盘格式不变）、定容 padded bmm `[E,cap,C]` 零 Python 循环（cap 语义与现行 int 截断对齐，容量丢弃 token 输出 0）、compile 兼容；验收 loss atol=1e-5 + ≥2x 基准对比 | - | pending | kernel 级，TDD；旧 ckpt 双向兼容为设计锁定项（B1） |
 | T013 | FR5 KV decode 去 cat（方案 B）：`KVCacheManager` 新增 `layout="append"` 追加式预分配缓冲 + `get_cache()` 返回 `[:pos]` 视图直喂 SDPA（零拷贝）、int8 惰性反量化切片、滑窗 mask 向量化；`pos ≥ max_cache_len` 切 ring 驱逐语义回退路径（`evicted` 标记，B5）；flash wrapper 仅可选分支（包存在才启用）；验收输出逐位一致 + ≥1.5x | T005 | pending | kernel 级；append vs 旧 cat 路径逐 token 等价测试先行 |
@@ -148,6 +148,15 @@
 - **关键发现（Green 期 1 处缩进回归，测试当场捕获）**：早停块插入 flush 时 `return` 缩进错落到 eval 边界层级——train() 在**首次 eval 即返回**（既无 `final:` 也无早停打印），`test_train_flushes_before_return` 断言 iter 1≠2 立刻暴露；TDD 纪律的直接收益例证。修正后 flush 位于早停条件内、master 守卫外（全 rank drain，非 rank 为 no-op）
 - 测试：Red 11 failed / 6 passed（6 个 passed 为数值等价/回归前向锚点，Green 后必须持续通过）→ Green 17/17；全文件 54/54；全量回归 **444 passed / 2 skipped**（427 基线 + 17 新增，零回归；test_trainer_base 2 个「save 后立读」用例按新异步契约补 flush 后通过）
 - 备注：异步保真度设计——staged 深拷贝在 caller 线程完成（GPU 场景即 D2H 暂存，后续训练的原地变异不再影响快照），后台线程只做序列化+落盘；抢占场景最多丢「在途的那一笔」save（tmp 文件原子性保证目标路径永不出现半截 ckpt），train()/cleanup() 双点 flush 保证正常退出路径文件恒可读；既有测试适配仅 3 处且全部是「补 flush」方向（契约变更非弱化先例）；EMA 展平列表每次重建而非缓存，避免 ckpt 恢复替换 ema_shadow 后的陈旧引用
+
+### 2026-10-09 会话记录（T010）
+
+- 完成任务：T010 FR9a DDP 数据 rank 分片 + DDP 调优（标准任务，Red/Green 分离）
+- 修改文件：data/openwebtext.py（`MemmapDataset` 新增 `shard_rank=0, shard_world_size=1`：rank r 消费全局流的跨步位置 `r, r+W, r+2W, ...`——互斥且并集=全集零丢弃（优于 DistributedSampler 的 padding/drop_last），`resume_offset` 语义变为 rank 内局部序号；`_rank_positions()` 统一虚拟流，W=1 时退化为 `range(length)` 与历史行为逐位一致（B3）；worker 切分在虚拟流内二级进行；`get_openwebtext_dataset`/`get_dataloader`/`GlobalShuffledDataset` 全链穿透；use_packing+分片 → RuntimeWarning 告知 PackingDataset 不支持分片）；training/train_pretrain.py（`_build_data` 仅 train split 接分片参数（val/train_eval 不分片——各 rank 评估同一数据，estimate_loss 的 SUM/world_size allreduce 仍为正确均值；分片键 = `max(world_size,1)>1`；lockstep 下各 rank 局部 offset 相等，master ckpt 值可恢复所有 rank）；`_maybe_resume` world_size 不匹配分支补 `self.resume_offset = 0`（原仅 WARN 保留 offset——跨分片布局下旧 offset 无意义，对齐 design「WARN 并从该 rank 分片头部开始」）；train loop 非窗口末 micro-step 的 backward 包 `self.model.no_sync()`（守卫：distributed + accum>1 + 非末步 + hasattr，raw model 无 no_sync 时 nullcontext 零开销）；import nullcontext）；training/trainer_base.py（DDP 构造补 `static_graph=True, gradient_as_bucket_view=True`）；tests/test_ddp_shard.py（新增，14 用例，design §6.1 指定单进程模拟）
+- **关键设计取舍**：① 跨步切片而非 DistributedSampler 式均分——后者靠 padding/drop 保证等长会丢数据或重复数据，跨步切片天然互斥+全覆盖（12 chunks/W=5 → 3,3,2,2,2）；② val 不分片——分片 val 也能得到正确均值（真平均），但会改变「各 rank 看到同一验证集」的现有语义且 estimate_loss 的 eval limit 交互复杂，维持保守选择；③ 分片键取 world_size>1 而非 distributed 标志——WORLD_SIZE env 单独存在（rank=-1）时仍表达数据并行意图
+- **关键发现（Red 期）**：① `_maybe_resume` 在 `BaseTrainer.__init__` 模板方法内调用——构造后 monkeypatch 太晚，测试用 `monkeypatch.setenv("WORLD_SIZE", "2")` 在构造前注入（无 RANK → rank=-1/distributed=False，但 world_size=2 触发 mismatch 分支）；② 无 shuffle.idx 路径的 chunk 级 buffer shuffle 用全局 random——测试传 `shuffle_buffer=1`（尺寸 1 的 buffer shuffle 恒等）使跨步可见性断言确定性；③ Windows 下同进程两个 trainer 重建 tiny 数据会撞 memmap 文件锁（OSError 22）——测试 helper 改为复用已存在的确定性数据文件
+- 测试：Red 12 failed / 2 passed（2 个前向锚点：matching-offset 保留 + no_sync accum=1/非分布式不触发）→ Green 14/14 一次通过；全量回归 **458 passed / 2 skipped**（444 基线 + 14 新增，零回归）
+- 备注：static_graph=True 与 no_sync 的组合在 torch 2.5+ 已支持（旧版曾不兼容），单进程模拟无法覆盖真实 NCCL 路径，**T011 FSDP round-trip 或迁移 GPU 冒烟时须验证**；ckpt 的 world_size/rank 键自 T009 起已持久化，本任务补齐消费端校验语义；SFT 已有 DistributedSampler 先例（train_sft.py L166），与 pretrain 的手动分片并存——统一属 T018 接口收敛范畴
 
 ## 阶段门控记录
 

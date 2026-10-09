@@ -710,7 +710,16 @@ class BaseTrainer(ABC):
                 )
                 self.raw_model = model.module
             else:
-                model = DDP(model, device_ids=[self.local_rank])
+                # FR9a: static_graph (fixed model structure, enables DDP
+                # graph analysis) + gradient_as_bucket_view (gradients
+                # alias the communication buckets, saves a full-size
+                # gradient buffer).
+                model = DDP(
+                    model,
+                    device_ids=[self.local_rank],
+                    static_graph=True,
+                    gradient_as_bucket_view=True,
+                )
                 self.raw_model = model.module
         else:
             self.raw_model = model
