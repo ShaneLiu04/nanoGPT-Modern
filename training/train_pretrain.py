@@ -477,18 +477,6 @@ class PretrainTrainer(BaseTrainer):
         self.model.train()
         return out
 
-    def _get_model_state_dict(self):
-        """Return a state dict suitable for checkpointing (handles FSDP)."""
-        if self.args.fsdp and self.distributed:
-            from torch.distributed.fsdp import (
-                FullyShardedDataParallel as FSDP,
-                StateDictType,
-            )
-
-            FSDP.set_state_dict_type(self.model, StateDictType.FULL_STATE_DICT)
-            return self.model.state_dict()
-        return self.raw_model.state_dict()
-
     def _save_checkpoint(self, filename):
         ema_shadow = (
             self.raw_model.ema_shadow
