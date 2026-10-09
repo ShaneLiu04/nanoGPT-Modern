@@ -2607,12 +2607,24 @@ class ModernGPT(nn.Module):
 
     @torch.no_grad()
     def update_ema(self):
-        """Update EMA shadow weights after an optimizer step."""
+        """Update EMA shadow weights after an optimizer step.
+
+        Routes through ``torch._foreach_lerp_`` on flattened (shadow,
+        param) lists so a full-model update costs 1-3 fused foreach
+        kernels instead of 2 per-parameter kernels (200+ on a real
+        model).  Numerically identical to the previous loop
+        ``shadow.mul_(decay).add_(param, alpha=1-decay)``: lerp
+        interpolates toward ``param`` with weight ``w`` giving
+        ``shadow*(1-w) + param*w``, so ``w = 1 - decay``.
+        """
+        shadow_list = []
+        param_list = []
         for name, param in self.named_parameters():
             if param.requires_grad:
-                self.ema_shadow[name].mul_(self.ema_decay).add_(
-                    param.data, alpha=1.0 - self.ema_decay
-                )
+                shadow_list.append(self.ema_shadow[name])
+                param_list.append(param.data)
+        if shadow_list:
+            torch._foreach_lerp_(shadow_list, param_list, 1.0 - self.ema_decay)
 
     def apply_ema_weights(self):
         """Swap current weights with EMA shadow (for evaluation)."""
