@@ -198,14 +198,21 @@ class TestGQABroadcastIntegration:
         )
         return ModernGPT(cfg)
 
-    def test_auto_resolves_to_grouped_or_raw(self):
-        """With gqa_broadcast='auto', the first forward resolves the mode."""
+    def test_auto_resolves_at_construction(self):
+        """With gqa_broadcast='auto', the mode resolves in __init__ (FR8a).
+
+        Since T008 the resolution is static (torch version detection at
+        construction): 'native' on torch>=2.5 (SDPA enable_gqa), otherwise
+        the grouped broadcast.  No forward — and no runtime probe — is
+        involved anymore (torch.compile graph-break fix).
+        """
         model = self._make_model()
-        model.eval()
-        x = torch.randint(0, 100, (1, 8))
-        with torch.no_grad():
-            model(x)
-        assert model.transformer.h[0].attn._gqa_mode in ("raw", "grouped", "repeat")
+        assert model.transformer.h[0].attn._gqa_mode in (
+            "native",
+            "raw",
+            "grouped",
+            "repeat",
+        )
 
     def test_forced_grouped_forward(self):
         """gqa_broadcast='grouped' produces valid forward output."""

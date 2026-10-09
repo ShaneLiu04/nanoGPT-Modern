@@ -6,6 +6,7 @@ Supports KV Cache for efficient autoregressive generation.
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Any, Callable, List, Optional, Tuple, Union
 
 import torch
@@ -15,6 +16,7 @@ from torch.utils.checkpoint import checkpoint
 
 from . import flash_attention as _flash_attention
 from . import ring_attention as _ring_attention
+from .attention_utils import sdpa_supports_enable_gqa
 from .kv_cache_utils import build_sliding_window_mask
 
 
@@ -279,15 +281,28 @@ class CausalSelfAttention(nn.Module):
             self.rope = None
         # GQA broadcast strategy: determines how KV heads are expanded to match
         # Q heads without copying.  One of:
-        #   "auto"    — probe at runtime (default), resolves to raw/grouped/repeat
-        #   "raw"     — pass different head counts directly to SDPA (fastest, rare)
+        #   "auto"    — resolve at construction (default): "native" on
+        #               torch>=2.5 (SDPA enable_gqa), else "grouped"
+        #   "native"  — pass different head counts to SDPA with enable_gqa=True
+        #               (native flash GQA kernel; auto-resolved only)
+        #   "raw"     — pass different head counts directly to SDPA (legacy)
         #   "grouped" — grouped-broadcast reshape (no KV copy, works everywhere)
         #   "repeat"  — fall back to repeat_interleave (legacy / eager path)
+        # FR8a: the mode is resolved statically in __init__ (torch version
+        # detection).  The previous lazy first-forward probe both broke
+        # torch.compile graphs and never enabled the native kernel on
+        # torch>=2.5 (the probe itself did not pass enable_gqa).
         self.gqa_broadcast: str = getattr(config, "gqa_broadcast", "auto")
         if self.gqa_broadcast in ("raw", "grouped", "repeat"):
             self._gqa_mode: str = self.gqa_broadcast
+        elif self.gqa_broadcast == "auto":
+            self._gqa_mode = (
+                "native" if sdpa_supports_enable_gqa() else "grouped"
+            )
         else:
-            self._gqa_mode = "repeat"  # resolved lazily on first forward
+            # Config validation rejects unknown values; keep a safe default
+            # for defensively-constructed configs.
+            self._gqa_mode = "grouped"
 
         # Optional third-party flash-attention backend (separate from SDPA).
         self.use_flash_attn = getattr(config, "use_flash_attn", False)
@@ -517,37 +532,54 @@ class CausalSelfAttention(nn.Module):
                             )
                         attn_mask = additive_mask
 
-                # GQA: resolve broadcast strategy.
-                # ``_gqa_mode`` is one of "raw" / "grouped" / "repeat".
-                # - "raw": pass different head counts directly to SDPA (fastest,
-                #   works on some fused backends in newer PyTorch).
+                # GQA broadcast strategy — ``_gqa_mode`` is one of
+                # "native" / "raw" / "grouped" / "repeat".
+                # - "native": pass different head counts to SDPA with
+                #   enable_gqa=True (torch>=2.5 native GQA kernel; auto-
+                #   resolved at __init__ on modern torch).  A runtime
+                #   failure degrades permanently to "grouped" with a
+                #   one-time warning (FR8a E6).
+                # - "raw": pass different head counts directly (legacy).
                 # - "grouped": reshape Q to [B, n_kv, rep, T, D] and KV to
                 #   [B, n_kv, 1, S, D] so SDPA broadcasts (no KV copy,
                 #   works everywhere, same numerical result as repeat_interleave).
                 # - "repeat": fall back to repeat_interleave (legacy eager path).
-                # The mode is resolved lazily on first forward when the device
-                # and dtype are known, unless the user sets ``gqa_broadcast``
-                # in the config to force a specific strategy.
                 if self.use_gqa:
-                    if self._gqa_mode == "repeat" and self.gqa_broadcast == "auto":
-                        # Lazy probe: resolve once per instance.
-                        from .attention_utils import probe_gqa_sdpa_support
-
-                        raw_ok, grouped_ok = probe_gqa_sdpa_support(
-                            q_embed.device,
-                            q_embed.dtype,
-                            n_head=self.n_head,
-                            n_kv_head=self.n_kv_head,
-                            seq_len=min(T, 16),
-                            head_dim=self.head_dim,
-                        )
-                        if raw_ok:
-                            self._gqa_mode = "raw"
-                        elif grouped_ok:
+                    if self._gqa_mode == "native":
+                        try:
+                            y = F.scaled_dot_product_attention(
+                                q_embed,
+                                k_embed,
+                                v,
+                                attn_mask=attn_mask,
+                                is_causal=is_causal,
+                                dropout_p=self.attn_dropout.p
+                                if self.training
+                                else 0.0,
+                                scale=attn_scale,
+                                enable_gqa=True,
+                            )
+                        except Exception:
+                            warnings.warn(
+                                "enable_gqa SDPA path failed; falling back to "
+                                "grouped GQA broadcast for this module",
+                                stacklevel=1,
+                            )
                             self._gqa_mode = "grouped"
-                        # else stays "repeat"
-
-                    if self._gqa_mode == "raw":
+                            y = _gqa_grouped_sdpa(
+                                q_embed,
+                                k_embed,
+                                v,
+                                self.n_kv_head,
+                                self.n_rep,
+                                attn_mask=attn_mask,
+                                is_causal=is_causal,
+                                dropout_p=self.attn_dropout.p
+                                if self.training
+                                else 0.0,
+                                scale=attn_scale,
+                            )
+                    elif self._gqa_mode == "raw":
                         # Pass KV with fewer heads directly; SDPA handles it.
                         y = F.scaled_dot_product_attention(
                             q_embed,

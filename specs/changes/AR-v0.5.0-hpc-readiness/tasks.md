@@ -21,7 +21,7 @@
 | T005 | FR4a Paged KV 双 bug 修复（get_cache 逐层 / block table 逐层 append）+ n_layer=2 回归测试；generate 四处 max_cache_len → effective_block_size（NTK 解锁） | - | passing | 2026-10-08 完成；与 T006/T007 同会话合并交付 |
 | T006 | FR4b 投机解码分布修正（greedy p_d=point mass/完整 q 残差/温度统一）+ 分布等价性测试（draft==target KL→0）；temperature=0 → greedy 三处 | - | passing | 2026-10-08 完成；统计验收 TVD≈0.07 vs bug 0.82 |
 | T007 | FR4c profile_inference 假 per-token 计时修复（挂入真实 decode 回调） | - | passing | 2026-10-08 完成；含 generate.py benchmark 加固（CPU perf_counter/warmup≥3/p50-p99） |
-| T008 | FR8a GQA enable_gqa=True（torch≥2.5 探测回退）+ GQA 探测移出首 forward（compile 图断裂修复）+ TF32 推广全部 5 训练器 | - | pending | |
+| T008 | FR8a GQA enable_gqa=True（torch≥2.5 探测回退）+ GQA 探测移出首 forward（compile 图断裂修复）+ TF32 推广全部 5 训练器 | - | passing | 2026-10-09 完成；旧惰性探测在 torch≥2.5 上从未启用原生内核（探测不传 enable_gqa） |
 | T009 | FR8b 数据路径（non_blocking/persistent_workers/num_workers 环境分层）+ eval 瘦身（batch 放大/多卡 allreduce/去 .item() sync） | - | pending | |
 | T022 | FR8c EMA foreach 批量更新 + micro-step 去 all_reduce/.item() 同步 + 异步 checkpoint（staged+线程，保持原子性，失败回退同步） | T009 | pending | 异步 ckpt 需独立验证原子性回退 |
 | T010 | FR9a DDP 数据 rank 分片（互斥切片 + resume_offset 分片语义）+ no_sync/static_graph/gradient_as_bucket_view | T009 | pending | 正确性级修复 |
@@ -122,6 +122,14 @@
 - 远端不可保真项：5 blob 替换 + commit parent 指向 seed 链（author/date/message 逐字保留）；本地历史零改动，gitee 为内容镜像
 - 固化规则：**每个 AR 结束后运行 `python tools/gitee_mirror.py`**（幂等增量；BDWAF ~100KB POST 上限、SSH 22 封锁、NTLM 代理 `proxyhk.huawei.com:8080` 环境约束内置）
 - 增量机制（后续两轮迭代）：跳过判据用远端 refs 的 **rev-list 祖先集**（精确 sha 匹配会在 _sm* 清理后失效）；被 merge 掉的旁支（GitHub 链镜像 commits 非 main 祖先）用常驻 `_mirror_side` ref 锚定，避免每次重推
+
+### 2026-10-09 会话记录（T008）
+
+- 完成任务：T008 FR8a 训练配置级性能优化·其一（标准任务，Red/Green 分离）
+- 修改文件：model/attention_utils.py（新增 `sdpa_supports_enable_gqa()`：inspect 签名探测为主 + torch 版本解析回退，纯静态无设备副作用，可在构造期调用）；model/modern_gpt.py（`import warnings` + 顶部 import 探测函数；`CausalSelfAttention.__init__` auto 模式改**构造期静态解析**：torch≥2.5 → `"native"`、否则 `"grouped"`（删「repeat 待定 + 首 forward 惰性 probe」旧逻辑）；forward 删除 `probe_gqa_sdpa_support` 调用（该函数保留在 attention_utils），新增 `"native"` 分支：SDPA 携带 `enable_gqa=True`，运行期异常 → 一次性 UserWarning + 实例级永久降级 `"grouped"` 并以内联 grouped 完成本次 forward，不向调用方抛错（E6））；training/trainer_base.py（新增模块级 `enable_tf32()`：matmul + cudnn 双 flag，幂等，CPU-only 构建安全）；training/train_pretrain.py（删 train() 内两行内联 TF32，改 import 后模块级调用）；training/train_sft.py / train_grpo.py / train_dpo.py / iterative_grpo.py（各加模块级 `enable_tf32()` 调用）；tests/test_training_perf_flags.py（新增，22 用例）；tests/test_gqa_broadcast.py（契约同步 1 处：`test_auto_resolves_to_grouped_or_raw` → `test_auto_resolves_at_construction`，断言从「首 forward 后 ∈ raw/grouped/repeat」改为「构造后 ∈ native/raw/grouped/repeat」，对应 FR8a 设计变更）
+- **关键收获（旧惰性探测的双重缺陷）**：① 探测调用本身不传 `enable_gqa`——torch≥2.5 上 raw 探测必然失败（SDPA 对不同头数要求显式 enable_gqa），生产路径从未用上原生 GQA 内核，一直降级 grouped；② 首 forward 中跑真实 SDPA 探测既是 torch.compile 图断裂源，也在首次推理引入设备探测开销。新方案两级防线：构造期 inspect 签名静态判定（零设备副作用、compile 安全）+ 运行期 try/except 一次性降级（B8 版本回退/E6 运行异常均覆盖）
+- 测试：Red 20 failed / 2 passed（2 个 passed 为显式 grouped/repeat 回归守卫，docstring 注明预期）→ Green 22/22；全量回归 **412 passed / 2 skipped**（390 基线 + 22 新增，零回归）
+- 备注：E6 降级为实例级永久性（`_gqa_mode` 改 grouped 后不再重试 native）；FR8-AC3 grep 语义由源码断言测试固化（5 训练器源码含 `enable_tf32()`）；hydra 变体经主脚本 import 自动获益；TF32 模块级调用使「import 训练器即生效」，测试通过 sys.modules.pop 强制重导入验证因果
 
 ## 阶段门控记录
 
