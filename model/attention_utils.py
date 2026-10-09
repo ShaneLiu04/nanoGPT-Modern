@@ -104,6 +104,31 @@ _PROBE_LOCK = threading.Lock()
 _PROBE_CACHE: Dict[Tuple, Tuple[bool, bool]] = {}
 
 
+def sdpa_supports_enable_gqa() -> bool:
+    """True when the installed torch SDPA supports the ``enable_gqa`` kwarg.
+
+    ``enable_gqa`` was added in torch 2.5 and lets SDPA accept Q/K/V with
+    different head counts directly (native GQA kernel path, e.g. flash).
+    Detection is static (signature inspection with a version-parse
+    fallback) so it can run at module construction time without touching
+    the accelerator — a lazy first-forward probe would break torch.compile
+    graphs (FR8a).
+    """
+    try:
+        import inspect
+
+        params = inspect.signature(
+            torch.nn.functional.scaled_dot_product_attention
+        ).parameters
+        return "enable_gqa" in params
+    except Exception:
+        try:
+            major, minor = torch.__version__.split(".")[:2]
+            return (int(major), int(minor)) >= (2, 5)
+        except Exception:
+            return False
+
+
 def probe_gqa_sdpa_support(
     device: torch.device,
     dtype: torch.dtype = torch.float32,
