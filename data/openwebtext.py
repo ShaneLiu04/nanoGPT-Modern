@@ -18,6 +18,8 @@ def get_openwebtext_dataset(
     use_packing=False,
     shuffle_buffer=None,
     shuffle_idx_path=None,
+    shard_rank=0,
+    shard_world_size=1,
 ):
     bin_path = os.path.join(data_dir, f"{split}.bin")
     if not os.path.exists(bin_path):
@@ -26,6 +28,12 @@ def get_openwebtext_dataset(
             "Please run data preparation (prepare.py) to tokenize and shard the dataset."
         )
     if use_packing:
+        if shard_world_size > 1:
+            warnings.warn(
+                "Rank sharding is not implemented for PackingDataset; "
+                "all ranks will consume the same packed samples.",
+                RuntimeWarning,
+            )
         return PackingDataset(
             bin_path, block_size=block_size, resume_offset=resume_offset
         )
@@ -35,6 +43,8 @@ def get_openwebtext_dataset(
         resume_offset=resume_offset,
         shuffle_buffer=shuffle_buffer,
         shuffle_idx_path=shuffle_idx_path,
+        shard_rank=shard_rank,
+        shard_world_size=shard_world_size,
     )
 
 
@@ -98,6 +108,19 @@ def generate_shuffle_index(bin_path, seed=1337, block_size=None):
 
 
 class MemmapDataset(IterableDataset):
+    """Memory-mapped chunk dataset over a (optionally shuffled) global stream.
+
+    Rank sharding (FR9a): when ``shard_world_size > 1``, rank
+    ``shard_rank`` consumes the strided virtual stream at global
+    positions ``shard_rank, shard_rank + W, shard_rank + 2W, ...`` of
+    the global chunk order.  Ranks are mutually exclusive and their
+    union covers every chunk exactly once (no padding, no drops).
+    ``resume_offset`` counts consumed samples within the RANK'S OWN
+    stream (a local index, not a global position).  With
+    ``shard_world_size == 1`` (default) behavior is bit-identical to
+    the unsharded dataset.
+    """
+
     def __init__(
         self,
         bin_path,
@@ -105,12 +128,16 @@ class MemmapDataset(IterableDataset):
         resume_offset=0,
         shuffle_buffer=None,
         shuffle_idx_path=None,
+        shard_rank=0,
+        shard_world_size=1,
     ):
         super().__init__()
         self.block_size = block_size
         self.resume_offset = resume_offset
         self.shuffle_buffer = shuffle_buffer
         self.shuffle_idx_path = shuffle_idx_path
+        self.shard_world_size = max(1, int(shard_world_size))
+        self.shard_rank = min(max(0, int(shard_rank)), self.shard_world_size - 1)
         dtype = _detect_dtype_from_index(bin_path)
         self.data = np.memmap(bin_path, dtype=dtype, mode="r")
         self.length = len(self.data) // (block_size + 1)
@@ -127,6 +154,12 @@ class MemmapDataset(IterableDataset):
             else:
                 warnings.warn(f"Shuffle index not found: {shuffle_idx_path}")
 
+    def _rank_positions(self):
+        """Global chunk positions owned by this rank's virtual stream."""
+        if self.shard_world_size > 1:
+            return range(self.shard_rank, self.length, self.shard_world_size)
+        return range(self.length)
+
     def state_dict(self):
         """Return a serializable state for resumable training."""
         return {"resume_offset": self.resume_offset}
@@ -137,23 +170,29 @@ class MemmapDataset(IterableDataset):
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
+        # Rank's virtual stream over the global chunk order; with
+        # world_size == 1 this is the plain 0..length-1 range, so the
+        # slice math below degenerates to the historical behavior.
+        positions = self._rank_positions()
+        local_length = len(positions)
         if worker_info is None:
             start = self.resume_offset
-            end = self.length
+            end = local_length
         else:
-            per_worker = (self.length - self.resume_offset) // worker_info.num_workers
+            per_worker = (local_length - self.resume_offset) // worker_info.num_workers
             start = self.resume_offset + worker_info.id * per_worker
             end = (
                 start + per_worker
                 if worker_info.id < worker_info.num_workers - 1
-                else self.length
+                else local_length
             )
 
         if self._shuffle_idx is not None:
-            # Global shuffle: use pre-computed permutation for this worker slice.
-            indices = self._shuffle_idx[start:end].tolist()
+            # Global shuffle: apply the pre-computed permutation to this
+            # rank's slice of the virtual stream.
+            indices = [int(self._shuffle_idx[p]) for p in positions[start:end]]
         else:
-            indices = list(range(start, end))
+            indices = list(positions[start:end])
 
         # Apply chunk-level shuffle only when no global shuffle index is available.
         if self._shuffle_idx is None:
@@ -459,7 +498,14 @@ class GlobalShuffledDataset(IterableDataset):
     """
 
     def __init__(
-        self, bin_path, block_size=1024, resume_offset=0, shuffle_buffer=None, seed=1337
+        self,
+        bin_path,
+        block_size=1024,
+        resume_offset=0,
+        shuffle_buffer=None,
+        seed=1337,
+        shard_rank=0,
+        shard_world_size=1,
     ):
         super().__init__()
         self.bin_path = bin_path
@@ -476,6 +522,8 @@ class GlobalShuffledDataset(IterableDataset):
             resume_offset=resume_offset,
             shuffle_buffer=shuffle_buffer,
             shuffle_idx_path=idx_path,
+            shard_rank=shard_rank,
+            shard_world_size=shard_world_size,
         )
 
     def __iter__(self):
@@ -514,6 +562,8 @@ def get_dataloader(
     shuffle_idx_path=None,
     persistent_workers=None,
     pin_memory=True,
+    shard_rank=0,
+    shard_world_size=1,
 ):
     if num_workers is None:
         num_workers = default_num_workers()
@@ -527,6 +577,8 @@ def get_dataloader(
         use_packing=use_packing,
         shuffle_buffer=shuffle_buffer,
         shuffle_idx_path=shuffle_idx_path,
+        shard_rank=shard_rank,
+        shard_world_size=shard_world_size,
     )
     loader = DataLoader(
         dataset,
