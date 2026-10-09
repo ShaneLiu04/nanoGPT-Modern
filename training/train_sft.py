@@ -24,6 +24,7 @@ from data.arithmetic import (
 from model.attention_utils import set_attention_backend, print_attention_backend
 from training.trainer_base import (
     BaseTrainer,
+    enable_tf32,
     load_model_from_checkpoint,
     maybe_warn_dropout,
     make_worker_init_fn,
@@ -31,6 +32,9 @@ from training.trainer_base import (
 from utils.lr_scheduler import LRScheduler
 from utils.config import parse_args_with_config, to_dict
 import tiktoken
+
+# FR8a: TF32 fast path for A100/H100 (all trainers, previously pretrain-only).
+enable_tf32()
 
 
 def get_args():

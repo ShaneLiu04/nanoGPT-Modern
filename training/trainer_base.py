@@ -36,6 +36,18 @@ from utils.logging import Logger
 from utils.monitoring import GradientNormMonitor, LossSpikeDetector
 
 
+def enable_tf32() -> None:
+    """Enable TF32 for CUDA matmul and cuDNN (A100/H100 fast path).
+
+    Idempotent and safe on CPU-only builds — the backend flags are
+    accepted regardless of CUDA availability, so all trainer scripts
+    call this at module level (FR8-AC3: TF32 coverage across all
+    trainers, previously pretrain-only).
+    """
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
+
 def save_run_config(args, out_dir, filename="config.yaml"):
     """Save the merged CLI + YAML configuration to the output directory.
 

@@ -21,6 +21,7 @@ from model.modern_gpt import ModernGPT, ModernGPTConfig
 from data.openwebtext import get_dataloader
 from training.trainer_base import (
     BaseTrainer,
+    enable_tf32,
     load_model_from_checkpoint,
     get_rng_state,
     make_worker_init_fn,
@@ -28,6 +29,9 @@ from training.trainer_base import (
 from utils.lr_scheduler import LRScheduler
 from utils.config import parse_args_with_config
 from utils.checkpoint import set_rng_state
+
+# FR8a: TF32 fast path for A100/H100 (previously set inline in train()).
+enable_tf32()
 
 
 def get_args():
@@ -445,9 +449,6 @@ class PretrainTrainer(BaseTrainer):
         t0 = time.time()
         running_loss = 0.0
         running_count = 0
-
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
 
         while self.iter_num < args.max_iters:
             lr = self.scheduler(self.iter_num)

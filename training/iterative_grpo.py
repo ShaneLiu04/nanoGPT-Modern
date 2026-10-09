@@ -26,7 +26,11 @@ from data.arithmetic import (
 )
 from rewards.rule_reward import compute_reward_batch
 from training.train_grpo import GRPOTrainer
+from training.trainer_base import enable_tf32
 from utils.config import parse_args_with_config
+
+# FR8a: TF32 fast path for A100/H100 (all trainers, previously pretrain-only).
+enable_tf32()
 
 
 def get_args():

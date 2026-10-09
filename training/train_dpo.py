@@ -32,6 +32,7 @@ from torch.utils.data import DataLoader, TensorDataset, Dataset
 from model.attention_utils import print_attention_backend, set_attention_backend
 from training.trainer_base import (
     BaseTrainer,
+    enable_tf32,
     load_model_from_checkpoint,
     make_worker_init_fn,
     maybe_warn_dropout,
@@ -44,6 +45,9 @@ from utils.dpo_utils import (
     compute_sequence_logprob,
 )
 from utils.lr_scheduler import LRScheduler
+
+# FR8a: TF32 fast path for A100/H100 (all trainers, previously pretrain-only).
+enable_tf32()
 
 
 def get_args():
