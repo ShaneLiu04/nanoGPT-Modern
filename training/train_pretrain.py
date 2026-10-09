@@ -505,6 +505,12 @@ class PretrainTrainer(BaseTrainer):
         t0 = time.time()
         running_loss = 0.0
         running_count = 0
+        # Device-side loss accumulation across micro-steps (T022): no
+        # per-micro-step all_reduce / .item() sync.
+        loss_accum = None
+        # Token counter incremented per micro-batch (independent of the
+        # log-cadence reset counter, so accum windows count correctly).
+        running_tokens = 0
 
         while self.iter_num < args.max_iters:
             lr = self.scheduler(self.iter_num)
@@ -565,6 +571,9 @@ class PretrainTrainer(BaseTrainer):
                                 "early_stopped": True,
                             },
                         )
+                    # Drain pending async checkpoint writes before exiting.
+                    if self.ckpt_manager is not None:
+                        self.ckpt_manager.flush()
                     return
 
             # Off-eval checkpoint cadence (--ckpt_interval, 0 = follow
@@ -605,15 +614,25 @@ class PretrainTrainer(BaseTrainer):
             else:
                 loss.backward()
 
-            if self.distributed:
-                dist.all_reduce(loss.detach() * accum_steps, op=dist.ReduceOp.AVG)
-
             micro_step += 1
-            raw_loss = loss.item() * accum_steps if accum_steps > 1 else loss.item()
-            running_loss += raw_loss
-            running_count += 1
+            # Accumulate the window loss as a device tensor; the single
+            # all_reduce + .item() sync is deferred to the accumulation
+            # boundary below (was: per-micro-step sync).
+            loss_accum = (
+                loss.detach() if loss_accum is None else loss_accum + loss.detach()
+            )
+            running_tokens += args.batch_size * args.block_size
 
             if micro_step % accum_steps == 0:
+                # Exactly one all_reduce and one .item() per
+                # accumulation window (loss is pre-divided by
+                # accum_steps, so the window sum equals the window mean).
+                if self.distributed:
+                    dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
+                running_loss += loss_accum.item()
+                running_count += 1
+                loss_accum = None
+
                 if args.grad_clip > 0:
                     if self.scaler is not None and self.scaler.is_enabled():
                         self.scaler.unscale_(self.optimizer)
@@ -639,9 +658,7 @@ class PretrainTrainer(BaseTrainer):
                 dt = t1 - t0
                 t0 = t1
                 tokens_per_sec = (
-                    (args.batch_size * args.block_size * running_count)
-                    / dt
-                    / max(self.world_size, 1)
+                    running_tokens / dt / max(self.world_size, 1)
                 )
                 msg = (
                     f"iter {self.iter_num}: loss {lossf:.4f}, lr {lr:.2e}, "
@@ -668,6 +685,7 @@ class PretrainTrainer(BaseTrainer):
                 self.log_memory_stats(self.iter_num)
                 running_loss = 0.0
                 running_count = 0
+                running_tokens = 0
 
             self.iter_num += 1
 
@@ -691,6 +709,11 @@ class PretrainTrainer(BaseTrainer):
                     "steps": self.iter_num,
                 },
             )
+
+        # Drain pending async checkpoint writes so callers can load the
+        # files immediately after train() returns.
+        if self.ckpt_manager is not None:
+            self.ckpt_manager.flush()
 
 
 def main():

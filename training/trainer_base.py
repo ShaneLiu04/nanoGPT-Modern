@@ -12,6 +12,7 @@ Provides:
 
 import os
 import random
+import threading
 import warnings
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
@@ -25,7 +26,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 from utils.checkpoint import (
-    save_checkpoint,
+    build_checkpoint,
+    write_checkpoint,
+    stage_to_cpu,
     load_checkpoint,
     get_rng_state,
     set_rng_state,
@@ -238,6 +241,7 @@ class CheckpointManager:
         self.resume_offset = resume_offset
         self.keep_last_n = keep_last_n
         self._saved = []  # FIFO of prunable checkpoint filenames
+        self._writer_thread = None  # in-flight background write, if any
 
     def _is_protected(self, filename):
         """Best, final, and EMA checkpoints are never pruned."""
@@ -256,6 +260,7 @@ class CheckpointManager:
         resume_offset=None,
         ema_shadow=None,
         extra_state=None,
+        async_save=True,
     ):
         """Save a checkpoint with full training state.
 
@@ -265,7 +270,18 @@ class CheckpointManager:
         ``extra_state`` carries additional resume keys
         (``early_stop_counter`` / ``consumed_chunks`` / ``world_size`` /
         ``rank``) that are persisted when present and not None.
+
+        By default the payload is staged to CPU on the caller thread and
+        serialized by a background writer (tmp file + atomic rename), so
+        the training loop never blocks on disk I/O.  Saves are strictly
+        serial: a new save first waits for the previous background write
+        to finish.  Call :meth:`flush` (or let ``train()`` /
+        ``cleanup()`` do it) before reading the file.  Pass
+        ``async_save=False`` for a fully synchronous write.
         """
+        # Serialize with any in-flight background write before staging.
+        self.flush()
+
         model_src = self.model
         # If model is wrapped by DDP, unwrap for checkpointing.
         if isinstance(model_src, DDP):
@@ -295,14 +311,12 @@ class CheckpointManager:
                 if key in extra_state and extra_state[key] is not None:
                     extra_kwargs[key] = extra_state[key]
 
-        path = save_checkpoint(
+        checkpoint = build_checkpoint(
             model_src,
             self.optimizer,
             iter_num,
             best_metric,
             config_data,
-            self.out_dir,
-            filename,
             scaler=self.scaler,
             scheduler=self.scheduler,
             ema_shadow=ema_shadow if ema_shadow is not None else self.ema_shadow,
@@ -312,6 +326,24 @@ class CheckpointManager:
             ),
             **extra_kwargs,
         )
+        # Deep-copy the payload to CPU storage on the caller thread so
+        # the background writer never races in-place parameter/optimizer
+        # mutation from continued training (on CPU devices .cpu() alone
+        # would alias live state, hence the explicit copy).
+        checkpoint = stage_to_cpu(checkpoint)
+
+        if async_save:
+            self._writer_thread = threading.Thread(
+                target=self._write_payload,
+                args=(checkpoint, self.out_dir, filename),
+                daemon=True,
+                name="ckpt-writer",
+            )
+            self._writer_thread.start()
+        else:
+            self._write_payload(checkpoint, self.out_dir, filename)
+
+        path = os.path.join(self.out_dir, filename)
 
         if self.keep_last_n > 0 and not self._is_protected(filename):
             self._saved.append(filename)
@@ -325,6 +357,30 @@ class CheckpointManager:
                     pass
 
         return path
+
+    def _write_payload(self, checkpoint, out_dir, filename):
+        """Serialize a staged payload; WARN + sync retry on failure."""
+        try:
+            write_checkpoint(checkpoint, out_dir, filename)
+        except Exception:
+            warnings.warn(
+                f"async checkpoint write failed for {filename}; "
+                "retrying synchronously",
+                RuntimeWarning,
+            )
+            try:
+                write_checkpoint(checkpoint, out_dir, filename)
+            except Exception:
+                warnings.warn(
+                    f"synchronous checkpoint retry failed for {filename}",
+                    RuntimeWarning,
+                )
+
+    def flush(self):
+        """Block until any in-flight background write has finished."""
+        if self._writer_thread is not None:
+            self._writer_thread.join()
+            self._writer_thread = None
 
     def load(self, path, strict=True):
         """Load a checkpoint and return auxiliary state.
@@ -748,6 +804,10 @@ class BaseTrainer(ABC):
         raise NotImplementedError
 
     def cleanup(self):
+        # Drain any pending async checkpoint write first so files are
+        # on disk before the process tears down.
+        if self.ckpt_manager is not None and hasattr(self.ckpt_manager, "flush"):
+            self.ckpt_manager.flush()
         # A recorder still in "running" state at cleanup time means train()
         # ended without finalize() (interrupt or crash) — mark it as such.
         if self.recorder is not None and not self.recorder.finalized:

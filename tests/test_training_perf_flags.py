@@ -751,10 +751,512 @@ class TestPretrainEvalSlimming:
             assert math.isclose(
                 out["train"], base["train"], rel_tol=1e-5, abs_tol=1e-6
             )
-            assert math.isclose(out["val"], base["val"], rel_tol=1e-5, abs_tol=1e-6)
+            assert math.isclose(
+                out["val"], base["val"], rel_tol=1e-5, abs_tol=1e-6
+            )
             # Exactly one all_reduce per split (train, val).
             assert len(calls) == 2
             for op in calls:
                 assert op == torch.distributed.ReduceOp.SUM
         finally:
             trainer.cleanup()
+
+
+# ---------------------------------------------------------------------------
+#  T022 (AR-v0.5.0-hpc-readiness) module-level extras (appended section)
+# ---------------------------------------------------------------------------
+
+import copy
+import gc
+import re
+
+
+# ---------------------------------------------------------------------------
+#  T022 (FR8): EMA foreach update (ModernGPT.update_ema)
+# ---------------------------------------------------------------------------
+
+
+class TestEMAForeachUpdate:
+    """Tests for the foreach-based ``ModernGPT.update_ema`` (T022).
+
+    Contract (design.md L297): ``update_ema`` must route through
+    ``torch._foreach_lerp_`` on flattened lists of requires_grad
+    parameters (200+ per-parameter kernels -> 2-3 foreach kernels) while
+    staying numerically identical to the previous per-parameter loop
+    ``shadow.mul_(decay).add_(param.data, alpha=1-decay)``.  The
+    ``ema_shadow`` dict-of-tensors disk format (populated by
+    ``init_ema``) is unchanged.
+    """
+
+    @staticmethod
+    def _make_ema_model():
+        cfg = ModernGPTConfig(
+            n_layer=2,
+            n_head=4,
+            n_embd=32,
+            block_size=32,
+            vocab_size=100,
+            dropout=0.0,
+        )
+        torch.manual_seed(1234)
+        return ModernGPT(cfg)
+
+    @staticmethod
+    def _reference_update(model, decay):
+        """Old per-parameter EMA loop (the numerical ground truth)."""
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                if param.requires_grad:
+                    model.ema_shadow[name].mul_(decay).add_(
+                        param.data, alpha=1.0 - decay
+                    )
+
+    def test_update_ema_uses_foreach_lerp(self, monkeypatch):
+        """update_ema must invoke torch._foreach_lerp_ at least once.
+
+        The recorder delegates to the original so a correct foreach
+        implementation is unaffected; only the routing is asserted.
+        """
+        model = self._make_ema_model()
+        model.init_ema(decay=0.9)
+
+        calls = []
+        orig_foreach = torch._foreach_lerp_
+
+        def recording_foreach(*args, **kwargs):
+            calls.append(args)
+            return orig_foreach(*args, **kwargs)
+
+        monkeypatch.setattr(torch, "_foreach_lerp_", recording_foreach)
+        model.update_ema()
+        assert len(calls) >= 1
+
+    def test_update_ema_matches_reference(self):
+        """Foreach update must equal the per-parameter loop (atol=1e-6).
+
+        decay=0.9 maximises sensitivity to a decay/(1-decay) inversion in
+        the lerp weight, which a naive ``_foreach_lerp_(s, p, decay)``
+        implementation would introduce.
+        """
+        decay = 0.9
+        model_a = self._make_ema_model()
+        model_a.init_ema(decay=decay)
+
+        torch.manual_seed(42)
+        with torch.no_grad():
+            for param in model_a.parameters():
+                if param.requires_grad:
+                    param.data.add_(torch.randn_like(param.data) * 0.1)
+
+        model_b = copy.deepcopy(model_a)  # identical params + shadow
+        model_a.update_ema()
+        self._reference_update(model_b, decay)
+
+        assert set(model_a.ema_shadow) == set(model_b.ema_shadow)
+        for name in model_a.ema_shadow:
+            assert torch.allclose(
+                model_a.ema_shadow[name], model_b.ema_shadow[name], atol=1e-6
+            )
+
+    def test_update_ema_multiple_steps(self):
+        """Equivalence must hold across consecutive updates, not just one."""
+        decay = 0.9
+        model_a = self._make_ema_model()
+        model_a.init_ema(decay=decay)
+        model_b = copy.deepcopy(model_a)
+
+        for step in range(3):
+            torch.manual_seed(500 + step)
+            with torch.no_grad():
+                for (_, param_a), (_, param_b) in zip(
+                    model_a.named_parameters(), model_b.named_parameters()
+                ):
+                    if param_a.requires_grad:
+                        delta = torch.randn_like(param_a.data) * 0.1
+                        param_a.data.add_(delta)
+                        param_b.data.add_(delta)
+            model_a.update_ema()
+            self._reference_update(model_b, decay)
+            for name in model_a.ema_shadow:
+                assert torch.allclose(
+                    model_a.ema_shadow[name],
+                    model_b.ema_shadow[name],
+                    atol=1e-6,
+                )
+
+    def test_requires_grad_filter_regression(self):
+        """A param frozen BEFORE init_ema stays out of ema_shadow.
+
+        The flattened foreach lists must be built from the same
+        requires_grad filter as the old loop; update_ema must not raise
+        on the frozen parameter.
+        """
+        model = self._make_ema_model()
+        frozen_name, frozen_param = next(iter(model.named_parameters()))
+        frozen_param.requires_grad_(False)
+        model.init_ema(decay=0.9)
+        assert frozen_name not in model.ema_shadow
+
+        pre = {name: t.clone() for name, t in model.ema_shadow.items()}
+        torch.manual_seed(99)
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                if param.requires_grad:
+                    assert name in model.ema_shadow
+                    param.data.add_(torch.randn_like(param.data) * 0.5)
+
+        model.update_ema()  # must not raise despite the frozen param
+        for name, tensor in model.ema_shadow.items():
+            assert not torch.equal(tensor, pre[name])
+
+    def test_apply_restore_swap_regression(self):
+        """apply/restore EMA swap semantics are unchanged by the rewrite."""
+        model = self._make_ema_model()
+        model.init_ema(decay=0.9)
+        tracked = [n for n, p in model.named_parameters() if p.requires_grad]
+
+        torch.manual_seed(7)
+        with torch.no_grad():
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data.add_(torch.randn_like(param.data) * 0.3)
+        # Values at the moment apply_ema_weights is called ("pre-apply").
+        pre_apply = {
+            n: p.data.clone()
+            for n, p in model.named_parameters()
+            if p.requires_grad
+        }
+        pre_shadow = {n: t.clone() for n, t in model.ema_shadow.items()}
+
+        model.apply_ema_weights()
+        current = dict(model.named_parameters())
+        for name in tracked:
+            assert torch.equal(current[name].data, pre_shadow[name])
+
+        model.restore_ema_weights()
+        current = dict(model.named_parameters())
+        for name in tracked:
+            assert torch.equal(current[name].data, pre_apply[name])
+
+
+# ---------------------------------------------------------------------------
+#  T022 (FR8): micro-step desync in PretrainTrainer.train
+# ---------------------------------------------------------------------------
+
+
+class TestMicroStepDesync:
+    """Tests for the micro-step desync rewrite of ``PretrainTrainer.train``.
+
+    Contract (design.md L296): the train loss is accumulated as a tensor
+    across micro-steps; at each accumulation boundary exactly ONE
+    ``dist.all_reduce`` and ONE ``.item()`` happen (no per-micro-step
+    sync); log lines read the accumulated value; tokens are counted per
+    micro-step, not derived from the optimizer-step counter.
+
+    Note on iter semantics: in this codebase the ``while`` loop consumes
+    one batch per iteration, so ``iter_num`` counts MICRO-steps.  A run
+    with ``max_iters=8, accum=2`` therefore performs 8 micro-steps and
+    hits 4 accumulation windows - the configuration the spec describes
+    as "4 train windows".
+    """
+
+    @staticmethod
+    def _make_trainer(tmp_path, **overrides):
+        from training.train_pretrain import PretrainTrainer
+
+        data_dir = _write_tiny_data(tmp_path)
+        out_dir = str(Path(tmp_path) / "out")
+        run = dict(
+            max_iters=8,
+            gradient_accumulation_steps=2,
+            eval_interval=100,  # > max_iters: no mid-train eval
+            log_interval=100,
+            grad_clip=0,
+            use_ema=False,
+            batch_size=2,
+        )
+        run.update(overrides)
+        args = _make_args(data_dir, out_dir, **run)
+        return args, PretrainTrainer(args)
+
+    def test_no_per_microstep_item_in_train_source(self):
+        """Static: the per-micro-step ``raw_loss = loss.item()`` is gone."""
+        from training.train_pretrain import PretrainTrainer
+
+        src = inspect.getsource(PretrainTrainer.train)
+        assert "raw_loss = loss.item()" not in src
+
+    def test_single_sync_per_accumulation_window(self, tmp_path, monkeypatch):
+        """Pseudo-distributed run: one all_reduce per accumulation window.
+
+        With 8 micro-steps / accum=2 there are 4 windows, so the train
+        loop must issue exactly 4 all_reduce calls, plus exactly 2 from
+        the final ``estimate_loss`` (one per split) = 6 total.  The old
+        per-micro-step pattern produces 8 + 2 = 10.
+        """
+        args, trainer = self._make_trainer(tmp_path)
+        try:
+            calls = []
+
+            def fake_all_reduce(tensor, op=None):
+                calls.append(op)
+
+            monkeypatch.setattr(trainer, "distributed", True)
+            monkeypatch.setattr(trainer, "world_size", 1)
+            monkeypatch.setattr(torch.distributed, "all_reduce", fake_all_reduce)
+
+            trainer.train()
+            assert len(calls) == 6
+        finally:
+            trainer.cleanup()
+
+    def test_item_calls_reduced_to_optimizer_steps(self, tmp_path, monkeypatch):
+        """Tensor.item counting: one call per window + one per eval split.
+
+        Same run as the all_reduce test (4 windows, final eval): the new
+        path must perform exactly 4 train-loop ``.item()`` calls plus 2
+        from the final ``estimate_loss`` (one per split mean) = 6 total.
+        The old per-micro-step pattern produces 8 + 2 = 10.
+
+        The counter only counts ``.item()`` calls made directly from this
+        repo's training code (train_pretrain / trainer_base): the AdamW
+        optimizer's internal per-parameter ``_get_value`` item calls
+        (torch site-packages) are unavoidable on every optimizer.step()
+        and are deliberately excluded.
+        """
+        args, trainer = self._make_trainer(tmp_path)
+        try:
+            orig_item = torch.Tensor.item
+            counter = []
+
+            def counting_item(self):
+                caller = sys._getframe(1).f_code.co_filename
+                if "train" in os.path.basename(caller):
+                    counter.append(caller)
+                return orig_item(self)
+
+            monkeypatch.setattr(torch.Tensor, "item", counting_item)
+
+            calls = []
+
+            def fake_all_reduce(tensor, op=None):
+                calls.append(op)
+
+            monkeypatch.setattr(trainer, "distributed", True)
+            monkeypatch.setattr(trainer, "world_size", 1)
+            monkeypatch.setattr(torch.distributed, "all_reduce", fake_all_reduce)
+
+            trainer.train()
+            assert len(counter) == 6
+        finally:
+            trainer.cleanup()
+
+    def test_accum_window_train_loss_logged(self, tmp_path, capsys):
+        """Logged train loss stays finite/positive from the tensor path.
+
+        Behavioral regression guard for the rewrite: the "loss" value in
+        the periodic log line comes from the accumulated-tensor path and
+        the line carries the tok/s throughput.
+        """
+        args, trainer = self._make_trainer(tmp_path, max_iters=4, log_interval=2)
+        try:
+            trainer.train()
+            out = capsys.readouterr().out
+            logged = re.findall(r"iter (\d+): loss ([0-9]+(?:\.[0-9]+)?), .*tok/s", out)
+            assert logged, "expected at least one train log line with tok/s"
+            checked = 0
+            for iter_str, loss_str in logged:
+                if int(iter_str) == 0:
+                    # First log fires before any batch is consumed.
+                    continue
+                loss_val = float(loss_str)
+                assert math.isfinite(loss_val)
+                assert loss_val > 0
+                checked += 1
+            assert checked >= 1
+        finally:
+            trainer.cleanup()
+
+    def test_tok_per_sec_counts_microsteps(self):
+        """Static: tokens must not be derived from ``running_count``.
+
+        With accum>1 the token count must come from a per-micro-step
+        token counter; the old ``batch_size * block_size * running_count``
+        expression (tied to the logging/reset cadence) is banned.
+        """
+        from training.train_pretrain import PretrainTrainer
+
+        src = inspect.getsource(PretrainTrainer.train)
+        assert "* running_count" not in src
+
+
+# ---------------------------------------------------------------------------
+#  T022 (FR8): async checkpointing (CheckpointManager.save / flush)
+# ---------------------------------------------------------------------------
+
+
+class TestAsyncCheckpoint:
+    """Tests for the async ``CheckpointManager.save`` (T022).
+
+    Contract (design.md L291, L317): ``save(..., async_save: bool = True)``
+    stages CPU deep copies on the caller thread, writes via a background
+    thread (tmp file + ``os.replace``, atomicity kept), serialises
+    concurrent saves, and falls back to a synchronous retry with a WARN
+    on failure.  ``flush()`` blocks until in-flight writes finish;
+    ``train()`` and ``cleanup()`` must drain pending writes before
+    returning so callers can load files immediately afterwards.
+    """
+
+    @staticmethod
+    def _make_manager(tmp_path):
+        from training.trainer_base import CheckpointManager
+
+        torch.manual_seed(11)
+        cfg = ModernGPTConfig(
+            n_layer=1,
+            n_head=4,
+            n_embd=32,
+            block_size=32,
+            vocab_size=100,
+            dropout=0.0,
+        )
+        model = ModernGPT(cfg)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        out_dir = str(Path(tmp_path) / "ckpt")
+        os.makedirs(out_dir, exist_ok=True)
+        manager = CheckpointManager(
+            out_dir=out_dir,
+            model=model,
+            optimizer=optimizer,
+            config={"model_type": "modern"},
+        )
+        return manager, model
+
+    @staticmethod
+    def _load(path):
+        return torch.load(path, weights_only=False)
+
+    def test_async_save_round_trip(self, tmp_path):
+        """Default save is async: no TypeError, flush makes file loadable."""
+        manager, model = self._make_manager(tmp_path)
+        path = manager.save("latest_ckpt.pt", 5, 1.23)
+        manager.flush()
+        ckpt = self._load(path)
+        assert ckpt["iter_num"] == 5
+        for key in ("model", "optimizer", "best_val_loss"):
+            assert key in ckpt
+        assert list(Path(manager.out_dir).glob("*.tmp")) == []
+
+    def test_sync_save_immediately_loadable(self, tmp_path):
+        """async_save=False writes synchronously: loadable without flush."""
+        manager, model = self._make_manager(tmp_path)
+        path = manager.save("latest_ckpt.pt", 5, 1.23, async_save=False)
+        ckpt = self._load(path)
+        assert ckpt["iter_num"] == 5
+
+    def test_staged_snapshot_isolation(self, tmp_path):
+        """The staged snapshot is a deep copy, immune to later mutation.
+
+        On CPU training ``tensor.cpu()`` is a no-op (same storage), so
+        the staging step must actually clone the tensors.
+        """
+        manager, model = self._make_manager(tmp_path)
+        pre_state = {k: v.clone() for k, v in model.state_dict().items()}
+        path = manager.save("latest_ckpt.pt", 7, 1.0, async_save=True)
+        with torch.no_grad():
+            for param in model.parameters():
+                param.data.add_(1.0)
+        manager.flush()
+        saved = self._load(path)["model"]
+        for key, tensor in pre_state.items():
+            assert torch.equal(saved[key], tensor)
+
+    def test_serial_queue_two_saves(self, tmp_path):
+        """Two back-to-back saves serialise and both land with own state."""
+        manager, model = self._make_manager(tmp_path)
+        path_a = manager.save("a.pt", 1, 1.0)
+        path_b = manager.save("b.pt", 2, 1.0)
+        manager.flush()
+        assert self._load(path_a)["iter_num"] == 1
+        assert self._load(path_b)["iter_num"] == 2
+
+    def test_async_failure_falls_back_to_sync(self, tmp_path, monkeypatch):
+        """Background torch.save failure -> WARN + synchronous retry.
+
+        The flaky stub raises only on the first torch.save call and then
+        delegates to the original, so the fallback retry succeeds.  The
+        warnings.warn recorder delegates to the original as well; both
+        patches are looked up at call time, so they also apply inside
+        the background writer thread.
+        """
+        manager, model = self._make_manager(tmp_path)
+
+        orig_save = torch.save
+        failed = []
+
+        def flaky_save(*args, **kwargs):
+            if not failed:
+                failed.append(True)
+                raise RuntimeError("simulated background torch.save failure")
+            return orig_save(*args, **kwargs)
+
+        warned = []
+        orig_warn = warnings.warn
+
+        def recording_warn(*args, **kwargs):
+            warned.append(args)
+            return orig_warn(*args, **kwargs)
+
+        monkeypatch.setattr(torch, "save", flaky_save)
+        monkeypatch.setattr(warnings, "warn", recording_warn)
+
+        path = manager.save("latest_ckpt.pt", 3, 1.0, async_save=True)
+        manager.flush()
+
+        assert os.path.exists(path)
+        ckpt = self._load(path)
+        assert ckpt["iter_num"] == 3
+        assert len(warned) >= 1
+
+    @staticmethod
+    def _make_trainer(tmp_path, **overrides):
+        from training.train_pretrain import PretrainTrainer
+
+        data_dir = _write_tiny_data(tmp_path)
+        out_dir = str(Path(tmp_path) / "out")
+        run = dict(
+            max_iters=2,
+            eval_interval=1,
+            batch_size=2,
+            use_ema=False,
+        )
+        run.update(overrides)
+        args = _make_args(data_dir, out_dir, **run)
+        return args, PretrainTrainer(args)
+
+    def test_train_flushes_before_return(self, tmp_path):
+        """train() alone (no cleanup) leaves the checkpoint loadable.
+
+        Pins "callers can load files right after train()": once saves
+        are async by default, train() must flush pending writes before
+        returning.
+        """
+        args, trainer = self._make_trainer(tmp_path)
+        try:
+            trainer.train()  # NOTE: deliberately no cleanup() call
+            path = Path(args.out_dir) / "latest_ckpt.pt"
+            ckpt = torch.load(path, weights_only=False)
+            assert ckpt["iter_num"] == 2
+        finally:
+            # Release the memmap-backed dataset handles without going
+            # through trainer.cleanup(); the contract under test is that
+            # train() by itself leaves files readable.
+            del trainer
+            gc.collect()
+
+    def test_cleanup_flushes_pending(self):
+        """Static: BaseTrainer.cleanup drains pending async writes."""
+        from training.trainer_base import BaseTrainer
+
+        src = inspect.getsource(BaseTrainer.cleanup)
+        assert "flush" in src.lower()

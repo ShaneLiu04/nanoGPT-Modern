@@ -79,6 +79,9 @@ def test_checkpoint_manager_roundtrip(tmp_path):
         resume_offset=42,
         ema_shadow=ema_shadow,
     )
+    # Saves are async by default (T022): drain the background writer
+    # before reading the file back.
+    manager.flush()
     assert Path(path).exists()
 
     # Build a fresh model + optimizer and load.
@@ -118,6 +121,8 @@ def test_checkpoint_manager_keep_last_n(tmp_path):
 
     for i in range(5):
         manager.save(f"iter_{i}.pt", iter_num=i, best_metric=float(i))
+    # Drain the in-flight background write before inspecting the dir.
+    manager.flush()
 
     # Best-like name is protected, but iter_N are prunable.
     remaining = sorted(p.name for p in tmp_path.glob("iter_*.pt"))

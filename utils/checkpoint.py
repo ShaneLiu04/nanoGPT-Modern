@@ -17,6 +17,97 @@ def _state_dict(model_or_state):
     return model_or_state.state_dict()
 
 
+def stage_to_cpu(obj):
+    """Recursively deep-copy tensor trees into fresh CPU storage.
+
+    Used by async checkpointing to stage a snapshot on the caller
+    thread before handing it to a background writer.  Always copies
+    (``tensor.cpu()`` is a no-op on CPU tensors and would alias live
+    training state), so the staged snapshot is immune to in-place
+    mutation by the training loop while the write is in flight.
+    """
+    if isinstance(obj, torch.Tensor):
+        src = obj.detach()
+        out = torch.empty_like(src, device="cpu")
+        out.copy_(src, non_blocking=True)
+        return out
+    if isinstance(obj, dict):
+        return {key: stage_to_cpu(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [stage_to_cpu(value) for value in obj]
+    if isinstance(obj, tuple):
+        return tuple(stage_to_cpu(value) for value in obj)
+    return obj
+
+
+def build_checkpoint(
+    model,
+    optimizer,
+    iter_num,
+    best_val_loss,
+    config,
+    scaler=None,
+    scheduler=None,
+    ema_shadow=None,
+    rng_state=None,
+    resume_offset=0,
+    early_stop_counter=None,
+    consumed_chunks=None,
+    world_size=None,
+    rank=None,
+):
+    """Assemble the checkpoint payload dict (no I/O).
+
+    Split out of :func:`save_checkpoint` so async writers can build the
+    payload on the caller thread, stage it to CPU, and serialize it
+    later on a background thread.
+    """
+    config_data = config.to_dict() if hasattr(config, "to_dict") else config
+
+    checkpoint = {
+        "model": _state_dict(model),
+        "optimizer": optimizer.state_dict(),
+        "iter_num": iter_num,
+        "best_val_loss": best_val_loss,
+        "config": config_data,
+    }
+
+    if scaler is not None:
+        checkpoint["scaler"] = scaler.state_dict()
+    if scheduler is not None and hasattr(scheduler, "state_dict"):
+        checkpoint["scheduler"] = scheduler.state_dict()
+    if ema_shadow is not None:
+        checkpoint["ema_shadow"] = ema_shadow
+    if rng_state is not None:
+        checkpoint["rng_state"] = rng_state
+    if resume_offset:
+        checkpoint["resume_offset"] = resume_offset
+    if early_stop_counter is not None:
+        checkpoint["early_stop_counter"] = early_stop_counter
+    if consumed_chunks is not None:
+        checkpoint["consumed_chunks"] = consumed_chunks
+    if world_size is not None:
+        checkpoint["world_size"] = world_size
+    if rank is not None:
+        checkpoint["rank"] = rank
+
+    return checkpoint
+
+
+def write_checkpoint(checkpoint, out_dir, filename):
+    """Serialize a payload dict atomically (tmp file + ``os.replace``).
+
+    Returns the final path.  The temporary file ensures a partially
+    written checkpoint never appears at the target path.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, filename)
+    tmp_path = path + ".tmp"
+    torch.save(checkpoint, tmp_path)
+    os.replace(tmp_path, path)
+    return path
+
+
 def save_checkpoint(
     model,
     optimizer,
@@ -35,7 +126,7 @@ def save_checkpoint(
     world_size=None,
     rank=None,
 ):
-    """Save a training checkpoint.
+    """Save a training checkpoint (synchronous).
 
     Parameters
     ----------
@@ -70,43 +161,23 @@ def save_checkpoint(
     str
         Path to the saved checkpoint.
     """
-    os.makedirs(out_dir, exist_ok=True)
-    config_data = config.to_dict() if hasattr(config, "to_dict") else config
-
-    checkpoint = {
-        "model": _state_dict(model),
-        "optimizer": optimizer.state_dict(),
-        "iter_num": iter_num,
-        "best_val_loss": best_val_loss,
-        "config": config_data,
-    }
-
-    if scaler is not None:
-        checkpoint["scaler"] = scaler.state_dict()
-    if scheduler is not None and hasattr(scheduler, "state_dict"):
-        checkpoint["scheduler"] = scheduler.state_dict()
-    if ema_shadow is not None:
-        checkpoint["ema_shadow"] = ema_shadow
-    if rng_state is not None:
-        checkpoint["rng_state"] = rng_state
-    if resume_offset:
-        checkpoint["resume_offset"] = resume_offset
-    if early_stop_counter is not None:
-        checkpoint["early_stop_counter"] = early_stop_counter
-    if consumed_chunks is not None:
-        checkpoint["consumed_chunks"] = consumed_chunks
-    if world_size is not None:
-        checkpoint["world_size"] = world_size
-    if rank is not None:
-        checkpoint["rank"] = rank
-
-    path = os.path.join(out_dir, filename)
-    # Write to a temporary file and atomically rename to avoid corrupt
-    # checkpoints if the process is interrupted mid-write.
-    tmp_path = path + ".tmp"
-    torch.save(checkpoint, tmp_path)
-    os.replace(tmp_path, path)
-    return path
+    checkpoint = build_checkpoint(
+        model,
+        optimizer,
+        iter_num,
+        best_val_loss,
+        config,
+        scaler=scaler,
+        scheduler=scheduler,
+        ema_shadow=ema_shadow,
+        rng_state=rng_state,
+        resume_offset=resume_offset,
+        early_stop_counter=early_stop_counter,
+        consumed_chunks=consumed_chunks,
+        world_size=world_size,
+        rank=rank,
+    )
+    return write_checkpoint(checkpoint, out_dir, filename)
 
 
 def load_checkpoint(path, model, optimizer=None, device="cpu", strict=True):

@@ -153,8 +153,11 @@ def test_checkpoint_load_restores_rng(tmp_path, monkeypatch):
     trainer_a = PretrainTrainer(args_a)
     try:
         trainer_a.train()
-        # Save a checkpoint; rng_state is captured inside save.
+        # Save a checkpoint; rng_state is captured inside save.  Saves
+        # are async by default (T022), so drain the background writer
+        # before reading the file back.
         ckpt_path = trainer_a._save_checkpoint("rng_ckpt.pt")
+        trainer_a.ckpt_manager.flush()
         ckpt = _load_ckpt(ckpt_path)
         assert "rng_state" in ckpt
         saved_rng = ckpt["rng_state"]
