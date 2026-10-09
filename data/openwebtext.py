@@ -491,18 +491,34 @@ class GlobalShuffledDataset(IterableDataset):
         self._dataset.load_state_dict(state)
 
 
+def default_num_workers() -> int:
+    """Env-tiered default for DataLoader workers (FR8b).
+
+    Windows defaults to 0 (worker spawn overhead + the documented spawn
+    race in this repo); Linux defaults to 4.  Explicit ``--num_workers``
+    always wins over this default.
+    """
+    return 0 if os.name == "nt" else 4
+
+
 def get_dataloader(
     data_dir="data/openwebtext",
     split="train",
     batch_size=12,
     block_size=1024,
-    num_workers=4,
+    num_workers=None,
     resume_offset=0,
     worker_init_fn=None,
     use_packing=False,
     shuffle_buffer=None,
     shuffle_idx_path=None,
+    persistent_workers=None,
+    pin_memory=True,
 ):
+    if num_workers is None:
+        num_workers = default_num_workers()
+    if persistent_workers is None:
+        persistent_workers = num_workers > 0
     dataset = get_openwebtext_dataset(
         data_dir,
         split,
@@ -517,7 +533,8 @@ def get_dataloader(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
         worker_init_fn=worker_init_fn,
     )
     return loader
