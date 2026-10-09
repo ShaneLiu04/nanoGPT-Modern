@@ -23,8 +23,12 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 
-from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
-from model.modern_gpt import ModernGPT, ModernGPTConfig
+from model.baseline_gpt import (
+    BaselineGPT,
+    BaselineGPTConfig,
+    Block as BaselineBlock,
+)
+from model.modern_gpt import ModernGPT, ModernGPTConfig, Block as ModernBlock
 from utils.checkpoint import (
     build_checkpoint,
     write_checkpoint,
@@ -230,6 +234,8 @@ class CheckpointManager:
         ema_shadow=None,
         resume_offset=0,
         keep_last_n=0,
+        state_dict_fn=None,
+        load_state_fn=None,
     ):
         self.out_dir = out_dir
         self.model = model
@@ -242,6 +248,13 @@ class CheckpointManager:
         self.keep_last_n = keep_last_n
         self._saved = []  # FIFO of prunable checkpoint filenames
         self._writer_thread = None  # in-flight background write, if any
+        # FR9b: optional FSDP-aware hooks.  ``state_dict_fn`` returns the
+        # model payload to persist (full unsharded state dict under
+        # FSDP); ``load_state_fn(model, state_dict)`` applies a
+        # checkpoint payload (FSDP-aware load).  None = plain
+        # ``module.state_dict()`` / ``module.load_state_dict()``.
+        self.state_dict_fn = state_dict_fn
+        self.load_state_fn = load_state_fn
 
     def _is_protected(self, filename):
         """Best, final, and EMA checkpoints are never pruned."""
@@ -286,6 +299,10 @@ class CheckpointManager:
         # If model is wrapped by DDP, unwrap for checkpointing.
         if isinstance(model_src, DDP):
             model_src = model_src.module
+        # Unwrap torch.compile's OptimizedModule so model_type
+        # detection sees the real model class.
+        if hasattr(model_src, "_orig_mod"):
+            model_src = model_src._orig_mod
 
         # Inject model_type into the config dict so reloaders know which class to build.
         config_data = (
@@ -311,8 +328,15 @@ class CheckpointManager:
                 if key in extra_state and extra_state[key] is not None:
                     extra_kwargs[key] = extra_state[key]
 
+        # FR9b: when a state-dict hook is wired (FSDP-aware full state
+        # dict), persist its payload instead of the module's raw
+        # state_dict.
+        if self.state_dict_fn is not None:
+            model_payload = self.state_dict_fn()
+        else:
+            model_payload = model_src.state_dict()
         checkpoint = build_checkpoint(
-            model_src,
+            model_payload,
             self.optimizer,
             iter_num,
             best_metric,
@@ -393,6 +417,8 @@ class CheckpointManager:
         model_src = self.model
         if isinstance(model_src, DDP):
             model_src = model_src.module
+        if hasattr(model_src, "_orig_mod"):
+            model_src = model_src._orig_mod
 
         extra = load_checkpoint(
             path,
@@ -400,6 +426,7 @@ class CheckpointManager:
             self.optimizer,
             device=next(model_src.parameters()).device,
             strict=strict,
+            load_state_fn=self.load_state_fn,
         )
 
         if "scaler" in extra and self.scaler is not None:
@@ -668,16 +695,21 @@ class BaseTrainer(ABC):
         """Optionally compile and wrap model for distributed training.
 
         Returns the wrapped model and sets self.raw_model to the unwrapped one.
+        FSDP composition order (FR9b): FSDP wraps first, torch.compile
+        applies to the FSDP module afterwards (FSDP1 has no ``_orig_mod``
+        unwrapping, so compile-then-FSDP would break ``.module`` chain
+        semantics).
         """
-        if compile_model:
-            model = torch.compile(model)
-
+        self._fsdp_module = None
         if self.distributed:
             if getattr(self.args, "fsdp", False):
                 from torch.distributed.fsdp import (
                     FullyShardedDataParallel as FSDP,
                     ShardingStrategy,
                     MixedPrecision,
+                )
+                from torch.distributed.fsdp.wrap import (
+                    transformer_auto_wrap_policy,
                 )
 
                 shard_map = {
@@ -689,12 +721,22 @@ class BaseTrainer(ABC):
                     param_dtype=(
                         torch.bfloat16
                         if (
-                            torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+                            torch.cuda.is_available()
+                            and torch.cuda.is_bf16_supported()
                         )
                         else torch.float16
                     ),
                     reduce_dtype=torch.float32,
                     buffer_dtype=torch.float32,
+                )
+                # FR9b: per-layer sharding via the transformer auto-wrap
+                # policy (communication/compute overlap across Block
+                # units); use_orig_params=True preserves original
+                # parameter names/shapes and is the torch.compile
+                # compatibility knob.
+                auto_wrap_policy = partial(
+                    transformer_auto_wrap_policy,
+                    transformer_layer_cls={ModernBlock, BaselineBlock},
                 )
                 model = FSDP(
                     model,
@@ -707,9 +749,18 @@ class BaseTrainer(ABC):
                         if torch.cuda.is_available()
                         else None
                     ),
+                    auto_wrap_policy=auto_wrap_policy,
+                    use_orig_params=True,
                 )
+                self._fsdp_module = model
                 self.raw_model = model.module
+                if compile_model:
+                    # FR9b: official composition order — compile the
+                    # FSDP-wrapped module (outermost).
+                    model = torch.compile(model)
             else:
+                if compile_model:
+                    model = torch.compile(model)
                 # FR9a: static_graph (fixed model structure, enables DDP
                 # graph analysis) + gradient_as_bucket_view (gradients
                 # alias the communication buckets, saves a full-size
@@ -722,10 +773,66 @@ class BaseTrainer(ABC):
                 )
                 self.raw_model = model.module
         else:
+            if compile_model:
+                model = torch.compile(model)
             self.raw_model = model
 
         self.model = model
         return model
+
+    def _get_model_state_dict(self):
+        """Model state dict for checkpointing (FSDP-aware, FR9b).
+
+        Under FSDP this returns the full (unsharded) state dict
+        gathered with CPU offload, free of ``_fsdp_wrapped_module.``
+        prefixes.  Otherwise it returns the unwrapped module's plain
+        ``state_dict()`` (also stripping torch.compile's ``_orig_mod.``
+        wrapper).
+        """
+        if (
+            getattr(self.args, "fsdp", False)
+            and self.distributed
+            and getattr(self, "_fsdp_module", None) is not None
+        ):
+            from torch.distributed.fsdp import (
+                FullyShardedDataParallel as FSDP,
+                StateDictType,
+                FullStateDictConfig,
+            )
+
+            cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+            with FSDP.state_dict_type(
+                self._fsdp_module, StateDictType.FULL_STATE_DICT, cfg
+            ):
+                return self._fsdp_module.state_dict()
+        module = getattr(self, "raw_model", None)
+        if module is None:
+            module = self.model
+        if hasattr(module, "_orig_mod"):
+            module = module._orig_mod
+        return module.state_dict()
+
+    def _load_model_state_dict(self, model, state_dict):
+        """Apply a checkpoint model state dict (FSDP-aware, FR9b)."""
+        if (
+            getattr(self.args, "fsdp", False)
+            and self.distributed
+            and getattr(self, "_fsdp_module", None) is not None
+        ):
+            from torch.distributed.fsdp import (
+                FullyShardedDataParallel as FSDP,
+                StateDictType,
+            )
+
+            with FSDP.state_dict_type(
+                self._fsdp_module, StateDictType.FULL_STATE_DICT
+            ):
+                self._fsdp_module.load_state_dict(state_dict)
+            return
+        module = model
+        if hasattr(module, "_orig_mod"):
+            module = module._orig_mod
+        module.load_state_dict(state_dict)
 
     def configure_checkpointing(self, config, ema_shadow=None):
         """Create the CheckpointManager after optimizer/scheduler are built."""
@@ -739,6 +846,8 @@ class BaseTrainer(ABC):
             ema_shadow=ema_shadow,
             resume_offset=0,
             keep_last_n=getattr(self.args, "keep_last_n", 0),
+            state_dict_fn=self._get_model_state_dict,
+            load_state_fn=self._load_model_state_dict,
         )
 
     # Eval tags dual-written to the ExperimentRecorder as eval events

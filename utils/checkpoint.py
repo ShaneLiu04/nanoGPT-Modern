@@ -180,17 +180,21 @@ def save_checkpoint(
     return write_checkpoint(checkpoint, out_dir, filename)
 
 
-def load_checkpoint(path, model, optimizer=None, device="cpu", strict=True):
+def load_checkpoint(path, model, optimizer=None, device="cpu", strict=True, load_state_fn=None):
     """Load a checkpoint and return auxiliary training state.
 
     Parameters
     ----------
-    path : str
     model : torch.nn.Module
     optimizer : torch.optim.Optimizer, optional
     device : str
     strict : bool
-        Passed to ``model.load_state_dict``.
+        Passed to ``model.load_state_dict`` (ignored when
+        ``load_state_fn`` is given).
+    load_state_fn : callable, optional
+        ``load_state_fn(model, state_dict)`` applied instead of the
+        default ``model.load_state_dict`` when provided (FSDP-aware
+        loading, FR9b).
 
     Returns
     -------
@@ -202,7 +206,10 @@ def load_checkpoint(path, model, optimizer=None, device="cpu", strict=True):
     """
     checkpoint = torch.load(path, map_location=device, weights_only=False)
 
-    model.load_state_dict(checkpoint["model"], strict=strict)
+    if load_state_fn is not None:
+        load_state_fn(model, checkpoint["model"])
+    else:
+        model.load_state_dict(checkpoint["model"], strict=strict)
 
     if optimizer is not None and "optimizer" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer"])
