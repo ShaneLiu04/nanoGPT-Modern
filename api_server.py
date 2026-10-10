@@ -24,7 +24,10 @@ Then test with curl:
 from __future__ import annotations
 
 import argparse
+import asyncio
+import threading
 import time
+import uuid
 import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -34,6 +37,11 @@ from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 import uvicorn
 
+from inference.continuous_batching import (
+    ContinuousBatchingServer,
+    GenerateResult,
+    Request,
+)
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 
@@ -256,6 +264,115 @@ class ModelState:
 
 
 # ---------------------------------------------------------------------------
+# Continuous batching adapter (FR7b)
+# ---------------------------------------------------------------------------
+class ContinuousBatchingState:
+    """Adapter between the async HTTP layer and the iteration-level
+    scheduler delivered by FR7a.
+
+    A single dispatcher thread pumps ``scheduler.run()`` whenever the
+    queue is non-empty and files finished results by request_id; each
+    ``generate`` call submits its request and blocks (the endpoint runs
+    it inside ``asyncio.to_thread``) until its own result appears.  The
+    thread-safe ``RequestQueue`` makes concurrent submits safe; a request
+    enqueued while a run is in flight is picked up at that run's next
+    iteration boundary, and one enqueued between runs starts the next
+    pump cycle.
+    """
+
+    def __init__(
+        self,
+        model_state: "ModelState",
+        device: str = "cpu",
+        batch_size: int = 4,
+        poll_interval: float = 0.005,
+        request_timeout: float = 300.0,
+    ) -> None:
+        self._ms = model_state
+        self._server = ContinuousBatchingServer(
+            model_state.model, device=device, batch_size=batch_size
+        )
+        self._results: Dict[str, GenerateResult] = {}
+        self._lock = threading.Lock()
+        self._stop = False
+        self._poll = poll_interval
+        self._timeout = request_timeout
+        self._thread = threading.Thread(
+            target=self._pump, daemon=True, name="cb-dispatcher"
+        )
+        self._thread.start()
+
+    def _pump(self) -> None:
+        while not self._stop:
+            if self._server.queue.is_empty():
+                time.sleep(self._poll)
+                continue
+            try:
+                results = self._server.scheduler.run()
+            except Exception as exc:  # pragma: no cover - defensive
+                warnings.warn(f"continuous batching run failed: {exc}")
+                time.sleep(self._poll)
+                continue
+            if results:
+                with self._lock:
+                    for r in results:
+                        self._results[r.request_id] = r
+
+    def stop(self) -> None:
+        """Signal the dispatcher thread to exit (does not join)."""
+        self._stop = True
+
+    def generate(
+        self,
+        prompt_text: str,
+        max_tokens: int,
+        temperature: float,
+        top_k: Optional[int],
+        top_p: Optional[float],
+        repetition_penalty: Optional[float],
+    ) -> Tuple[str, int, int, str]:
+        """Submit one request through the scheduler and block until it
+        finishes.
+
+        Returns ``(text, prompt_tokens, completion_tokens,
+        finish_reason)`` where ``finish_reason`` is OpenAI-style
+        (``"stop"`` for an EOS hit, ``"length"`` for max_tokens).
+        """
+        prompt_ids = self._ms.encode(prompt_text)
+        request_id = f"req-{uuid.uuid4().hex}"
+        self._server.submit(
+            Request(
+                prompt_ids=prompt_ids,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                eos_token_id=None,
+                request_id=request_id,
+            )
+        )
+        result: Optional[GenerateResult] = None
+        deadline = time.monotonic() + self._timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                if request_id in self._results:
+                    result = self._results.pop(request_id)
+                    break
+            time.sleep(self._poll)
+        if result is None:
+            raise TimeoutError(
+                f"continuous batching request {request_id!r} did not "
+                f"finish within {self._timeout}s"
+            )
+        prompt_len = prompt_ids.shape[1]
+        completion = result.token_ids[prompt_len:]
+        text = self._ms.decode(torch.tensor([completion], dtype=torch.long))
+        finish_reason = "stop" if result.finish_reason == "eos" else "length"
+        return text, prompt_len, len(completion), finish_reason
+
+
+# ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
 app = FastAPI(
@@ -265,6 +382,9 @@ app = FastAPI(
 )
 
 model_state: Optional[ModelState] = None
+# When set (``--continuous_batching``), the generation endpoints dispatch
+# through this adapter instead of ``model_state.generate`` directly.
+cb_state: Optional[ContinuousBatchingState] = None
 
 
 @app.on_event("startup")
@@ -308,14 +428,29 @@ async def completions(body: CompletionRequest) -> CompletionResponse:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Model not loaded"
         )
 
-    text, prompt_tokens, completion_tokens = model_state.generate(
-        prompt_text=body.prompt,
-        max_tokens=body.max_tokens,
-        temperature=body.temperature,
-        top_k=body.top_k,
-        top_p=body.top_p,
-        repetition_penalty=body.repetition_penalty,
-    )
+    if cb_state is not None:
+        text, prompt_tokens, completion_tokens, finish_reason = (
+            await asyncio.to_thread(
+                cb_state.generate,
+                prompt_text=body.prompt,
+                max_tokens=body.max_tokens,
+                temperature=body.temperature,
+                top_k=body.top_k,
+                top_p=body.top_p,
+                repetition_penalty=body.repetition_penalty,
+            )
+        )
+    else:
+        text, prompt_tokens, completion_tokens = await asyncio.to_thread(
+            model_state.generate,
+            prompt_text=body.prompt,
+            max_tokens=body.max_tokens,
+            temperature=body.temperature,
+            top_k=body.top_k,
+            top_p=body.top_p,
+            repetition_penalty=body.repetition_penalty,
+        )
+        finish_reason = "stop"
 
     created = int(time.time())
     return CompletionResponse(
@@ -326,7 +461,7 @@ async def completions(body: CompletionRequest) -> CompletionResponse:
             Choice(
                 index=0,
                 text=text,
-                finish_reason="stop",
+                finish_reason=finish_reason,
             )
         ],
         usage=Usage(
@@ -351,14 +486,29 @@ async def chat_completions(body: ChatCompletionRequest) -> ChatCompletionRespons
         prompt_parts.append(f"{msg.role}: {msg.content}")
     prompt_text = "\n".join(prompt_parts) + "\nassistant:"
 
-    text, prompt_tokens, completion_tokens = model_state.generate(
-        prompt_text=prompt_text,
-        max_tokens=body.max_tokens,
-        temperature=body.temperature,
-        top_k=body.top_k,
-        top_p=body.top_p,
-        repetition_penalty=body.repetition_penalty,
-    )
+    if cb_state is not None:
+        text, prompt_tokens, completion_tokens, finish_reason = (
+            await asyncio.to_thread(
+                cb_state.generate,
+                prompt_text=prompt_text,
+                max_tokens=body.max_tokens,
+                temperature=body.temperature,
+                top_k=body.top_k,
+                top_p=body.top_p,
+                repetition_penalty=body.repetition_penalty,
+            )
+        )
+    else:
+        text, prompt_tokens, completion_tokens = await asyncio.to_thread(
+            model_state.generate,
+            prompt_text=prompt_text,
+            max_tokens=body.max_tokens,
+            temperature=body.temperature,
+            top_k=body.top_k,
+            top_p=body.top_p,
+            repetition_penalty=body.repetition_penalty,
+        )
+        finish_reason = "stop"
 
     created = int(time.time())
     return ChatCompletionResponse(
@@ -369,7 +519,7 @@ async def chat_completions(body: ChatCompletionRequest) -> ChatCompletionRespons
             Choice(
                 index=0,
                 message=Message(role="assistant", content=text),
-                finish_reason="stop",
+                finish_reason=finish_reason,
             )
         ],
         usage=Usage(
@@ -399,18 +549,37 @@ def get_args() -> argparse.Namespace:
     parser.add_argument(
         "--compile", action="store_true", help="torch.compile the model"
     )
+    parser.add_argument(
+        "--continuous_batching",
+        action="store_true",
+        help=(
+            "enable the iteration-level continuous batching scheduler: "
+            "requests are queued and dynamically packed into batches "
+            "(slot recycling at iteration boundaries)"
+        ),
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=4,
+        help="max concurrent sequences when --continuous_batching is set",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = get_args()
-    global model_state
+    global model_state, cb_state
     model_state = ModelState(
         checkpoint=args.checkpoint,
         model_type=args.model,
         device=args.device,
         compile_model=args.compile,
     )
+    if args.continuous_batching:
+        cb_state = ContinuousBatchingState(
+            model_state, device=args.device, batch_size=args.batch_size
+        )
     uvicorn.run(app, host=args.host, port=args.port)
 
 
