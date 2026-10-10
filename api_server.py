@@ -29,7 +29,7 @@ import threading
 import time
 import uuid
 import warnings
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -42,8 +42,7 @@ from inference.continuous_batching import (
     GenerateResult,
     Request,
 )
-from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
-from model.modern_gpt import ModernGPT, ModernGPTConfig
+from training.trainer_base import load_model_from_checkpoint
 
 
 # ---------------------------------------------------------------------------
@@ -150,26 +149,10 @@ class ModelState:
     def _load(
         self, ckpt_path: str, model_type: str, device: str
     ) -> Tuple[nn.Module, Any]:
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-        raw_config = ckpt.get("config", {})
-        config: Union[BaselineGPTConfig, ModernGPTConfig]
-        model: Union[BaselineGPT, ModernGPT]
-        if isinstance(raw_config, dict):
-            if model_type == "baseline":
-                config = BaselineGPTConfig.from_dict(raw_config)
-                model = BaselineGPT(config)
-            else:
-                config = ModernGPTConfig.from_dict(raw_config)
-                model = ModernGPT(config)
-        else:
-            config = raw_config
-            if model_type == "baseline":
-                model = BaselineGPT(config)
-            else:
-                model = ModernGPT(config)  # type: ignore[arg-type]
-        model.load_state_dict(ckpt["model"])
-        model.to(device)
-        model.eval()
+        model, ckpt = load_model_from_checkpoint(
+            ckpt_path, device=device, model_type=model_type, eval_mode=True
+        )
+        config = model.config
         return model, config
 
     @property
