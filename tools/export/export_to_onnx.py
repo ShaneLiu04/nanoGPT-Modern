@@ -34,8 +34,7 @@ _sys.path.insert(
     ),
 )
 
-from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
-from model.modern_gpt import ModernGPT, ModernGPTConfig
+from training.trainer_base import load_model_from_checkpoint
 
 
 def get_args() -> argparse.Namespace:
@@ -79,33 +78,6 @@ def get_args() -> argparse.Namespace:
         help="Device to load the model on",
     )
     return parser.parse_args()
-
-
-def _load_model(ckpt_path: str, model_type: str, device: str) -> nn.Module:
-    """Load a checkpoint and return the model on ``device``."""
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    raw_config = ckpt.get("config", {})
-
-    config: Union[BaselineGPTConfig, ModernGPTConfig]
-    model: Union[BaselineGPT, ModernGPT]
-    if isinstance(raw_config, dict):
-        if model_type == "baseline":
-            config = BaselineGPTConfig.from_dict(raw_config)
-            model = BaselineGPT(config)
-        else:
-            config = ModernGPTConfig.from_dict(raw_config)
-            model = ModernGPT(config)
-    else:
-        config = raw_config
-        if model_type == "baseline":
-            model = BaselineGPT(config)
-        else:
-            model = ModernGPT(config)  # type: ignore[arg-type]
-
-    model.load_state_dict(ckpt["model"])
-    model.to(device)
-    model.eval()
-    return model
 
 
 class _OnnxWrapper(nn.Module):
@@ -334,7 +306,9 @@ def validate_onnx(
 
 def main() -> None:
     args = get_args()
-    model = _load_model(args.checkpoint, args.model, args.device)
+    model, _ = load_model_from_checkpoint(
+        args.checkpoint, device=args.device, model_type=args.model, eval_mode=True
+    )
 
     if args.out_path is None:
         base = os.path.splitext(args.checkpoint)[0]

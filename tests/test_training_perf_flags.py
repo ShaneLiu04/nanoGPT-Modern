@@ -33,6 +33,7 @@ import pytest
 import torch
 
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +59,7 @@ def _sdpa_accepts_enable_gqa():
 
 def _make_gqa_model(gqa_broadcast="auto"):
     """Build a tiny GQA ModernGPT (n_kv_head=2, n_head=4) for testing."""
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=4,
         n_embd=64,
@@ -790,7 +791,7 @@ class TestEMAForeachUpdate:
 
     @staticmethod
     def _make_ema_model():
-        cfg = ModernGPTConfig(
+        cfg = tiny_modern_config(
             n_layer=2,
             n_head=4,
             n_embd=32,
@@ -1112,7 +1113,7 @@ class TestAsyncCheckpoint:
         from training.trainer_base import CheckpointManager
 
         torch.manual_seed(11)
-        cfg = ModernGPTConfig(
+        cfg = tiny_modern_config(
             n_layer=1,
             n_head=4,
             n_embd=32,

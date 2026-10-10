@@ -3,8 +3,6 @@
 import argparse
 import os
 
-import torch
-
 import os as _os
 import sys as _sys
 
@@ -18,7 +16,7 @@ _sys.path.insert(
 )
 
 from model.hf_model import NanoGPTModernConfig, NanoGPTModernForCausalLM
-from model.modern_gpt import ModernGPTConfig
+from training.trainer_base import load_model_from_checkpoint
 
 
 def get_args():
@@ -42,16 +40,13 @@ def main():
     args = get_args()
     os.makedirs(args.out_dir, exist_ok=True)
 
-    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    raw_config = ckpt.get("config", {})
-    if isinstance(raw_config, dict):
-        nano_config = ModernGPTConfig.from_dict(raw_config)
-    else:
-        nano_config = raw_config
+    model, _ckpt = load_model_from_checkpoint(
+        args.checkpoint, device="cpu", model_type="modern", eval_mode=True
+    )
 
-    hf_config = NanoGPTModernConfig.from_nanogpt_config(nano_config)
+    hf_config = NanoGPTModernConfig.from_nanogpt_config(model.config)
     wrapper = NanoGPTModernForCausalLM(hf_config)
-    wrapper.model.load_state_dict(ckpt["model"])
+    wrapper.model.load_state_dict(model.state_dict())
     wrapper.save_pretrained(args.out_dir, safe_serialization=True)
     print(f"Exported HF checkpoint to {args.out_dir}")
 

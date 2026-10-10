@@ -26,7 +26,7 @@ _sys.path.insert(
 )
 
 from model.gguf_utils import GGMLQuantizationType, GGUFWriter
-from model.modern_gpt import ModernGPT, ModernGPTConfig
+from training.trainer_base import load_model_from_checkpoint
 
 _QUANT_MAP = {
     "f32": GGMLQuantizationType.F32,
@@ -81,16 +81,10 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    raw_config = ckpt.get("config", {})
-    if isinstance(raw_config, dict):
-        config = ModernGPTConfig.from_dict(raw_config)
-    else:
-        config = raw_config
-
-    model = ModernGPT(config)
-    model.load_state_dict(ckpt["model"])
-    model.eval()
+    model, _ckpt = load_model_from_checkpoint(
+        args.checkpoint, device="cpu", model_type="modern", eval_mode=True
+    )
+    config = model.config
 
     quant_type = _QUANT_MAP[args.quant]
     architecture = "nanogpt-modern"

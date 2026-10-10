@@ -143,7 +143,9 @@ def infer_device(device_arg, local_rank):
     return device_arg
 
 
-def load_model_from_checkpoint(path, device="cpu", model_type="auto", strict=True):
+def load_model_from_checkpoint(
+    path, device="cpu", model_type="auto", strict=True, eval_mode=False
+):
     """Load a BaselineGPT or ModernGPT checkpoint and return (model, ckpt_extra).
 
     Parameters
@@ -156,6 +158,9 @@ def load_model_from_checkpoint(path, device="cpu", model_type="auto", strict=Tru
         If "auto", infer from saved config.
     strict : bool
         Passed to load_state_dict.
+    eval_mode : bool
+        If True, call ``model.eval()`` after loading (inference/export
+        semantics); the default False keeps training-resume semantics.
 
     Returns
     -------
@@ -193,6 +198,8 @@ def load_model_from_checkpoint(path, device="cpu", model_type="auto", strict=Tru
 
     model.load_state_dict(checkpoint["model"], strict=strict)
     model = model.to(device)
+    if eval_mode:
+        model.eval()
 
     return model, checkpoint
 
