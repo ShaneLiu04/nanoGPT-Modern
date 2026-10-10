@@ -28,7 +28,7 @@
 | T011 | FR9b FSDP 补齐：auto_wrap_policy/use_orig_params/compile 顺序/FSDP checkpoint 修复（死代码接线或 DCP）+ 分布式 round-trip 测试 | T008,T010 | passing | 2026-10-09 完成；FULL_STATE_DICT 真实 gather 是 CUDA-only，CPU 侧以「真构造 + stub 路由」分层覆盖，GPU 冒烟待迁移演练 |
 | T012 | FR6 MoE 向量化重写（方案 B）：参数改单张量 `Parameter[E,H,C]`（gate/up/down 各一）+ load/save 翻译 hook（磁盘格式不变）、定容 padded bmm `[E,cap,C]` 零 Python 循环（cap 语义与现行 int 截断对齐，容量丢弃 token 输出 0）、compile 兼容；验收 loss atol=1e-5 + ≥2x 基准对比 | - | passing | 2026-10-10 完成；实测 17.9x（137.1→7.7 ms/step @ E=4,H=688,C=256,N=512 CPU 中位），等价 diff ~3e-8 |
 | T013 | FR5 KV decode 去 cat（方案 B）：`KVCacheManager` 新增 `layout="append"` 追加式预分配缓冲 + `get_cache()` 返回 `[:pos]` 视图直喂 SDPA（零拷贝）、int8 惰性反量化切片、滑窗 mask 向量化；`pos ≥ max_cache_len` 切 ring 驱逐语义回退路径（`evicted` 标记，B5）；flash wrapper 仅可选分支（包存在才启用）；验收输出逐位一致 + ≥1.5x | T005 | passing | 2026-10-10 完成；4096ctx CPU 基准 1.61x（21.4→13.3 ms/步），fast path 逐位等价 + 单写协议 |
-| T014 | FR7a 连续批处理 iteration-level 重构：槽位回收/prefill 插入/**左对齐 padding**（右侧 pad 不参与 KV 写入）/RoPE 位置按各序列真实长度/**PrefixCache 与 _init_decode_compile 删除**（设计决策：不留死代码）/批量采样张量化（`[B]` 温度张量，消灭逐序列 Python 循环） | T006,T013 | pending | ~300 行调度器重写；必须保留/继承 T006 的 temperature=0 greedy 语义，验收补 greedy 确定性断言；**T005 定向新发现**：`generate_batch` 解码首步将 prompt 尾 token 重复喂入（KV 已含整个 prompt）——off-by-one 独立缺陷，重构时一并修复 |
+| T014 | FR7a 连续批处理 iteration-level 重构：槽位回收/prefill 插入/**左对齐 padding**（右侧 pad 不参与 KV 写入）/RoPE 位置按各序列真实长度/**PrefixCache 与 _init_decode_compile 删除**（设计决策：不留死代码）/批量采样张量化（`[B]` 温度张量，消灭逐序列 Python 循环） | T006,T013 | passing | ~300 行调度器重写；必须保留/继承 T006 的 temperature=0 greedy 语义，验收补 greedy 确定性断言；**T005 定向新发现**：`generate_batch` 解码首步将 prompt 尾 token 重复喂入（KV 已含整个 prompt）——off-by-one 独立缺陷，重构时一并修复 |
 | T015 | FR7b api_server 接线新调度器（asyncio.to_thread/线程安全队列）+ 补齐或删除 --continuous_batching 声称 | T014 | pending | |
 | T016 | FR10 根目录收编：导出 4 脚本 → tools/、profile 2 脚本 → tools/、编排脚本处置（[project.scripts] 与测试路径同步）、删除死文件（run_inference_ablation.py/generate_experiment_log.py/logs_prepare*.txt） | - | pending | 删除前全库引用检查 |
 | T017 | FR11a training/args.py 公共 flag 提取（23 个重复 flag，~350 行净删） | - | pending | 可与 A 阶段并行提前 |
@@ -234,3 +234,36 @@
 - 性能演进：flash import 缓存 0.57→0.89x → 单写协议 0.89→1.15x → 基准规模对齐 AC（Red 用 1024 ctx，cat 占比不足）→ **4096 ctx + embd512/8h/8L：21.4→13.3 ms/步 = 1.61x**（≥1.5x 达标；CPU 天花板 ~1.6x——cat 与 fast path 写入共享内存带宽，更大规模饱和）；基准需 buffer 余量（prompt 4096 + buffer 8192），否则 7 步即驱逐回退
 - 全量回归：**494 passed / 3 skipped**（481+13），91s
 - 遗留：投机解码/batch 投机/continuous_batching/generate_batch 仍走值形态（S>1 验证步为主 + compile step_fn 对象追踪风险；T014 重构时统一接线）；RoPE 表上限问题见上；显存斜率断言（AC2 后半）CUDA-only 留迁移演练
+
+### 2026-10-10 T014 会话记录（FR7 连续批处理 iteration-level 重构）
+
+**定向新发现：**
+- 现行 continuous_batching.py 全部 FR7 指控坐实：批级回收（run 内 while 等整批完成）、右 pad KV 污染（cache.advance(max_prompt_len) 把 pad 位置写入 + decode 无 mask）、PrefixCache 占位（注入循环内 `pass`）、_init_decode_compile 从未被调用、逐序列采样 Python 循环、off-by-one（decode 首步 `next_in[b]=results[b][-1]` 重喂 prompt 尾 token）
+- 唯一外部引用破坏面：api_server.py 仅 docstring 提及（T015 接线）；tests/test_speculative_distribution.py L133-156 import BatchGenerator._sample——契约同步改造（保留意图，改锁 generate_utils 两处采样）
+- 核心架构问题：iteration-level 下各槽 cache_len 必然不齐 → 共享 forward 需要三件套——per-row 有效 KV 前缀（kv_mask）、per-row 新 token 绝对位置（positions）、值路径 additive mask 组合。model.forward 因此新增两个可选参数（FR7 服务性扩展）
+
+**Red（17 用例 test_continuous_batching_v2.py + speculative 契约同步）：**
+- 16 Red + 1 pin（B12 空 slot 行为级在现行也成立，但契约断言 list 返回使其 Red；线程安全行为级 1 PASS）；speculative 改造后 11 PASS + 1 Red（_sample_logits_batched ImportError）
+- 用例：死代码静态断言（源码禁 "class PrefixCache"/"class BatchGenerator"/"_init_decode_compile"、require "threading.Lock"）、GenerateResult/run(max_steps)/iteration_count 契约、B=1 vs generate() 一致（捕获 off-by-one）、max_tokens=1 首 token、不等长 batch vs 逐条一致（捕获 KV 污染）、槽位回收精确 iteration 推演（short it3 / third it4 / long it8 / 总 8）、max_steps 部分、_sample_logits_batched 语义（temp=0 严格 argmax 短路 / top_k=1 / top_p=0.0 / <=0 与 >=1 不过滤 / RNG 无关断言）、greedy 确定性、B12 双变体（空槽 + 回收后无残留）、队列线程安全（8×25 并发 enqueue + 4 drainer 无丢失 + maxsize RuntimeError）、positions 语义（恒等 / start_pos 等价 / masked-dummy 偏移等价，rope+learned 参数化）、kv_mask 语义（垃圾尾屏蔽 == 干净切片 + 非空性哨兵 + B=2 不同长度批量 vs 单行）、rep penalty 弱断言（batch == solo）、eos 语义（含 eos token / finish_iteration=1）
+- **契约 bug 修正（Green 前主代理修测试）**：测试 12/13 直接 `model(...).shape` 但 forward 返回 3-tuple——Red 期被 TypeError 掩盖；9 处补 `[0]` 解包
+
+**Green：**
+- model/modern_gpt.py：`apply_rotary_pos_emb_single` 支持 cos [B,T,D]（ndim==3 → unsqueeze(1)）；CausalSelfAttention.forward + positions/kv_mask 参数（RoPE 按 positions gather cos/sin；kv_mask 构造 [B,1,1,past_len+T] additive 与 attention_mask 相加组合；fast path 条件加 positions/kv_mask 保守排除）；Block.forward 透传（gc 训练路径不传）；ModernGPT.forward + 两参数（learned wpe 显式 positions 索引 + 形状/block_size 校验；块分发透传）
+- inference/generate_utils.py：`_sample_logits_batched(logits, temperatures, top_ks, top_ps)`——temp=0 行 where(argmax) 严格短路（安全除法防 NaN）、per-row top-k（topk+rank 掩码 scatter）、per-row top-p（sort+cumsum+**前移一位**掩码，与 _sample_logits 逐行语义逐位对齐）、单次 multinomial
+- inference/continuous_batching.py 全量重写（~470 行）：Request 去 prefix_key；RequestQueue threading.Lock；GenerateResult(request_id/token_ids/finish_reason/finish_iteration)；槽位状态机 EMPTY→PREFILL→DECODING→FINISHED；调度器自管 per-layer KV buffer [batch_size,H,effective_block_size,D]；iteration = 收割 FINISHED→紧凑化 buffer→补槽→**decode 组先快照**（本 iteration prefill 的槽下一 iteration 才 decode，首 token 来自 prefill）→prefill 组左对齐打包（右 pad 被 attention_mask 屏蔽且**只写各槽真实前缀**，pad KV 永不入 buffer）→decode 组视图 past + positions=[cache_len] + kv_mask=[有效前缀]→张量化采样 + 向量化 rep penalty（padded gather/scatter）；off-by-one 修复：prefill 最后真实位置 logits 采样首 token；batch 全程值路径（行独立保证 B12）
+- 两次修正：① 同 iteration prefill 后槽被 decode 捞走（decode 组须在 iteration 开始快照，测试 6 精确推演锁定）；② 紧凑化 `buf[idx]` 误缩 buffer batch 维（改为 buf[:K]=buf[idx] 前缀写回，fancy indexing 拷贝保证无别名）
+
+**性能演进（FR7-AC3 基准：16 并发、prompt 8-38、max_tokens 2..47 阶梯、embd64/4h/4L CPU）：**
+- 初版（行 gather past + 逐行 Python 写回 128 次 ATen dispatch/步）：平均延迟降 28.3%（不达标）
+- 紧凑布局（活跃槽恒占行 [0..K)，past 为零拷贝视图）+ 向量化写回（per-layer 单次索引赋值 [arange,:,lens_t]）+ kv_mask arange 构造：**249.0→154.2ms = 38.1%（≥30% 达标）**；16 条 greedy 输出与 static 基线逐 token 一致（基准内交叉验证）
+- 静态基线为旧语义诚实仿真：整批跑完才返回（所有请求延迟=批端点）
+
+**关键决策：**
+- decode 走值路径 + kv_mask（不用 T013 fast path：kv_mask/positions 强制禁用 fast path 是保守正确性决策；AC3 收益来自槽位回收语义而非单步 kernel，值路径 cat 与旧实现同量级）；fast path 增强留遗留
+- BatchGenerator 整类删除（职责并入调度器；无调用方即死代码，FR7 精神）；ContinuousBatchingServer 外壳保留
+- finish_iteration 字段进 GenerateResult（AC1「日志/计数可验证」的落点，避免解析日志）
+- 紧凑布局行搬移只在 iteration 边界发生且仅有空洞时（keep 非前缀才拷贝）；行为与稀疏布局逐位一致（行独立性）
+
+**回归与遗留：**
+- 全量 **512 passed / 3 skipped**（~100s；494 基线 + 本任务 17 + speculative 1）；目标测试 29 全绿
+- 遗留：调度器 decode 仍值路径 cat（kv_mask 与 fast path 不兼容，后续可为 append 布局 + 等长槽场景设计 fast path 变体）；speculative/generate_batch 的 S>1 验证步值路径接线问题不变（T019 接口统一时一并处理）；benchmark 中每请求延迟按 finish_iteration 比例折算（等 iteration 时长假设，保守）
