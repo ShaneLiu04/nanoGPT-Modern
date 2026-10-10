@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -41,7 +41,7 @@ class RuleJudge(Judge):
     very short answers).
     """
 
-    def __init__(self, correct_answer: Optional[str] = None):
+    def __init__(self, correct_answer: str | None = None):
         self.correct_answer = correct_answer
 
     def score(self, prompt: str, response: str) -> float:
@@ -57,7 +57,7 @@ class RuleJudge(Judge):
 class LengthPenaltyJudge(Judge):
     """Judge that rewards correct answers and penalises excessive length."""
 
-    def __init__(self, correct_answer: Optional[str] = None, target_length: int = 30):
+    def __init__(self, correct_answer: str | None = None, target_length: int = 30):
         self.correct_answer = correct_answer
         self.target_length = target_length
 
@@ -118,11 +118,11 @@ class WinRateEvaluator:
 
     def evaluate(
         self,
-        prompts: List[str],
+        prompts: list[str],
         n_samples: int = 4,
         max_new_tokens: int = 128,
         temperature: float = 1.0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Run head-to-head comparison for each prompt.
 
         Parameters
@@ -153,9 +153,7 @@ class WinRateEvaluator:
                 policy_resp = self._generate(
                     self.policy_model, prompt_ids, max_new_tokens, temperature
                 )
-                ref_resp = self._generate(
-                    self.ref_model, prompt_ids, max_new_tokens, temperature
-                )
+                ref_resp = self._generate(self.ref_model, prompt_ids, max_new_tokens, temperature)
                 ps = self.judge.score(prompt, policy_resp)
                 rs = self.judge.score(prompt, ref_resp)
                 policy_scores.append(ps)
@@ -184,9 +182,7 @@ class WinRateEvaluator:
             "win_rate": win_rate,
             "tie_rate": tie_rate,
             "policy_mean_score": (
-                sum(policy_scores_all) / len(policy_scores_all)
-                if policy_scores_all
-                else 0.0
+                sum(policy_scores_all) / len(policy_scores_all) if policy_scores_all else 0.0
             ),
             "ref_mean_score": (
                 sum(ref_scores_all) / len(ref_scores_all) if ref_scores_all else 0.0
@@ -197,12 +193,12 @@ class WinRateEvaluator:
 
     def evaluate_and_save(
         self,
-        prompts: List[str],
+        prompts: list[str],
         output_json: str,
         n_samples: int = 4,
         max_new_tokens: int = 128,
         temperature: float = 1.0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Run evaluation and persist results to ``output_json``."""
         results = self.evaluate(prompts, n_samples, max_new_tokens, temperature)
         with open(output_json, "w", encoding="utf-8") as f:
@@ -210,7 +206,7 @@ class WinRateEvaluator:
         return results
 
 
-def build_arithmetic_prompts(num_samples: int = 100, seed: int = 42) -> List[str]:
+def build_arithmetic_prompts(num_samples: int = 100, seed: int = 42) -> list[str]:
     """Generate a simple arithmetic prompt set for quick win-rate smoke tests."""
     import random
 

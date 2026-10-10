@@ -28,7 +28,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 TASK_ALIASES = {
     "mmlu": "mmlu",
@@ -64,14 +64,14 @@ def _lm_eval_available() -> bool:
 
 def run_benchmark_suite(
     checkpoint: str,
-    tasks: Optional[List[str]] = None,
-    output_json: Optional[str] = None,
+    tasks: list[str] | None = None,
+    output_json: str | None = None,
     device: str = "cuda",
     batch_size: int = 1,
-    num_fewshot: Optional[int] = None,
-    limit: Optional[int] = None,
-    model_name: Optional[str] = None,
-) -> Dict[str, Any]:
+    num_fewshot: int | None = None,
+    limit: int | None = None,
+    model_name: str | None = None,
+) -> dict[str, Any]:
     """Run a suite of standard benchmarks on a nanoGPT-Modern checkpoint.
 
     Parameters
@@ -151,7 +151,7 @@ def run_benchmark_suite(
         stderr = str(e)
 
     # Parse stdout for known metrics (heuristic fallback when JSON is not emitted).
-    parsed: Dict[str, Any] = {}
+    parsed: dict[str, Any] = {}
     for line in stdout.splitlines():
         for task in tasks:
             # Look for lines like "|  mmlu  |acc |0.2345| ..."
@@ -194,22 +194,20 @@ class BenchmarkSuite:
     >>> print(suite.last_results)
     """
 
-    def __init__(
-        self, checkpoint: str, device: str = "cuda", model_name: Optional[str] = None
-    ):
+    def __init__(self, checkpoint: str, device: str = "cuda", model_name: str | None = None):
         self.checkpoint = checkpoint
         self.device = device
         self.model_name = model_name
-        self.last_results: Optional[Dict[str, Any]] = None
+        self.last_results: dict[str, Any] | None = None
 
     def run(
         self,
-        tasks: Optional[List[str]] = None,
-        output_json: Optional[str] = None,
+        tasks: list[str] | None = None,
+        output_json: str | None = None,
         batch_size: int = 1,
-        num_fewshot: Optional[int] = None,
-        limit: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        num_fewshot: int | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
         self.last_results = run_benchmark_suite(
             checkpoint=self.checkpoint,
             tasks=tasks,

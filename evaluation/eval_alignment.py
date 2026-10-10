@@ -5,29 +5,26 @@ Metrics: accuracy, reward, format_pass_rate, invalid_rate, KL divergence.
 KL is computed only over response tokens (prompt tokens are masked out).
 """
 
-import os
 import argparse
-import re
 import json
+import os
+import re
 
 import numpy as np
+import tiktoken
 import torch
 
-
-from data.arithmetic import generate_easy, generate_medium, generate_hard
+from data.arithmetic import generate_easy, generate_hard, generate_medium
+from inference.generate_utils import generate_by_length
 from rewards.rule_reward import compute_reward_batch
 from training.trainer_base import load_model_from_checkpoint
-from inference.generate_utils import generate_by_length
 from utils.rl_utils import compute_kl_divergence, compute_token_logprobs
-import tiktoken
 
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, required=True)
-    parser.add_argument(
-        "--ref_checkpoint", type=str, default=None, help="Reference model for KL"
-    )
+    parser.add_argument("--ref_checkpoint", type=str, default=None, help="Reference model for KL")
     parser.add_argument(
         "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -96,9 +93,7 @@ def _batch_logprobs(model, sequences, response_masks, device, ctx):
     return result
 
 
-def evaluate(
-    model, ref_model, data, tokenizer, device, max_response_len, batch_size, ctx
-):
+def evaluate(model, ref_model, data, tokenizer, device, max_response_len, batch_size, ctx):
     prompts = [d["prompt"] for d in data]
     references = [d["answer"] for d in data]
 
@@ -117,9 +112,7 @@ def evaluate(
         return_ids=True,
     )
 
-    rewards, fmt_scores, proc_scores, acc_scores = compute_reward_batch(
-        responses, references
-    )
+    rewards, fmt_scores, proc_scores, acc_scores = compute_reward_batch(responses, references)
 
     # Compute KL divergence only over response tokens, batched.
     kl_sum = 0.0
@@ -155,12 +148,8 @@ def evaluate(
         for i in range(0, len(sequences), batch_size):
             batch_seqs = sequences[i : i + batch_size]
             batch_masks = masks[i : i + batch_size]
-            all_policy_logp.extend(
-                _batch_logprobs(model, batch_seqs, batch_masks, device, ctx)
-            )
-            all_ref_logp.extend(
-                _batch_logprobs(ref_model, batch_seqs, batch_masks, device, ctx)
-            )
+            all_policy_logp.extend(_batch_logprobs(model, batch_seqs, batch_masks, device, ctx))
+            all_ref_logp.extend(_batch_logprobs(ref_model, batch_seqs, batch_masks, device, ctx))
 
         for p_logp, r_logp in zip(all_policy_logp, all_ref_logp):
             # Use the same reverse-KL form as GRPO training:

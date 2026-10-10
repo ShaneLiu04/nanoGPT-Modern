@@ -8,16 +8,13 @@ from typing import Any
 import hydra
 from omegaconf import DictConfig
 
-
 from data.openwebtext import get_dataloader
 from evaluation.eval_benchmark import evaluate_ppl, run_lm_eval
 from training.trainer_base import load_model_from_checkpoint
 from utils.hydra_utils import to_namespace
 
 
-@hydra.main(
-    config_path="../config/hydra", config_name="eval_benchmark", version_base=None
-)
+@hydra.main(config_path="../config/hydra", config_name="eval_benchmark", version_base=None)
 def main(cfg: DictConfig) -> None:
     args: Any = to_namespace(cfg)
     device = args.device

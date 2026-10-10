@@ -15,7 +15,9 @@ Examples
         --data_dir data/openwebtext --split val
 
     # With downstream tasks via a pre-exported HF checkpoint
-    python tools/export/export_to_hf.py --checkpoint out/pretrain/best_ckpt.pt --out_dir hf/nanogpt-modern
+    python tools/export/export_to_hf.py \
+        --checkpoint out/pretrain/best_ckpt.pt \
+        --out_dir hf/nanogpt-modern
     python evaluation/eval_benchmark.py \
         --checkpoint out/pretrain/best_ckpt.pt \
         --hf_dir hf/nanogpt-modern \
@@ -24,14 +26,13 @@ Examples
 """
 
 import argparse
-import math
 import json
-import tempfile
+import math
 import shutil
+import tempfile
 
 import torch
 import torch.nn.functional as F
-
 
 from data.openwebtext import get_dataloader
 from training.trainer_base import load_model_from_checkpoint
@@ -40,9 +41,7 @@ from utils.config import parse_args_with_config
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--checkpoint", type=str, required=True, help="Path to checkpoint"
-    )
+    parser.add_argument("--checkpoint", type=str, required=True, help="Path to checkpoint")
     parser.add_argument(
         "--hf_dir",
         type=str,
@@ -75,9 +74,7 @@ def get_args():
         help="Comma-separated lm-eval tasks (requires lm-eval package)",
     )
     parser.add_argument("--output_json", type=str, default=None)
-    parser.add_argument(
-        "--config", type=str, default=None, help="Path to YAML config file"
-    )
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
     return parse_args_with_config(parser)
 
 
@@ -129,9 +126,7 @@ def _auto_export_hf(checkpoint_path, device):
         return None
 
     try:
-        model, _ckpt = load_model_from_checkpoint(
-            checkpoint_path, device="cpu", eval_mode=True
-        )
+        model, _ckpt = load_model_from_checkpoint(checkpoint_path, device="cpu", eval_mode=True)
     except Exception as e:
         print(f"[WARNING] Failed to load checkpoint for HF export: {e}")
         return None
