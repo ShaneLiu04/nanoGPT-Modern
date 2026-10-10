@@ -28,12 +28,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional, Union
-
-import torch
-
-from model.modern_gpt import ModernGPT, ModernGPTConfig
-from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
+from typing import Any, Dict, List, Optional
 
 TASK_ALIASES = {
     "mmlu": "mmlu",
@@ -65,55 +60,6 @@ def _lm_eval_available() -> bool:
         return True
     except ImportError:
         return False
-
-
-def _load_model_for_eval(
-    checkpoint_path: str, device: Union[str, torch.device] = "cuda"
-):
-    """Load a nanoGPT-Modern checkpoint and return a HuggingFace-compatible wrapper.
-
-    Returns
-    -------
-    model : nn.Module
-        The loaded model placed on ``device`` in eval mode.
-    config : ModernGPTConfig or BaselineGPTConfig
-    tokenizer : Any
-        tiktoken encoding or a minimal fallback.
-    """
-    device = torch.device(device)
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    raw_config = ckpt.get("config")
-    model_type = (
-        raw_config.pop("model_type", "modern")
-        if isinstance(raw_config, dict)
-        else "modern"
-    )
-    config: Union[BaselineGPTConfig, ModernGPTConfig]
-    model: Union[BaselineGPT, ModernGPT]
-    if model_type == "baseline":
-        config = (
-            BaselineGPTConfig.from_dict(raw_config)
-            if isinstance(raw_config, dict)
-            else BaselineGPTConfig()
-        )
-        model = BaselineGPT(config)
-    else:
-        config = (
-            ModernGPTConfig.from_dict(raw_config)
-            if isinstance(raw_config, dict)
-            else ModernGPTConfig()
-        )
-        model = ModernGPT(config)
-    model.load_state_dict(ckpt["model"])
-    model.to(device).eval()
-
-    try:
-        import tiktoken
-
-        tokenizer = tiktoken.get_encoding("gpt2")
-    except Exception:
-        tokenizer = None
-    return model, config, tokenizer
 
 
 def run_benchmark_suite(

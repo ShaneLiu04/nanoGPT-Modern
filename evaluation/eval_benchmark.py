@@ -123,38 +123,31 @@ def _auto_export_hf(checkpoint_path, device):
     """
     try:
         from model.hf_model import NanoGPTModernConfig, NanoGPTModernForCausalLM
-        from model.modern_gpt import ModernGPTConfig
+        from model.modern_gpt import ModernGPT
     except Exception as e:
         print(f"[WARNING] Cannot import HF model wrappers: {e}")
         return None
 
     try:
-        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        model, _ckpt = load_model_from_checkpoint(
+            checkpoint_path, device="cpu", eval_mode=True
+        )
     except Exception as e:
         print(f"[WARNING] Failed to load checkpoint for HF export: {e}")
         return None
 
-    raw_config = ckpt.get("config", {})
-    if isinstance(raw_config, dict):
-        model_type = raw_config.get("model_type", "modern")
-    else:
-        model_type = getattr(raw_config, "model_type", "modern")
-
-    if model_type != "modern":
+    if not isinstance(model, ModernGPT):
         print(
-            f"[INFO] Auto HF export only supports ModernGPT; checkpoint is '{model_type}'."
+            "[INFO] Auto HF export only supports ModernGPT; "
+            f"checkpoint is '{type(model).__name__}'."
         )
         return None
 
     tmp_dir = tempfile.mkdtemp(prefix="nanogpt_hf_")
     try:
-        if isinstance(raw_config, dict):
-            nano_config = ModernGPTConfig.from_dict(raw_config)
-        else:
-            nano_config = raw_config
-        hf_config = NanoGPTModernConfig.from_nanogpt_config(nano_config)
+        hf_config = NanoGPTModernConfig.from_nanogpt_config(model.config)
         wrapper = NanoGPTModernForCausalLM(hf_config)
-        wrapper.model.load_state_dict(ckpt["model"])
+        wrapper.model.load_state_dict(model.state_dict())
         wrapper.save_pretrained(tmp_dir, safe_serialization=True)
         return tmp_dir
     except Exception as e:

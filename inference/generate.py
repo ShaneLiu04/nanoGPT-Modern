@@ -8,8 +8,7 @@ import argparse
 import json
 import torch
 from model.attention_utils import set_attention_backend, print_attention_backend
-from model.modern_gpt import ModernGPT, ModernGPTConfig
-from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
+from training.trainer_base import load_model_from_checkpoint
 from utils.config import parse_args_with_config
 
 
@@ -58,21 +57,6 @@ def get_args():
         "Only effective on CUDA; CPU falls back to eager.",
     )
     return parse_args_with_config(p)
-
-
-def load_model(ckpt_path, model_type, device):
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    raw = ckpt.get("config", None)
-    if raw is None:
-        config = ModernGPTConfig() if model_type == "modern" else BaselineGPTConfig()
-    elif isinstance(raw, dict) and model_type == "modern":
-        config = ModernGPTConfig.from_dict(raw)
-    else:
-        config = raw
-    model = (ModernGPT if model_type == "modern" else BaselineGPT)(config)
-    model.load_state_dict(ckpt["model"])
-    model.to(device).eval()
-    return model, config
 
 
 def _make_prompt(tokenizer, text, prompt_len, device):
@@ -268,7 +252,10 @@ def main():
     print_attention_backend()
     device = args.device
 
-    model, config = load_model(args.checkpoint, args.model, device)
+    model, _ckpt = load_model_from_checkpoint(
+        args.checkpoint, device=device, model_type=args.model, eval_mode=True
+    )
+    config = model.config
 
     try:
         import tiktoken

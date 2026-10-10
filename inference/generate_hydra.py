@@ -10,8 +10,9 @@ import torch
 from omegaconf import DictConfig
 
 
-from inference.generate import benchmark, load_model, _make_prompt
+from inference.generate import benchmark, _make_prompt
 from model.attention_utils import set_attention_backend, print_attention_backend
+from training.trainer_base import load_model_from_checkpoint
 from utils.hydra_utils import to_namespace
 
 
@@ -22,7 +23,10 @@ def main(cfg: DictConfig) -> None:
     print_attention_backend()
     device = args.device
 
-    model, config = load_model(args.checkpoint, args.model, device)
+    model, _ckpt = load_model_from_checkpoint(
+        args.checkpoint, device=device, model_type=args.model, eval_mode=True
+    )
+    config = model.config
 
     try:
         import tiktoken
