@@ -2,9 +2,12 @@
 
 The absolute speedup of cache vs. no-cache depends heavily on the SDPA backend
 that PyTorch selects at runtime (FlashAttention vs. memory-efficient vs. math).
+Absolute wall-clock thresholds are equally machine-dependent, so perf
+assertions are *relative* only (selected via ``-m perf``).
+
 These tests therefore focus on:
   1. Correctness: cache and no-cache produce identical outputs.
-  2. Sanity: cache path does not crash and completes in bounded time.
+  2. Relative sanity: the cache path is not slower than the no-cache path.
 """
 
 import time
@@ -12,25 +15,32 @@ import time
 import pytest
 import torch
 
-from model.modern_gpt import ModernGPT, ModernGPTConfig
+from model.modern_gpt import ModernGPT
 from helpers import tiny_modern_config
 
 
+@pytest.mark.perf
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for timing")
 def test_kv_cache_decode_completes_efficiently():
-    """Cache path must complete in bounded time for long sequences."""
+    """Cache path must not be slower than the no-cache path.
+
+    The model is deliberately sized large enough (24 layers / 1024 dim) that
+    GPU compute dominates kernel-launch overhead; on tiny configs the
+    1-token cache step and the full re-forward are both launch-bound and
+    indistinguishable (~1.0x on a Quadro RTX 5000).
+    """
     config = tiny_modern_config(
-        n_layer=12,
-        n_head=8,
-        n_embd=512,
-        block_size=1024,
+        n_layer=24,
+        n_head=16,
+        n_embd=1024,
+        block_size=2048,
         vocab_size=1000,
         dropout=0.0,
-        n_kv_head=2,
+        n_kv_head=4,
     )
     model = ModernGPT(config).cuda().eval()
-    prompt_len = 512
-    max_new_tokens = 256
+    prompt_len = 1024
+    max_new_tokens = 128
 
     idx = torch.randint(0, config.vocab_size, (1, prompt_len), device="cuda")
 
@@ -63,9 +73,12 @@ def test_kv_cache_decode_completes_efficiently():
     # Sampling amplifies tiny numerical differences over long sequences, so we
     # fix the decoding strategy rather than the RNG state.
     assert torch.equal(out_cache, out_no_cache)
-    # Soft sanity: neither path hangs or takes an unreasonable amount of time.
-    assert t_cache < 60.0, "cache path took too long"
-    assert t_no_cache < 60.0, "no-cache path took too long"
+    # Relative sanity (machine-independent): the cache path must not be
+    # slower than the no-cache path.
+    assert speedup >= 1.0, (
+        f"cache path slower than no-cache (cache={t_cache:.3f}s, "
+        f"no-cache={t_no_cache:.3f}s, speedup={speedup:.2f}x)"
+    )
 
 
 def test_kv_cache_outputs_match_no_cache():

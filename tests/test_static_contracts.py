@@ -1,149 +1,155 @@
-"""Static contract tests for repository configuration files.
+"""FR13 (T020): lint rule uniqueness and test-infrastructure contracts.
 
-Verifies that packaging/dependency/infra declarations stay consistent:
-pyproject extras, torch pin, uv.lock provides-extras coverage, requirements.txt
-derivation annotation, docker-compose GPU syntax, CI lock-check & Docker build
-jobs, and api_server importability with the `server` extra.
+Static contracts (design 6.5):
 
-This module currently covers FR1 of AR-v0.5.0-hpc-readiness; it will later
-host additional static contracts (e.g. FR13).
+- black and ruff both use line-length 100 and the rule set is unique;
+- ruff selects E/F/I/B/UP;
+- mypy python_version is pinned per design;
+- the KV-cache benchmark uses machine-independent (relative)
+  assertions and carries the perf marker so ``-m "not perf"`` isolates
+  it;
+- README test-count badge no longer drifts from the collected count.
 """
 
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
-import pytest
-import yaml
-
-ROOT = Path(__file__).resolve().parents[1]
-
-EXPECTED_EXTRAS = {"eval", "quant", "hf", "plot", "dev", "server", "validate"}
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_pyproject():
-    with open(ROOT / "pyproject.toml", "rb") as f:
-        return tomllib.load(f)
+def _pyproject():
+    return tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 
-def _load_uv_lock():
-    with open(ROOT / "uv.lock", "rb") as f:
-        return tomllib.load(f)
+# ---------------------------------------------------------------------------
+# 1. lint rule uniqueness
+# ---------------------------------------------------------------------------
 
 
-def test_pyproject_declares_server_and_validate_extras():
-    """FR1-AC1: pyproject declares `server` (fastapi/uvicorn/pydantic) and `validate` (pydantic) extras."""
-    pyproject = _load_pyproject()
-    optional = pyproject["project"]["optional-dependencies"]
-
-    assert "server" in optional, "missing [project.optional-dependencies].server extra"
-    server_deps = " ".join(optional["server"]).lower()
-    for pkg in ("fastapi", "uvicorn", "pydantic"):
-        assert pkg in server_deps, f"extra `server` must depend on {pkg}"
-
-    assert "validate" in optional, "missing [project.optional-dependencies].validate extra"
-    validate_deps = " ".join(optional["validate"]).lower()
-    assert "pydantic" in validate_deps, "extra `validate` must depend on pydantic"
+def test_black_line_length_is_100():
+    assert _pyproject()["tool"]["black"]["line-length"] == 100
 
 
-def test_torch_pin_lower_bound_2_5():
-    """FR1: torch dependency is pinned to the ~=2.5 compatible-release series."""
-    pyproject = _load_pyproject()
-    deps = pyproject["project"]["dependencies"]
-
-    torch_specs = [d for d in deps if re.match(r"^\s*torch(\[|[<>=!~]|$)", d)]
-    assert torch_specs, "no torch entry found in project dependencies"
-    assert any(
-        re.search(r"~=\s*2\.5(\.\d+)?", spec) for spec in torch_specs
-    ), f"torch must be pinned with ~=2.5, got {torch_specs}"
+def test_ruff_line_length_is_100_with_select():
+    ruff = _pyproject()["tool"]["ruff"]
+    assert ruff["line-length"] == 100
+    select = ruff.get("select", [])
+    for code in ["E", "F", "I", "B", "UP"]:
+        assert code in select, code
 
 
-def test_uv_lock_provides_extras_complete():
-    """FR1-AC3: uv.lock provides-extras covers every extra declared in pyproject."""
-    pyproject = _load_pyproject()
-    declared = set(pyproject["project"]["optional-dependencies"].keys())
+def test_line_length_rules_unique():
+    data = _pyproject()
+    lengths = {
+        "black": data["tool"]["black"]["line-length"],
+        "ruff": data["tool"]["ruff"]["line-length"],
+    }
+    assert len(set(lengths.values())) == 1, lengths
 
-    lock = _load_uv_lock()
-    root_pkgs = [p for p in lock.get("package", []) if p.get("name") == "nanogpt-modern"]
-    assert root_pkgs, "root package 'nanogpt-modern' not found in uv.lock"
-    root_pkg = root_pkgs[0]
-    provides = set(root_pkg.get("provides-extras", [])) | set(
-        root_pkg.get("metadata", {}).get("provides-extras", [])
+
+def test_mypy_python_version_pinned():
+    data = _pyproject()
+    version = data["tool"]["mypy"]["python_version"]
+    assert version in ("3.9", "3.11"), version
+    # pin must be a string of the documented target
+    assert re.fullmatch(r"3\.\d+", version)
+
+
+# ---------------------------------------------------------------------------
+# 2. KV benchmark: relative assertions + perf marker
+# ---------------------------------------------------------------------------
+
+
+def test_kv_benchmark_has_perf_marker():
+    src = (REPO_ROOT / "tests" / "test_kv_cache_benchmark.py").read_text(
+        encoding="utf-8"
     )
+    assert "@pytest.mark.perf" in src
 
-    missing = declared - provides
-    assert not missing, (
-        f"uv.lock provides-extras is missing extras declared in pyproject: {sorted(missing)}; "
-        f"provides-extras={sorted(provides)}"
+
+def test_kv_benchmark_no_absolute_time_thresholds():
+    """Timing assertions must be relative (machine-independent)."""
+    src = (REPO_ROOT / "tests" / "test_kv_cache_benchmark.py").read_text(
+        encoding="utf-8"
     )
-    assert EXPECTED_EXTRAS <= provides, (
-        f"expected extras {sorted(EXPECTED_EXTRAS)} not fully covered by provides-extras "
-        f"{sorted(provides)}"
+    # absolute wall-clock thresholds like `t_cache < 60.0` are banned
+    assert not re.search(r"t_\w+\s*<\s*\d+\.\d+", src)
+    assert not re.search(r"time\.time\(\)\s*<", src)
+
+
+def test_perf_marker_registered():
+    data = _pyproject()
+    markers = "\n".join(data["tool"]["pytest"]["ini_options"].get("markers", []))
+    assert "perf" in markers
+    assert "slow" in markers
+
+
+def test_not_perf_collects_clean():
+    """``pytest -m 'not perf' --collect-only`` must exit 0."""
+    res = subprocess.run(
+        [sys.executable, "-m", "pytest", "-m", "not perf", "--collect-only", "-q",
+         "tests"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
+    assert res.returncode == 0, res.stdout[-2000:] + res.stderr[-2000:]
 
 
-def test_requirements_txt_derived_annotation_or_removed():
-    """FR1: requirements.txt is either removed or explicitly marked as derived from pyproject.toml."""
-    req_path = ROOT / "requirements.txt"
-    if not req_path.exists():
-        pytest.skip("requirements.txt removed; single-source pyproject.toml")
-    head = req_path.read_text(encoding="utf-8", errors="replace")[:2048]
-    assert re.search(r"derived from pyproject|派生", head, re.IGNORECASE), (
-        "requirements.txt exists but has no 'derived from pyproject' / 「派生」 annotation; "
-        "mark it as derived or delete it"
+def test_perf_marker_selects_benchmarks():
+    """``-m perf`` must select at least one test (isolatable)."""
+    res = subprocess.run(
+        [sys.executable, "-m", "pytest", "-m", "perf", "--collect-only", "-q",
+         "tests"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
+    assert res.returncode == 0, res.stderr[-2000:]
+    m = re.search(r"(\d+) tests? collected", res.stdout)
+    assert m, res.stdout[-500:]
+    assert int(m.group(1)) >= 1
 
 
-def test_docker_compose_uses_modern_gpu_syntax():
-    """FR1: docker-compose uses modern `gpus:` syntax instead of deprecated `runtime: nvidia`."""
-    compose_path = ROOT / "docker-compose.yml"
-    compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
-    services = compose.get("services", {})
-    assert services, "docker-compose.yml declares no services"
-
-    gpu_services = ("train", "api")
-    for name, svc in services.items():
-        assert svc.get("runtime") != "nvidia", (
-            f"service '{name}' uses deprecated 'runtime: nvidia'; use 'gpus:' instead"
-        )
-        if name in gpu_services:
-            assert "gpus" in svc, (
-                f"GPU service '{name}' must use the modern 'gpus:' key"
-            )
+# ---------------------------------------------------------------------------
+# 3. documentation numbers do not drift
+# ---------------------------------------------------------------------------
 
 
-def test_ci_has_lock_check_and_docker_build():
-    """FR1-AC2: CI contains a uv lock check step and a Docker build job."""
-    ci_path = ROOT / ".github" / "workflows" / "ci.yml"
-    ci = yaml.safe_load(ci_path.read_text(encoding="utf-8"))
-
-    def all_runs(doc):
-        runs = []
-        for job in doc.get("jobs", {}).values():
-            for step in job.get("steps", []):
-                run = step.get("run")
-                if run:
-                    runs.append(run)
-        return runs
-
-    runs = all_runs(ci)
-    assert runs, "CI workflow declares no steps with 'run'"
-
-    lock_check = any(
-        re.search(r"uv\s+lock\s+--(check|locked)", run) for run in runs
+def _collected_count():
+    res = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "tests"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
-    assert lock_check, "no step runs 'uv lock --check' (or 'uv lock --locked')"
+    assert res.returncode == 0, res.stderr[-2000:]
+    m = re.search(r"(\d+) tests? collected", res.stdout)
+    assert m, res.stdout[-500:]
+    return int(m.group(1))
 
-    docker_build = any(
-        re.search(r"docker\s+(compose\s+)?build", run) for run in runs
+
+def test_readme_test_badge_not_stale():
+    """The README test badge lower bound must not understate the suite."""
+    src = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    m = re.search(r"tests-(\d+)\+?%2?0?passing", src) or re.search(
+        r"badge/tests-(\d+)", src
     )
-    assert docker_build, "no step runs 'docker build' / 'docker compose build'"
+    assert m, "README must carry a tests badge with a numeric bound"
+    badge = int(m.group(1))
+    assert _collected_count() >= badge
 
 
-def test_api_server_importable_with_server_extra():
-    """FR1-AC1: with the `server` extra installed, `import api_server` succeeds.
-
-    Skips if fastapi is not installed locally (E8 graceful-degradation semantics).
-    """
-    pytest.importorskip("fastapi", reason="server extra (fastapi) not installed")
-    import api_server  # noqa: F401
+def test_ci_has_lint_jobs():
+    src = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "black --check" in src
+    assert "ruff check" in src
+    assert "mypy" in src

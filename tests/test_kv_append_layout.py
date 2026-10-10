@@ -619,6 +619,7 @@ def test_sliding_window_mask_vectorized():
 # 12. Decode speedup benchmark (Red: >= 1.5x)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.perf
 def test_decode_speedup_at_least_1_5x():
     """Single decode step (forward + update + advance) at cache_len ~ 4096
     (the FR5-AC2 benchmark scale): the value form (per-step torch.cat of the
