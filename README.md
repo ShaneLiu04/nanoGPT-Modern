@@ -243,8 +243,8 @@ python inference/generate.py --checkpoint out/pretrain/best_ckpt.pt \
   --max_new_tokens 200 400 600 --num_samples 30 --output_json out/ablation.json
 
 # 训练 / 推理性能 Profiler（Chrome trace + 显存报告）
-python profile_training.py --model modern --steps 20 --output_dir out/profile/
-python profile_inference.py --checkpoint out/pretrain/best_ckpt.pt --use_cache
+python tools/profiling/profile_training.py --model modern --steps 20 --output_dir out/profile/
+python tools/profiling/profile_inference.py --checkpoint out/pretrain/best_ckpt.pt --use_cache
 
 # 训练 / 推理消融矩阵一键运行
 python run_ablations.py --mode inference --checkpoint out/pretrain/best_ckpt.pt
@@ -261,15 +261,15 @@ python run_full_evaluation.py
 
 ```bash
 # HuggingFace 格式（config.json + model.safetensors，可 round-trip 加载）
-python export_to_hf.py --checkpoint out/pretrain/best_ckpt.pt --out_dir hf/nanogpt-modern
-python load_from_hf.py --hf_dir hf/nanogpt-modern --out out/roundtrip.pt
+python tools/export/export_to_hf.py --checkpoint out/pretrain/best_ckpt.pt --out_dir hf/nanogpt-modern
+python tools/export/load_from_hf.py --hf_dir hf/nanogpt-modern --out out/roundtrip.pt
 
 # GGUF（内置无依赖 writer；Q4_0/Q5_0/Q6_K 类型枚举预留）
-python export_gguf.py --checkpoint out/pretrain/best_ckpt.pt \
+python tools/export/export_gguf.py --checkpoint out/pretrain/best_ckpt.pt \
   --out out/pretrain/best_ckpt.q8_0.gguf --quant q8_0
 
 # ONNX（动态 batch/seq 轴 + ONNX Runtime 数值验证）
-python export_to_onnx.py --checkpoint out/pretrain/best_ckpt.pt \
+python tools/export/export_to_onnx.py --checkpoint out/pretrain/best_ckpt.pt \
   --out_path out/pretrain/model.onnx --model modern --validate
 ```
 
@@ -404,13 +404,9 @@ nanogpt-modern/
 │   └── profiler.py          # PyTorch Profiler + Chrome trace
 ├── tests/                   # 230+ 回归测试
 ├── docs/                    # 白皮书 / 变更日志 / 实验记录 / 6 篇 ADR
-├── export_to_hf.py          # → HuggingFace 格式
-├── load_from_hf.py          # HuggingFace → 原生 checkpoint
-├── export_gguf.py           # → GGUF（无依赖 writer）
-├── export_to_onnx.py        # → ONNX（动态轴 + 验证）
+├── tools/export/            # 导出/互操作脚本（export_to_hf / load_from_hf / export_gguf / export_to_onnx）
 ├── api_server.py            # FastAPI OpenAI 兼容服务
-├── profile_training.py      # 训练 Profiler
-├── profile_inference.py     # 推理 Profiler
+├── tools/profiling/         # 性能剖析脚本（profile_training / profile_inference）
 ├── run_ablations.py         # 消融矩阵自动化
 ├── run_full_evaluation.py   # 全维度评估自动化
 ├── Dockerfile               # 多阶段容器（base / dev / prod）
