@@ -353,8 +353,43 @@ class CausalSelfAttention(nn.Module):
             k = self.k_norm(k)
 
         # --- RoPE with absolute position awareness ---
+        # ``past_kv`` may arrive in three shapes: None, a value form
+        # (tuple of (k, v) tensors or list of such blocks), or a
+        # ``(KVCacheManager, layer_idx)`` pair.  The cache-pair shape enables
+        # the zero-copy append fast path below when its conditions hold;
+        # otherwise it degrades to the value form of that layer's cache.
+        use_cache_fast_path = False
+        cache_obj: Any = None
+        cache_layer_idx = -1
+        kv_view: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        if (
+            past_kv is not None
+            and isinstance(past_kv, tuple)
+            and len(past_kv) == 2
+            and not isinstance(past_kv[0], torch.Tensor)
+            and hasattr(past_kv[0], "get_layer_view")
+        ):
+            cache_obj, cache_layer_idx = past_kv
+            if (
+                T == 1
+                and attention_mask is None
+                and document_ids is None
+                and (self.sliding_window_size is None or self.sliding_window_size <= 0)
+                and not cache_obj.evicted
+                and getattr(cache_obj, "layout", "append") == "append"
+            ):
+                kv_view = cache_obj.get_layer_view(cache_layer_idx, extra=1)
+                use_cache_fast_path = kv_view is not None
+            if not use_cache_fast_path:
+                # Fall back to this layer's value form and continue on the
+                # legacy concat path (identical behaviour).
+                past_kv = cache_obj.get_cache()[cache_layer_idx]
+
         if past_kv is None:
             past_len = 0
+        elif use_cache_fast_path:
+            assert cache_obj is not None
+            past_len = cache_obj.cache_len
         elif isinstance(past_kv, list):
             past_len = sum(bk.shape[2] for bk, _ in past_kv)
         else:
@@ -380,7 +415,20 @@ class CausalSelfAttention(nn.Module):
             k_embed = apply_rotary_pos_emb_single(k, k_cos, k_sin)
 
         # --- KV cache: concatenate with past ---
-        if past_kv is not None:
+        if use_cache_fast_path:
+            # O(1) append of the new token's K/V into the pre-allocated
+            # buffer, then feed the zero-copy [:pos+1] view straight to the
+            # attention kernel.  No torch.cat on the decode path.
+            assert cache_obj is not None and kv_view is not None
+            k_new, v_new = k_embed, v
+            cache_obj.update(cache_layer_idx, k_new, v_new)
+            k_embed = kv_view[0]  # full-prefix view incl. the just-written token
+            v = kv_view[1]
+            # The cache is already updated in place; returning None here lets
+            # the caller skip its own update() (single-write protocol).  The
+            # model-level forward collapses an all-None present list to None.
+            present_kv = None
+        elif past_kv is not None:
             # Sliding-window cache: keep only the last W tokens so the KV cache
             # memory stays bounded by the window size during autoregressive decode.
             if self.sliding_window_size is not None and self.sliding_window_size > 0:
@@ -417,9 +465,15 @@ class CausalSelfAttention(nn.Module):
 
         # Return only the K/V corresponding to the current input tokens so that
         # callers can append them to a KV cache without duplicating past tokens.
-        present_kv = (
-            (k_embed[:, :, past_len:, :], v[:, :, past_len:, :]) if use_cache else None
-        )
+        # (The append fast path already set present_kv to the new token's
+        # original tensors; slicing the dequantized view instead would break
+        # the caller's idempotent update() for int8 caches.)
+        if not use_cache_fast_path:
+            present_kv = (
+                (k_embed[:, :, past_len:, :], v[:, :, past_len:, :])
+                if use_cache
+                else None
+            )
 
         # --- attention ---
         attn_scale = None
@@ -471,6 +525,29 @@ class CausalSelfAttention(nn.Module):
                 y = _flash_attention.flash_attention(
                     q_embed, k_embed, v, causal=True, softmax_scale=attn_scale
                 )
+
+            if y is None and use_cache_fast_path:
+                # Optional flash-attn KV-cache wrapper on the decode fast path:
+                # only used when the third-party package is installed; returns
+                # None on any failure, in which case plain SDPA below runs on
+                # the same zero-copy views (identical semantics, B9).
+                assert cache_obj is not None and kv_view is not None
+                seqlen = kv_view[0].shape[2]
+                fa_out = _flash_attention.flash_attention_with_cache(
+                    q_embed.transpose(1, 2),
+                    kv_view[0].transpose(1, 2),
+                    kv_view[1].transpose(1, 2),
+                    k_new.transpose(1, 2),
+                    v_new.transpose(1, 2),
+                    cache_seqlens=torch.full(
+                        (q_embed.shape[0],), seqlen, dtype=torch.int32,
+                        device=q_embed.device,
+                    ),
+                    causal=True,
+                    softmax_scale=attn_scale,
+                )
+                if fa_out is not None:
+                    y = fa_out.transpose(1, 2)
 
             if hasattr(F, "scaled_dot_product_attention"):
                 # When using cache, q positions are always >= k positions, so no causal mask needed.
@@ -1520,15 +1597,21 @@ class ModernGPT(nn.Module):
 
         tok_emb = self.transformer.wte(idx)
         if learned_pe:
-            # Absolute positions: the j-th current token sits at absolute
+            # Absolute position embedding: the j-th current token sits at absolute
             # index start_pos + past_len + j (mirrors the RoPE slice logic),
             # independent of any cache trimming offsets.
             if past_kvs is not None:
-                first = past_kvs[0]
-                if isinstance(first, list):
-                    past_len = sum(bk.shape[2] for bk, _ in first)
+                if not isinstance(past_kvs, (list, tuple)) and hasattr(
+                    past_kvs, "cache_len"
+                ):
+                    # KVCacheManager object form.
+                    past_len = past_kvs.cache_len
                 else:
-                    past_len = first[0].shape[2]
+                    first = past_kvs[0]
+                    if isinstance(first, list):
+                        past_len = sum(bk.shape[2] for bk, _ in first)
+                    else:
+                        past_len = first[0].shape[2]
             else:
                 past_len = 0
             pos_end = start_pos + past_len + t
@@ -1545,8 +1628,22 @@ class ModernGPT(nn.Module):
         new_past_kvs: Any = [] if use_cache else None
         total_aux_loss = torch.zeros((), device=device, dtype=torch.float32)
         moe_enabled = self.config.num_experts > 1
+        # A KVCacheManager object dispatches per-layer ``(cache, layer_idx)``
+        # pairs so each attention layer can use the zero-copy append fast
+        # path; value forms (list of per-layer tensors) pass through as-is.
+        if (
+            past_kvs is not None
+            and not isinstance(past_kvs, (list, tuple))
+            and hasattr(past_kvs, "cache_len")
+            and hasattr(past_kvs, "update")
+        ):
+            per_layer_past: Any = [
+                (past_kvs, i) for i in range(self.config.n_layer)
+            ]
+        else:
+            per_layer_past = past_kvs
         for i, block in enumerate(self.transformer.h):
-            past_kv = past_kvs[i] if past_kvs is not None else None
+            past_kv = per_layer_past[i] if per_layer_past is not None else None
             if moe_enabled:
                 x, present_kv, block_aux = block(
                     x,
@@ -1570,6 +1667,16 @@ class ModernGPT(nn.Module):
             if use_cache:
                 assert new_past_kvs is not None
                 new_past_kvs.append(present_kv)
+
+        # Object-form fast path: every layer wrote its new K/V into the cache
+        # in place, so the per-layer present entries are all None.  Collapse
+        # to a single None so callers can skip their update loop.
+        if (
+            new_past_kvs
+            and per_layer_past is not None
+            and all(p is None for p in new_past_kvs)
+        ):
+            new_past_kvs = None
 
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
@@ -1964,14 +2071,20 @@ class ModernGPT(nn.Module):
                     inp,
                 )
 
+            # Object form enables the append fast path for KVCacheManager;
+            # the paged manager (no get_layer_view) keeps its value form.
+            past_arg = cache if hasattr(cache, "get_layer_view") else cache.get_cache()
             logits, _, next_kv = _forward(
                 inp,
-                past_kvs=cache.get_cache(),
+                past_kvs=past_arg,
                 use_cache=True,
                 start_pos=cache.start_pos,
             )
-            for li in range(self.config.n_layer):
-                cache.update(li, next_kv[li][0], next_kv[li][1])
+            if next_kv is not None:
+                # Value form: write the new K/V ourselves.  None means the
+                # append fast path already wrote them inside forward().
+                for li in range(self.config.n_layer):
+                    cache.update(li, next_kv[li][0], next_kv[li][1])
             cache.advance(1)
 
             logits = logits[:, -1, :]
