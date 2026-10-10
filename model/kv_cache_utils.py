@@ -26,7 +26,7 @@ generation quality for most models.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any
 
 import torch
 
@@ -82,13 +82,13 @@ class KVCacheManager:
         # ring/cat semantics (which ``"ring"`` uses unconditionally).
         self.layout = layout.lower()
 
-        self._k: Optional[List[torch.Tensor]] = None
-        self._v: Optional[List[torch.Tensor]] = None
-        self._k_scale: Optional[List[torch.Tensor]] = None
-        self._v_scale: Optional[List[torch.Tensor]] = None
-        self._batch_size: Optional[int] = None
-        self._device: Optional[torch.device] = None
-        self._compute_dtype: Optional[torch.dtype] = None
+        self._k: list[torch.Tensor] | None = None
+        self._v: list[torch.Tensor] | None = None
+        self._k_scale: list[torch.Tensor] | None = None
+        self._v_scale: list[torch.Tensor] | None = None
+        self._batch_size: int | None = None
+        self._device: torch.device | None = None
+        self._compute_dtype: torch.dtype | None = None
 
         self._cache_len = 0  # logical number of tokens in cache
         self._write_pos = 0  # next physical position to write (0 .. max_cache_len)
@@ -125,9 +125,7 @@ class KVCacheManager:
             return torch.float16
         return torch.bfloat16
 
-    def _quantize_cache(
-        self, tensor: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _quantize_cache(self, tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Quantize a K or V tensor to the configured storage dtype.
 
         For ``int8`` we use per-channel (per ``head_dim``) scaling:
@@ -173,7 +171,7 @@ class KVCacheManager:
 
     def _quantize_cache_int8_fallback(
         self, tensor: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Fallback int8 quantization when fp8 is requested but unsupported."""
         abs_max = tensor.abs().amax(dim=-1, keepdim=True).clamp_min_(1e-6)
         scale = abs_max / 127.0
@@ -201,9 +199,7 @@ class KVCacheManager:
             return q.to(self._compute_dtype)
         return q.to(self._compute_dtype)
 
-    def init_cache(
-        self, batch_size: int, device: torch.device, dtype: torch.dtype
-    ) -> None:
+    def init_cache(self, batch_size: int, device: torch.device, dtype: torch.dtype) -> None:
         """Allocate empty cache tensors for each layer."""
         self._batch_size = batch_size
         self._device = device
@@ -337,25 +333,17 @@ class KVCacheManager:
         else:
             first_part = self.max_cache_len - self._write_pos
             self._k[layer_idx][:, :, self._write_pos :, :] = q_k[:, :, :first_part, :]
-            self._k[layer_idx][:, :, : end_pos - self.max_cache_len, :] = q_k[
-                :, :, first_part:, :
-            ]
+            self._k[layer_idx][:, :, : end_pos - self.max_cache_len, :] = q_k[:, :, first_part:, :]
             self._v[layer_idx][:, :, self._write_pos :, :] = q_v[:, :, :first_part, :]
-            self._v[layer_idx][:, :, : end_pos - self.max_cache_len, :] = q_v[
-                :, :, first_part:, :
-            ]
+            self._v[layer_idx][:, :, : end_pos - self.max_cache_len, :] = q_v[:, :, first_part:, :]
             if s_k is not None:
                 assert self._k_scale is not None and self._v_scale is not None
                 assert s_v is not None
-                self._k_scale[layer_idx][:, :, self._write_pos :, :] = s_k[
-                    :, :, :first_part, :
-                ]
+                self._k_scale[layer_idx][:, :, self._write_pos :, :] = s_k[:, :, :first_part, :]
                 self._k_scale[layer_idx][:, :, : end_pos - self.max_cache_len, :] = s_k[
                     :, :, first_part:, :
                 ]
-                self._v_scale[layer_idx][:, :, self._write_pos :, :] = s_v[
-                    :, :, :first_part, :
-                ]
+                self._v_scale[layer_idx][:, :, self._write_pos :, :] = s_v[:, :, :first_part, :]
                 self._v_scale[layer_idx][:, :, : end_pos - self.max_cache_len, :] = s_v[
                     :, :, first_part:, :
                 ]
@@ -394,7 +382,7 @@ class KVCacheManager:
 
     def get_layer_view(
         self, layer_idx: int, extra: int = 0
-    ) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
         """Zero-copy view of one layer's cache, optionally past the write pos.
 
         Valid only in ``append`` layout before any eviction: the logical
@@ -428,7 +416,7 @@ class KVCacheManager:
             )
         return k_q.to(self._compute_dtype), v_q.to(self._compute_dtype)
 
-    def get_cache(self) -> List[Any]:
+    def get_cache(self) -> list[Any]:
         """Return cached K/V as a list of contiguous blocks.
 
         Returns a list of ``(k_block, v_block)`` tuples.  Most of the time the
@@ -449,7 +437,7 @@ class KVCacheManager:
 
         def _dequant_layer(
             layer_idx: int, start: int, end: int
-        ) -> Tuple[torch.Tensor, torch.Tensor]:
+        ) -> tuple[torch.Tensor, torch.Tensor]:
             assert self._k is not None and self._v is not None
             k_q = self._k[layer_idx][:, :, start:end, :]
             v_q = self._v[layer_idx][:, :, start:end, :]
@@ -467,10 +455,7 @@ class KVCacheManager:
         # Logical sequence occupies ``_cache_len`` slots ending at ``_write_pos``.
         if self._cache_len <= self._write_pos:
             start = self._write_pos - self._cache_len
-            return [
-                (_dequant_layer(i, start, self._write_pos))
-                for i in range(self.n_layers)
-            ]
+            return [(_dequant_layer(i, start, self._write_pos)) for i in range(self.n_layers)]
         else:
             # Wrapped: two contiguous blocks in physical memory that concatenate
             # to the logical sequence.
@@ -483,7 +468,7 @@ class KVCacheManager:
                 for i in range(self.n_layers)
             ]
 
-    def get_cache_contiguous(self) -> Optional[List[Tuple[torch.Tensor, torch.Tensor]]]:
+    def get_cache_contiguous(self) -> list[tuple[torch.Tensor, torch.Tensor]] | None:
         """Return cached K/V as single contiguous tensors per layer.
 
         Convenience wrapper around :meth:`get_cache` that concatenates wrapped
@@ -530,9 +515,7 @@ class KVCacheManager:
         drop = 0
         if total_len > capacity:
             drop = total_len - capacity
-            trimmed: List[List[Tuple[torch.Tensor, torch.Tensor]]] = [
-                [] for _ in normalized
-            ]
+            trimmed: list[list[tuple[torch.Tensor, torch.Tensor]]] = [[] for _ in normalized]
             remaining = drop
             for block_idx, block in enumerate(normalized[0]):
                 L = block[0].shape[2]
@@ -571,18 +554,14 @@ class KVCacheManager:
                     self._v[i][:, :, self._write_pos : self._write_pos + L, :] = q_v
                     if self._k_scale is not None:
                         assert self._v_scale is not None
-                        self._k_scale[i][
-                            :, :, self._write_pos : self._write_pos + L, :
-                        ] = s_k
-                        self._v_scale[i][
-                            :, :, self._write_pos : self._write_pos + L, :
-                        ] = s_v
+                        self._k_scale[i][:, :, self._write_pos : self._write_pos + L, :] = s_k
+                        self._v_scale[i][:, :, self._write_pos : self._write_pos + L, :] = s_v
                 else:
-                    self._k[i][:, :, self._write_pos : self._write_pos + L, :] = (
-                        k_block.to(self._k[i].dtype)
+                    self._k[i][:, :, self._write_pos : self._write_pos + L, :] = k_block.to(
+                        self._k[i].dtype
                     )
-                    self._v[i][:, :, self._write_pos : self._write_pos + L, :] = (
-                        v_block.to(self._v[i].dtype)
+                    self._v[i][:, :, self._write_pos : self._write_pos + L, :] = v_block.to(
+                        self._v[i].dtype
                     )
             self._write_pos += L
         self._cache_len = total_len
@@ -599,13 +578,9 @@ class KVCacheManager:
         valid before the ring buffer wraps around (``start_pos == 0``).
         """
         if new_cache_len < 0 or new_cache_len > self._cache_len:
-            raise ValueError(
-                f"new_cache_len ({new_cache_len}) must be in [0, {self._cache_len}]"
-            )
+            raise ValueError(f"new_cache_len ({new_cache_len}) must be in [0, {self._cache_len}]")
         if self.start_pos != 0:
-            raise RuntimeError(
-                "truncate() is only supported before ring-buffer wrap-around"
-            )
+            raise RuntimeError("truncate() is only supported before ring-buffer wrap-around")
         self._cache_len = new_cache_len
         self._write_pos = new_cache_len % self.max_cache_len
 
@@ -655,7 +630,7 @@ class QuantizedKVCacheManager(KVCacheManager):
 
 
 def build_sliding_window_mask(
-    seq_len: int, window_size: int, device: Union[str, torch.device]
+    seq_len: int, window_size: int, device: str | torch.device
 ) -> torch.Tensor:
     """Build a causal + sliding window mask (vectorized, no Python loops).
 

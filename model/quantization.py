@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -44,8 +43,8 @@ class QuantConfig:
     """
 
     method: str = "int8"
-    skip_modules: Tuple[str, ...] = ("wte", "lm_head", "norm", "ln_")
-    layer_filter: Optional[str] = None
+    skip_modules: tuple[str, ...] = ("wte", "lm_head", "norm", "ln_")
+    layer_filter: str | None = None
     compute_dtype: torch.dtype = torch.float16
     bnb_8bit_threshold: float = 6.0
     bnb_4bit_quant_type: str = "nf4"
@@ -81,9 +80,7 @@ class QuantizedLinear(nn.Module):
             self.register_parameter("bias", None)
 
     @classmethod
-    def from_float(
-        cls, module: nn.Linear, dtype: torch.dtype = torch.float16
-    ) -> "QuantizedLinear":
+    def from_float(cls, module: nn.Linear, dtype: torch.dtype = torch.float16) -> QuantizedLinear:
         """Create a quantized copy of a ``nn.Linear`` module."""
         qmodule = cls(
             module.in_features,
@@ -124,7 +121,7 @@ def _should_quantize(name: str, module: nn.Module, config: QuantConfig) -> bool:
     return True
 
 
-def _get_parent(model: nn.Module, name: str) -> Tuple[nn.Module, str]:
+def _get_parent(model: nn.Module, name: str) -> tuple[nn.Module, str]:
     parts = name.split(".")
     if len(parts) == 1:
         return model, parts[0]
@@ -184,8 +181,8 @@ def _make_bnb_4bit(linear: nn.Linear, config: QuantConfig) -> nn.Module:
 
 def quantize_model(
     model: nn.Module,
-    config: Optional[QuantConfig] = None,
-) -> Tuple[nn.Module, List[str]]:
+    config: QuantConfig | None = None,
+) -> tuple[nn.Module, list[str]]:
     """Quantize eligible ``nn.Linear`` layers in ``model`` in-place.
 
     Returns the (possibly mutated) model and a list of replaced module names.
@@ -201,16 +198,14 @@ def quantize_model(
     if config.layer_filter is not None:
         re.compile(config.layer_filter)  # validate early
 
-    replaced: List[str] = []
+    replaced: list[str] = []
     for name, module in list(model.named_modules()):
         if not _should_quantize(name, module, config):
             continue
         parent, child_name = _get_parent(model, name)
         linear = module
         if config.method == "int8":
-            new_module: nn.Module = QuantizedLinear.from_float(
-                linear, config.compute_dtype
-            )
+            new_module: nn.Module = QuantizedLinear.from_float(linear, config.compute_dtype)
         elif config.method == "bnb_8bit":
             new_module = _make_bnb_8bit(linear, config)
         elif config.method == "bnb_4bit":
@@ -281,7 +276,7 @@ def estimate_quantized_size(
 
 def compute_quantization_mse(
     model: nn.Module,
-    config: Optional[QuantConfig] = None,
+    config: QuantConfig | None = None,
 ) -> float:
     """Compute the average per-element MSE introduced by quantizing weights.
 

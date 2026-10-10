@@ -15,7 +15,6 @@ backend-independent attention.
 from __future__ import annotations
 
 import math
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -31,9 +30,9 @@ def blockwise_attention(
     k: torch.Tensor,
     v: torch.Tensor,
     causal: bool = True,
-    softmax_scale: Optional[float] = None,
-    block_size_q: Optional[int] = None,
-    block_size_kv: Optional[int] = None,
+    softmax_scale: float | None = None,
+    block_size_q: int | None = None,
+    block_size_kv: int | None = None,
 ) -> torch.Tensor:
     """Compute causal self-attention in query/kv blocks.
 
@@ -75,9 +74,7 @@ def blockwise_attention(
     n_rep = Hq // Hkv
 
     if Tq != Tkv:
-        raise ValueError(
-            f"blockwise_attention currently requires Tq == Tkv, got {Tq} and {Tkv}"
-        )
+        raise ValueError(f"blockwise_attention currently requires Tq == Tkv, got {Tq} and {Tkv}")
 
     if softmax_scale is None:
         softmax_scale = 1.0 / math.sqrt(D)
@@ -134,9 +131,7 @@ def blockwise_attention(
             k_end = k_start + block_size_kv
             q_pos = torch.arange(q_start, q_end, device=q.device).unsqueeze(1)
             k_pos = torch.arange(k_start, k_end, device=q.device).unsqueeze(0)
-            mask = torch.ones(
-                block_size_q, block_size_kv, dtype=torch.bool, device=q.device
-            )
+            mask = torch.ones(block_size_q, block_size_kv, dtype=torch.bool, device=q.device)
             if causal:
                 mask = mask & (k_pos <= q_pos)
             # KV padding positions are beyond the original Tkv and must never
@@ -144,9 +139,7 @@ def blockwise_attention(
             if k_end > Tkv:
                 mask = mask & (k_pos < Tkv)
             if not mask.all():
-                mask_b = mask.view(1, 1, block_size_q, block_size_kv).expand(
-                    B, Hq, -1, -1
-                )
+                mask_b = mask.view(1, 1, block_size_q, block_size_kv).expand(B, Hq, -1, -1)
                 s_ij = s_ij.masked_fill(~mask_b, float("-inf"))
 
             m_ij = torch.max(s_ij, dim=-1, keepdim=True).values
@@ -154,9 +147,7 @@ def blockwise_attention(
 
             # Replace -inf with 0 for the exponential so we do not produce NaNs
             # for rows that are entirely masked in this block.
-            m_new_safe = torch.where(
-                torch.isneginf(m_new), torch.zeros_like(m_new), m_new
-            )
+            m_new_safe = torch.where(torch.isneginf(m_new), torch.zeros_like(m_new), m_new)
             exp_scale = torch.exp(m - m_new_safe)
             exp_ij = torch.exp(s_ij - m_new_safe)
 
