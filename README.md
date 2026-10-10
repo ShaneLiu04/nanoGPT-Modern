@@ -423,6 +423,9 @@ nanogpt-modern/
 | 文档 | 内容 |
 |------|------|
 | [docs/TECH_REPORT.md](docs/TECH_REPORT.md) | 技术白皮书：架构设计、模块详解、性能容量、Roadmap |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 训练基座设计：BaseTrainer 模板方法链、DDP/FSDP/AMP/EMA/Checkpoint、监控降级、5 训练器差异矩阵 |
+| [docs/GRPO_NOTES.md](docs/GRPO_NOTES.md) | RLHF 家族对比：GRPO / Iterative GRPO / DPO 的优势计算、参考更新、KL 三维度 |
+| [docs/MIGRATION.md](docs/MIGRATION.md) | 云租用 GPU 实例迁移 Runbook（环境重建、冒烟、实验矩阵启动） |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | v0.2.0 → v0.3.0 变更日志、42 项改进清单、已知限制 |
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | 实验记录、复现命令、关键结论 |
 | [docs/adr/](docs/adr/README.md) | 架构决策记录：GQA grouped-broadcast、GRPO vs PPO、KV 量化、MoE grouped GEMM 等 |
