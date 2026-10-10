@@ -3,6 +3,8 @@ BaselineGPT: Standard GPT-2 architecture with LayerNorm, GELU FFN, and absolute 
 """
 
 import math
+import warnings
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -226,6 +228,10 @@ class BaselineGPTConfig:
 
 
 class BaselineGPT(nn.Module):
+    # FR12 capability flag: the baseline has no KV cache machinery, so
+    # downstream code can probe this instead of reflecting on generate().
+    supports_kv_cache = False
+
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -264,6 +270,15 @@ class BaselineGPT(nn.Module):
         assert (
             t <= self.config.block_size
         ), f"Cannot forward sequence of length {t}, block size is {self.config.block_size}"
+        if attention_mask is not None and not getattr(
+            self, "_warned_attention_mask", False
+        ):
+            warnings.warn(
+                "BaselineGPT does not implement attention_mask; "
+                "cross-document masking requires ModernGPT (the mask is ignored).",
+                stacklevel=2,
+            )
+            self._warned_attention_mask = True
         pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0)
 
         tok_emb = self.transformer.wte(idx)
@@ -279,7 +294,9 @@ class BaselineGPT(nn.Module):
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
             )
-        return logits, loss
+        # FR12: unified 3-tuple contract (matches ModernGPT; the third
+        # slot -- the KV cache -- is always None for the baseline).
+        return logits, loss, None
 
     def crop_block_size(self, block_size):
         assert block_size <= self.config.block_size
@@ -325,20 +342,54 @@ class BaselineGPT(nn.Module):
         eos_token_id=None,
         **kwargs,
     ):
+        if use_cache and not getattr(self, "_warned_use_cache", False):
+            warnings.warn(
+                "BaselineGPT has no KV cache infrastructure; "
+                "use_cache=True is a no-op and generation stays quadratic.",
+                stacklevel=2,
+            )
+            self._warned_use_cache = True
         for _ in range(max_new_tokens):
             idx_cond = (
                 idx
                 if idx.size(1) <= self.config.block_size
                 else idx[:, -self.config.block_size :]
             )
-            logits, _ = self(idx_cond)
-            logits = logits[:, -1, :] / temperature
+            logits, _, _ = self(idx_cond)
+            logits = logits[:, -1, :]
+            if temperature == 0:
+                # FR12: strict greedy, aligned with ModernGPT._sample
+                # (avoids the div-by-zero inf logits).
+                idx_next = logits.argmax(dim=-1, keepdim=True)
+                idx = torch.cat((idx, idx_next), dim=1)
+                if eos_token_id is not None and bool(
+                    (idx_next == eos_token_id).all()
+                ):
+                    break
+                continue
+            logits = logits / temperature
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float("Inf")
+            if top_p is not None:
+                # FR12: nucleus sampling (previously a silent no-op).
+                sorted_logits, sorted_idx = torch.sort(logits, descending=True)
+                cum_probs = torch.cumsum(
+                    F.softmax(sorted_logits, dim=-1), dim=-1
+                )
+                remove = cum_probs > top_p
+                remove[..., 1:] = remove[..., :-1].clone()
+                remove[..., 0] = False
+                logits = logits.masked_fill(
+                    remove.scatter(-1, sorted_idx, remove), float("-inf")
+                )
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
+            if eos_token_id is not None and bool(
+                (idx_next == eos_token_id).all()
+            ):
+                break
         return idx
 
     def get_num_params(self, non_embedding=True):

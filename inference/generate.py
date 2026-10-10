@@ -100,7 +100,9 @@ def benchmark(
     is_cuda = "cuda" in str(device)
     sync = torch.cuda.synchronize if is_cuda else (lambda: None)
 
-    has_cache_api = "use_cache" in model.generate.__code__.co_varnames
+    # FR12: capability probe instead of signature reflection (the
+    # baseline declares use_cache but silently ignores it).
+    has_cache_api = getattr(model, "supports_kv_cache", False)
     use_cache = use_cache and has_cache_api
 
     # ---- optional torch.compile for the manual decode loop ----
