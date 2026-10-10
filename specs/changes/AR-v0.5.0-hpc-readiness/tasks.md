@@ -34,7 +34,7 @@
 | T017 | FR11a training/args.py 公共 flag 提取（23 个重复 flag，~350 行净删） | - | passing | 可与 A 阶段并行提前 |
 | T018 | FR11b load_model 统一到 load_model_from_checkpoint（7 份拷贝收敛）+ tests/conftest.py tiny fixture + test_bugfixes.py 拆分 | T017 | passing | |
 | T019 | FR12 接口统一（breaking）：BaselineGPT 3-tuple 返回、no-op 参数显式化、调用点全量同步、反射 hack 清理、CHANGELOG | T013,T014 | passing | v0.5.0 大版本 |
-| T020 | FR13 lint/测试基建：black line-length=100 统一 + ruff 配置 + mypy 版本对齐 + test_kv_cache_benchmark 相对断言/perf marker + 文档数字刷新 | T017,T018 | pending | 一次性格式化对齐 |
+| T020 | FR13 lint/测试基建：black line-length=100 统一 + ruff 配置 + mypy 版本对齐 + test_kv_cache_benchmark 相对断言/perf marker + 文档数字刷新 | T017,T018 | passing | 2026-10-10 完成；两 commit：5f9d02b（配置+契约+perf 隔离+mypy 修复）、db3b7ff（一次性格式化 127 文件）；mypy 3.9 target 不支持→保持 3.11（执行偏差）；unsafe fix 安全性审计（UP045/UP007 全在 future import 文件、UP006/UP035 为 PEP 585 py39 运行时安全） |
 | T021 | FR14 理解力交付物：docs/ARCHITECTURE.md（训练基座）、modern_gpt.py 分区导航 + docstring 100%、GRPO 家族对比笔记、与 MIGRATION.md 交叉引用 | T011,T019 | pending | 收尾任务 |
 
 ## 状态说明
@@ -424,3 +424,32 @@
 - top_p/eos/greedy 短路三个「最小实现」顺手完成：design 只点名 top_p，但 eos 与 temperature=0 同为声明未用/既有 bug，一次改齐避免二次触碰
 - CHANGELOG 放 docs/CHANGELOG.md（仓库实际位置，非根目录）；v0.5.0 段含迁移指引（外部 2-tuple 解包代码需跟进）
 - api_server.py:214 的 "compile" co_varnames 反射**不在本次范围**（compile 参数两模型语义不同且探测结果正确，FR12 只授权 use_cache 探测改造）——记遗留待 FR13/后续评估
+
+### 2026-10-10 T020 完成（FR13 lint/测试基建）
+
+**Red（11 用例 test_static_contracts.py：6 Red + 5 pin）：**
+- 契约：black line-length=100、ruff line-length=100 + select 含 E/F/I/B/UP、line-length 唯一、kv benchmark 带 perf marker、测试代码禁绝对时间阈值（`t_\w+\s*<\s*\d+\.\d+` 正则扫描）、`-m perf` 至少选中 1 个
+- pin：mypy python_version pinned、markers 已注册、not perf 收集干净、README 徽章下界不低估、CI 三 lint job 存在
+
+**Green（两 commit）：**
+- **5f9d02b（配置+契约+perf 隔离+mypy 修复）**：
+  - pyproject：[tool.black] line-length=100；[tool.ruff] line-length=100 + select=[E,F,I,B,UP]
+  - **执行偏差**：design 要求 mypy python_version=3.9，但 mypy 2.4 已不支持 3.9 target（须 3.10+）→ 保持 3.11 并在此记录
+  - continuous_batching.py 11 处 mypy 错误修复：Optional[List[Tensor]] 局部收窄 + prompt_ids isinstance 守卫（__post_init__ 归一为 tensor）——mypy 70 文件全绿
+  - test_kv_cache_benchmark.py：perf marker + 绝对 60s 阈值改相对断言 speedup>=1.0
+  - test_kv_append_layout.py 1.5x 用例补 perf marker → **T018 遗留的全量并发偶发波动一并解决**（隔离出默认运行集）
+  - README 徽章/目录树 230+ → 600+
+- **db3b7ff（一次性格式化，独立 commit，127 文件净 -761 行）**：
+  - black 89+8 文件重排；ruff --fix + --unsafe-fixes 共 804 修复
+  - **unsafe fix 安全性审计**（本轮核心收获）：UP045/UP007（`X | None`）215 处全部在有 `from __future__ import annotations` 的文件（运行时不求值）；无 future import 的 58 处仅 UP006/UP035（PEP 585，py39 运行时安全）→ 可安全应用
+  - 手动修：B904 ×2（`raise ... from`）、B007 ×2、E741 ×3、E501 ×29（字符串拼接保值、注解括号换行）
+  - ruff 配置迁移 [tool.ruff.lint]（顶层已弃用）+ per-file-ignores：tests/* E402（条件导入模式）、trainer_base.py B027（可选 hook 设计）；契约测试兼容读取两位置
+  - 顺带修 B028 ×25（warnings.warn 补 stacklevel=2，ruff 自动）
+
+**重大环境发现：本机出现 CUDA（Quadro RTX 5000 8GB）**——此前记录为无 GPU。首个真正运行的 GPU perf 用例暴露：原小配置（12L/512d）kernel-launch 开销主导，cache 与 no-cache 不可区分（1-token 带过去 0.0258s ≈ 512-token 全量 0.0254s）；调大至 24L/1024d/prompt-1024 后 **speedup 3.75x、greedy 输出逐位一致**——KV cache 实现确认正确，原用例配置无区分度。GPU 冒烟遗留项（compile recompile 计数、KV 显存斜率、static_graph+no_sync、FSDP gather）现在本机可演练。
+
+**验证：** black --check / ruff check / mypy 70 文件三绿；全量 **604 passed / 3 skipped / 2 deselected**（-m "not perf"，~110s）；-m perf 2 passed（3.75x + 1.5x）；静态契约 11/11。
+
+**遗留新增：**
+- perf 用例 GPU 阈值（speedup>=1.0 / 1.5x）在云租用实例上的表现待迁移演练确认（本机 RTX 5000 通过）
+- mypy python_version 与 design 3.9 的偏差已记录（工具版本约束）
