@@ -196,6 +196,26 @@ def flash_attention_varlen(
 # ---------------------------------------------------------------------------
 
 
+# Module-level cache for the flash_attn kvcache function: probing the import
+# on every decode step (and failing when the wheel is absent) costs real time,
+# so the probe happens at most once per process.
+_KVCACHE_FUNC = None
+_KVCACHE_PROBED = False
+
+
+def _get_flash_kvcache_func():
+    global _KVCACHE_FUNC, _KVCACHE_PROBED
+    if not _KVCACHE_PROBED:
+        _KVCACHE_PROBED = True
+        try:
+            from flash_attn import flash_attn_with_kvcache as _fn  # type: ignore[import]
+
+            _KVCACHE_FUNC = _fn
+        except Exception:
+            _KVCACHE_FUNC = None
+    return _KVCACHE_FUNC
+
+
 def flash_attention_with_cache(
     q: torch.Tensor,
     k_cache: torch.Tensor,
@@ -221,8 +241,7 @@ def flash_attention_with_cache(
         Key/value cache tensors, shape
         ``[B, max_seq_len, n_kv_heads, head_dim]``.
     k_new, v_new
-        New key/value for the current step, shape
-        ``[B, 1, n_kv_heads, head_dim]``.
+        New key/value for the current step, shape ``[B, 1, n_kv_heads, head_dim]``.
     cache_seqlens
         Per-batch sequence lengths in the cache, shape ``[B]``,
         ``torch.int32`` on CUDA.  Required by ``flash_attn_with_kvcache``.
@@ -237,13 +256,12 @@ def flash_attention_with_cache(
         Output of shape ``[B, 1, n_heads, head_dim]``, or ``None`` if
         ``flash_attn_with_kvcache`` is unavailable / fails.
     """
-    try:
-        from flash_attn import flash_attn_with_kvcache as _fa_kvcache  # type: ignore[import]
-    except Exception:
+    func = _get_flash_kvcache_func()
+    if func is None:
         return None
 
     try:
-        out = _fa_kvcache(
+        out = func(
             q,
             k_cache,
             v_cache,

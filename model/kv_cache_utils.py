@@ -67,6 +67,7 @@ class KVCacheManager:
         head_dim: int,
         max_cache_len: int = 1024,
         cache_dtype: str = "bf16",
+        layout: str = "append",
     ):
         self.n_layers = n_layers
         self.n_heads = n_heads
@@ -74,6 +75,12 @@ class KVCacheManager:
         self.head_dim = head_dim
         self.max_cache_len = max_cache_len
         self.cache_dtype = cache_dtype.lower()
+        # ``append`` (default): the write pointer advances monotonically and
+        # attention can feed the ``[:pos]`` zero-copy view straight to SDPA
+        # while nothing has been evicted.  Once eviction happens the manager
+        # sets ``evicted = True`` and callers fall back to the legacy
+        # ring/cat semantics (which ``"ring"`` uses unconditionally).
+        self.layout = layout.lower()
 
         self._k: Optional[List[torch.Tensor]] = None
         self._v: Optional[List[torch.Tensor]] = None
@@ -86,6 +93,7 @@ class KVCacheManager:
         self._cache_len = 0  # logical number of tokens in cache
         self._write_pos = 0  # next physical position to write (0 .. max_cache_len)
         self.start_pos = 0  # absolute position of logical first token
+        self.evicted = False  # True once sliding-window eviction kicked in
 
     @classmethod
     def from_config(cls, config, cache_dtype: str = "bf16"):
@@ -258,6 +266,7 @@ class KVCacheManager:
         self._cache_len = 0
         self._write_pos = 0
         self.start_pos = 0
+        self.evicted = False
 
     def reset_cache(self) -> None:
         """Clear all cached keys and values."""
@@ -273,6 +282,7 @@ class KVCacheManager:
         self._cache_len = 0
         self._write_pos = 0
         self.start_pos = 0
+        self.evicted = False
 
     def update(self, layer_idx: int, new_k: torch.Tensor, new_v: torch.Tensor) -> None:
         """Write new K/V at the current logical end of the cache.
@@ -373,10 +383,50 @@ class KVCacheManager:
             evicted = new_total - capacity
             self.start_pos += evicted
             self._cache_len = capacity
+            # First eviction switches the manager into sliding-window
+            # semantics permanently; callers stop using the zero-copy
+            # fast path once ``evicted`` is set.
+            self.evicted = True
         else:
             self._cache_len = new_total
 
         self._write_pos = (self._write_pos + delta) % self.max_cache_len
+
+    def get_layer_view(
+        self, layer_idx: int, extra: int = 0
+    ) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+        """Zero-copy view of one layer's cache, optionally past the write pos.
+
+        Valid only in ``append`` layout before any eviction: the logical
+        sequence then occupies the physical slots ``[0, _write_pos + extra)``
+        contiguously, so a plain slice is both correct and copy-free.  With
+        int8/fp8 storage the requested slice is dequantized lazily (only
+        ``_write_pos + extra`` positions are materialized, never the whole
+        buffer).
+
+        Returns ``None`` when the view cannot be served (ring layout,
+        evicted, uninitialized, or the request would exceed the buffer);
+        callers should fall back to :meth:`get_cache` in that case.
+        """
+        if self.layout != "append" or self.evicted:
+            return None
+        if self._k is None or self._v is None:
+            return None
+        end = self._write_pos + extra
+        if end <= 0 or end > self.max_cache_len:
+            return None
+
+        k_q = self._k[layer_idx][:, :, :end, :]
+        v_q = self._v[layer_idx][:, :, :end, :]
+        if self._quantization_enabled() and self._k_scale is not None:
+            assert self._v_scale is not None
+            s_k = self._k_scale[layer_idx][:, :, :end, :]
+            s_v = self._v_scale[layer_idx][:, :, :end, :]
+            return (
+                self._dequantize_cache(k_q, s_k),
+                self._dequantize_cache(v_q, s_v),
+            )
+        return k_q.to(self._compute_dtype), v_q.to(self._compute_dtype)
 
     def get_cache(self) -> List[Any]:
         """Return cached K/V as a list of contiguous blocks.
@@ -607,9 +657,15 @@ class QuantizedKVCacheManager(KVCacheManager):
 def build_sliding_window_mask(
     seq_len: int, window_size: int, device: Union[str, torch.device]
 ) -> torch.Tensor:
-    """Build a causal + sliding window mask for training or inference."""
-    mask = torch.full((seq_len, seq_len), float("-inf"), device=device)
-    for i in range(seq_len):
-        start = max(0, i - window_size + 1)
-        mask[i, start : i + 1] = 0.0
-    return mask
+    """Build a causal + sliding window mask (vectorized, no Python loops).
+
+    Entry ``[i, j]`` is 0.0 when key position ``j`` is visible to query
+    position ``i`` (i.e. ``max(0, i - window_size + 1) <= j <= i``) and
+    ``-inf`` otherwise.
+    """
+    pos = torch.arange(seq_len, device=device)
+    query = pos.unsqueeze(1)  # [T, 1]
+    key = pos.unsqueeze(0)  # [1, T]
+    lower = (query - window_size + 1).clamp_min(0)
+    visible = (key >= lower) & (key <= query)
+    return torch.where(visible, 0.0, float("-inf"))
