@@ -75,6 +75,7 @@ _TS_BASE = datetime(2026, 1, 1, tzinfo=timezone.utc)
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _write_train_metrics(path, n_events=5, interval_s=10, base=_TS_BASE):
     """Write ``n_events`` train events at ``interval_s`` apart.
 
@@ -89,10 +90,7 @@ def _write_train_metrics(path, n_events=5, interval_s=10, base=_TS_BASE):
         for i in range(n_events):
             ts = (base + timedelta(seconds=i * interval_s)).isoformat()
             ts_epoch.append(datetime.fromisoformat(ts).timestamp())
-            f.write(
-                json.dumps({"step": i, "type": "train", "loss": 1.0, "ts": ts})
-                + "\n"
-            )
+            f.write(json.dumps({"step": i, "type": "train", "loss": 1.0, "ts": ts}) + "\n")
     return ts_epoch
 
 
@@ -113,6 +111,7 @@ class _FakeResponse:
 # 1-2. MetricsHeartbeatWatchdog.check: stall alert + debounce / healthy paths
 # ---------------------------------------------------------------------------
 
+
 def test_watchdog_alerts_on_stall_and_debounces(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv(WEBHOOK_ENV_VAR, raising=False)
     metrics_path = tmp_path / "metrics.jsonl"
@@ -120,18 +119,14 @@ def test_watchdog_alerts_on_stall_and_debounces(tmp_path, monkeypatch, capsys):
     last = ts_epoch[-1]
 
     collected = []
-    wd = MetricsHeartbeatWatchdog(
-        str(metrics_path), "g1", on_alert=collected.append
-    )
+    wd = MetricsHeartbeatWatchdog(str(metrics_path), "g1", on_alert=collected.append)
     assert wd.group_name == "g1"
     assert wd.alerted is False
 
     # 31s stale vs a 10s baseline: 31 > timeout_factor(3) * 10 -> alert.
     msg = wd.check(now=last + 31)
     assert isinstance(msg, str)
-    assert msg == (
-        "[watchdog] g1: training stalled (no metrics for 31s, baseline 10.0s)"
-    )
+    assert msg == ("[watchdog] g1: training stalled (no metrics for 31s, baseline 10.0s)")
     # on_alert received exactly the same message, exactly once.
     assert collected == [msg]
     assert wd.alerted is True
@@ -174,6 +169,7 @@ def test_watchdog_no_alert_when_healthy_or_insufficient(tmp_path, monkeypatch):
 # 3-4. notify_webhook: silent missing-URL + success/failure paths
 # ---------------------------------------------------------------------------
 
+
 def test_webhook_missing_url_silent(monkeypatch):
     assert WEBHOOK_ENV_VAR == "NANOGPT_WEBHOOK_URL"
 
@@ -209,15 +205,14 @@ def test_webhook_success_and_failure_paths(monkeypatch):
         raise urllib.error.URLError("network down")
 
     monkeypatch.setattr(notify_mod.urllib.request, "urlopen", failing_urlopen)
-    assert (
-        notify_webhook("m", env={WEBHOOK_ENV_VAR: "http://x/hook"}) is False
-    )
+    assert notify_webhook("m", env={WEBHOOK_ENV_VAR: "http://x/hook"}) is False
     assert len(requests) == 1  # no second request was made
 
 
 # ---------------------------------------------------------------------------
 # 5. Logger: RotatingFileHandler on {log_dir}/train.log
 # ---------------------------------------------------------------------------
+
 
 def test_logger_rotating_file_handler_writes_log(tmp_path):
     # Unique run_name -> fresh underlying logging.Logger per test process.
@@ -246,6 +241,7 @@ def test_logger_rotating_file_handler_writes_log(tmp_path):
 # ---------------------------------------------------------------------------
 # 6. run_component_ablations.notify_failures
 # ---------------------------------------------------------------------------
+
 
 def test_notify_failures_message_and_skip(monkeypatch):
     calls = []
@@ -277,6 +273,7 @@ def test_notify_failures_message_and_skip(monkeypatch):
 # 7. run_train_stage: watchdog start/stop around subprocess.run
 # ---------------------------------------------------------------------------
 
+
 def test_run_train_stage_starts_and_stops_watchdog(tmp_path, monkeypatch):
     out_root = str(tmp_path)
     name = "baseline"
@@ -294,21 +291,25 @@ def test_run_train_stage_starts_and_stops_watchdog(tmp_path, monkeypatch):
             self.stop_calls += 1
 
     fake = FakeWatchdog()
-    monkeypatch.setattr(
-        rca, "start_group_watchdog", lambda *a, **k: fake, raising=False
-    )
+    monkeypatch.setattr(rca, "start_group_watchdog", lambda *a, **k: fake, raising=False)
     monkeypatch.setattr(
         rca.subprocess,
         "run",
         lambda cmd, *a, **k: SimpleNamespace(returncode=0),
     )
 
-    args = rca.get_args([
-        "--stage", "train",
-        "--groups", name,
-        "--out_root", out_root,
-        "--config", str(tmp_path / "cfg.yaml"),
-    ])
+    args = rca.get_args(
+        [
+            "--stage",
+            "train",
+            "--groups",
+            name,
+            "--out_root",
+            out_root,
+            "--config",
+            str(tmp_path / "cfg.yaml"),
+        ]
+    )
     result = rca.run_train_stage(args)
 
     assert fake.start_calls >= 1
@@ -320,6 +321,7 @@ def test_run_train_stage_starts_and_stops_watchdog(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # 8. MetricsHeartbeatWatchdog thread lifecycle
 # ---------------------------------------------------------------------------
+
 
 def test_watchdog_thread_lifecycle(tmp_path):
     metrics_path = tmp_path / "metrics.jsonl"

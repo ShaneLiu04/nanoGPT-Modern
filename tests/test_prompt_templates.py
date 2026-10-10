@@ -2,14 +2,13 @@
 
 import random
 
-
 from data.arithmetic import (
     PROMPT_TEMPLATES,
-    select_prompt_templates,
     format_prompt,
     generate_easy,
-    generate_medium,
     generate_hard,
+    generate_medium,
+    select_prompt_templates,
 )
 
 

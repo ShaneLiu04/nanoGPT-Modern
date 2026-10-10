@@ -1,21 +1,20 @@
 """Tests for RoPE NTK-aware length extrapolation."""
 
 import math
+
 import pytest
 import torch
+from helpers import tiny_modern_config
 
 from model import ModernGPT, ModernGPTConfig
 from model.modern_gpt import RotaryEmbedding
-from helpers import tiny_modern_config
 
 
 def test_ntk_scaling_increases_base():
     dim = 32
     base = 10000.0
     factor = 2.0
-    rope = RotaryEmbedding(
-        dim, base=base, rope_scaling={"type": "ntk", "factor": factor}
-    )
+    rope = RotaryEmbedding(dim, base=base, rope_scaling={"type": "ntk", "factor": factor})
     expected_base = base * (factor ** (dim / (dim - 2)))
     assert math.isclose(rope.base, expected_base, rel_tol=1e-6)
 

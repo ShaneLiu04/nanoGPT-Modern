@@ -14,8 +14,9 @@ Static contracts (design 6.5):
 import re
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
+
+import tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,7 +37,10 @@ def test_black_line_length_is_100():
 def test_ruff_line_length_is_100_with_select():
     ruff = _pyproject()["tool"]["ruff"]
     assert ruff["line-length"] == 100
-    select = ruff.get("select", [])
+    # ruff moved lint settings into the [tool.ruff.lint] section; accept
+    # either location but require the rule selection to be pinned.
+    lint = ruff.get("lint", ruff)
+    select = lint.get("select", [])
     for code in ["E", "F", "I", "B", "UP"]:
         assert code in select, code
 
@@ -64,17 +68,13 @@ def test_mypy_python_version_pinned():
 
 
 def test_kv_benchmark_has_perf_marker():
-    src = (REPO_ROOT / "tests" / "test_kv_cache_benchmark.py").read_text(
-        encoding="utf-8"
-    )
+    src = (REPO_ROOT / "tests" / "test_kv_cache_benchmark.py").read_text(encoding="utf-8")
     assert "@pytest.mark.perf" in src
 
 
 def test_kv_benchmark_no_absolute_time_thresholds():
     """Timing assertions must be relative (machine-independent)."""
-    src = (REPO_ROOT / "tests" / "test_kv_cache_benchmark.py").read_text(
-        encoding="utf-8"
-    )
+    src = (REPO_ROOT / "tests" / "test_kv_cache_benchmark.py").read_text(encoding="utf-8")
     # absolute wall-clock thresholds like `t_cache < 60.0` are banned
     assert not re.search(r"t_\w+\s*<\s*\d+\.\d+", src)
     assert not re.search(r"time\.time\(\)\s*<", src)
@@ -90,8 +90,7 @@ def test_perf_marker_registered():
 def test_not_perf_collects_clean():
     """``pytest -m 'not perf' --collect-only`` must exit 0."""
     res = subprocess.run(
-        [sys.executable, "-m", "pytest", "-m", "not perf", "--collect-only", "-q",
-         "tests"],
+        [sys.executable, "-m", "pytest", "-m", "not perf", "--collect-only", "-q", "tests"],
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
@@ -103,8 +102,7 @@ def test_not_perf_collects_clean():
 def test_perf_marker_selects_benchmarks():
     """``-m perf`` must select at least one test (isolatable)."""
     res = subprocess.run(
-        [sys.executable, "-m", "pytest", "-m", "perf", "--collect-only", "-q",
-         "tests"],
+        [sys.executable, "-m", "pytest", "-m", "perf", "--collect-only", "-q", "tests"],
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
@@ -138,18 +136,14 @@ def _collected_count():
 def test_readme_test_badge_not_stale():
     """The README test badge lower bound must not understate the suite."""
     src = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    m = re.search(r"tests-(\d+)\+?%2?0?passing", src) or re.search(
-        r"badge/tests-(\d+)", src
-    )
+    m = re.search(r"tests-(\d+)\+?%2?0?passing", src) or re.search(r"badge/tests-(\d+)", src)
     assert m, "README must carry a tests badge with a numeric bound"
     badge = int(m.group(1))
     assert _collected_count() >= badge
 
 
 def test_ci_has_lint_jobs():
-    src = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    src = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "black --check" in src
     assert "ruff check" in src
     assert "mypy" in src

@@ -6,15 +6,14 @@ Green-phase contract:
   profile_training / profile_inference to tools/profiling/.
 - Root keeps exactly: api_server.py, run_ablations.py (deprecated), run_component_ablations.py,
   run_full_evaluation.py.
-- Delete run_inference_ablation.py, generate_experiment_log.py, logs_prepare.txt, logs_prepare_train.txt.
+- Delete run_inference_ablation.py, generate_experiment_log.py, logs_prepare.txt,
+  logs_prepare_train.txt.
 - pyproject.toml console scripts and mypy overrides synced to tools.export.* paths.
 - .github/workflows/ci.yml no longer references root-level export_to_hf.py / export_to_onnx.py.
 """
 
 import re
 from pathlib import Path
-
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

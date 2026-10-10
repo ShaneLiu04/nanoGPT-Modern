@@ -24,10 +24,10 @@ from unittest.mock import Mock
 
 import pytest
 import torch
+from helpers import tiny_modern_config
 
 from inference.generate import benchmark
-from model.modern_gpt import ModernGPT, ModernGPTConfig
-from helpers import tiny_modern_config
+from model.modern_gpt import ModernGPT
 from utils.profiler import InferenceProfiler
 
 N_TOKENS = 5
@@ -126,9 +126,7 @@ def test_inference_profiler_reports_known_delay_sequence(tmp_path):
     sorted_d = sorted(delays)
     assert summary["mean_ms"] == pytest.approx((sum(delays) / n) * 1000.0, rel=1e-6)
     assert summary["median_ms"] == pytest.approx(sorted_d[n // 2] * 1000.0, rel=1e-6)
-    assert summary["p95_ms"] == pytest.approx(
-        sorted_d[int(0.95 * n)] * 1000.0, rel=1e-6
-    )
+    assert summary["p95_ms"] == pytest.approx(sorted_d[int(0.95 * n)] * 1000.0, rel=1e-6)
 
 
 def test_benchmark_cpu_positive_time_and_percentiles():
@@ -193,7 +191,5 @@ def test_benchmark_warmup_at_least_three_and_excluded_from_stats():
     assert warmup >= 3, f"expected >= 3 warmup runs, got {warmup}"
     for key in ("p50_ms", "p95_ms", "p99_ms"):
         assert key in res, f"benchmark result missing {key}"
-    assert res["p99_ms"] < 40.0, (
-        f"slow warmup run leaked into stats: p99_ms={res['p99_ms']}"
-    )
+    assert res["p99_ms"] < 40.0, f"slow warmup run leaked into stats: p99_ms={res['p99_ms']}"
     assert 0.0 < res["p50_ms"] < 40.0

@@ -33,9 +33,9 @@ import collections
 
 import pytest
 import torch
-
-from model.modern_gpt import ModernGPT, ModernGPTConfig
 from helpers import tiny_modern_config
+
+from model.modern_gpt import ModernGPT
 
 
 def _tiny_model(seed=0, vocab_size=100, n_layer=2, n_embd=32, block_size=64):
@@ -67,24 +67,26 @@ def test_generate_temperature_zero_is_deterministic():
 
     with torch.no_grad():
         out1 = model.generate(
-            idx.clone(), max_new_tokens=32, use_cache=True,
-            temperature=0.0, top_k=None,
+            idx.clone(),
+            max_new_tokens=32,
+            use_cache=True,
+            temperature=0.0,
+            top_k=None,
         )
         out2 = model.generate(
-            idx.clone(), max_new_tokens=32, use_cache=True,
-            temperature=0.0, top_k=None,
+            idx.clone(),
+            max_new_tokens=32,
+            use_cache=True,
+            temperature=0.0,
+            top_k=None,
         )
-        greedy = model.generate(
-            idx.clone(), max_new_tokens=32, use_cache=True, top_k=1
-        )
+        greedy = model.generate(idx.clone(), max_new_tokens=32, use_cache=True, top_k=1)
 
     assert torch.equal(out1, out2), (
         "generate(temperature=0) must be deterministic (argmax); "
         "two runs produced different outputs"
     )
-    assert torch.equal(out1, greedy), (
-        "generate(temperature=0) must equal greedy (top_k=1) decoding"
-    )
+    assert torch.equal(out1, greedy), "generate(temperature=0) must equal greedy (top_k=1) decoding"
 
 
 class _FakeTokenizer:
@@ -112,25 +114,43 @@ def test_generate_utils_temperature_zero_is_deterministic():
 
     with torch.no_grad():
         _, ids1 = batched_generate(
-            model, prompts, tok, max_new_tokens=12, device=device,
-            temperature=0.0, top_k=None, eos_token_id=99, return_ids=True,
+            model,
+            prompts,
+            tok,
+            max_new_tokens=12,
+            device=device,
+            temperature=0.0,
+            top_k=None,
+            eos_token_id=99,
+            return_ids=True,
         )
         _, ids2 = batched_generate(
-            model, prompts, tok, max_new_tokens=12, device=device,
-            temperature=0.0, top_k=None, eos_token_id=99, return_ids=True,
+            model,
+            prompts,
+            tok,
+            max_new_tokens=12,
+            device=device,
+            temperature=0.0,
+            top_k=None,
+            eos_token_id=99,
+            return_ids=True,
         )
         _, ids_g = batched_generate(
-            model, prompts, tok, max_new_tokens=12, device=device,
-            top_k=1, eos_token_id=99, return_ids=True,
+            model,
+            prompts,
+            tok,
+            max_new_tokens=12,
+            device=device,
+            top_k=1,
+            eos_token_id=99,
+            return_ids=True,
         )
 
     assert ids1 == ids2, (
         "batched_generate(temperature=0) must be deterministic (argmax); "
         "two runs produced different outputs"
     )
-    assert ids1 == ids_g, (
-        "batched_generate(temperature=0) must equal greedy (top_k=1) decoding"
-    )
+    assert ids1 == ids_g, "batched_generate(temperature=0) must equal greedy (top_k=1) decoding"
 
 
 def test_continuous_batching_sample_temperature_zero_is_greedy():
@@ -146,17 +166,14 @@ def test_continuous_batching_sample_temperature_zero_is_greedy():
     expected = logits.argmax(dim=-1).item()
 
     outs = [
-        _sample_logits(logits, temperature=0.0, top_k=None, top_p=None).item()
-        for _ in range(16)
+        _sample_logits(logits, temperature=0.0, top_k=None, top_p=None).item() for _ in range(16)
     ]
 
     assert all(o == outs[0] for o in outs), (
         "_sample_logits(temperature=0) must be deterministic "
         "(argmax); repeated calls returned different tokens"
     )
-    assert outs[0] == expected, (
-        "_sample_logits(temperature=0) must return the argmax token"
-    )
+    assert outs[0] == expected, "_sample_logits(temperature=0) must return the argmax token"
 
 
 def test_sample_logits_batched_temperature_zero_is_greedy():
@@ -193,13 +210,20 @@ def test_speculative_self_draft_temperature_zero_matches_direct():
 
     with torch.no_grad():
         direct = model.generate(
-            idx.clone(), max_new_tokens=12, use_cache=True,
-            temperature=0.0, top_k=None,
+            idx.clone(),
+            max_new_tokens=12,
+            use_cache=True,
+            temperature=0.0,
+            top_k=None,
         )
         spec = model.generate(
-            idx.clone(), max_new_tokens=12, use_cache=True,
-            temperature=0.0, top_k=None,
-            draft_model=model, draft_tokens=4,
+            idx.clone(),
+            max_new_tokens=12,
+            use_cache=True,
+            temperature=0.0,
+            top_k=None,
+            draft_model=model,
+            draft_tokens=4,
         )
 
     assert torch.equal(direct, spec), (
@@ -224,9 +248,9 @@ def _selected_prob(p_d, toks, V, B):
         idx = torch.tensor(toks, dtype=torch.long).view(B, 1)
         return p_d.gather(1, idx).reshape(-1)
     flat = p_d.reshape(-1).float()
-    assert flat.numel() == B, (
-        f"cannot interpret p_d shape {tuple(p_d.shape)} for batch {B}, vocab {V}"
-    )
+    assert (
+        flat.numel() == B
+    ), f"cannot interpret p_d shape {tuple(p_d.shape)} for batch {B}, vocab {V}"
     return flat
 
 
@@ -262,9 +286,9 @@ def test_draft_sample_greedy_point_mass():
     logits = torch.randn(B, V)
 
     ret = _draft_sample(logits, temperature=0.0)
-    assert isinstance(ret, (tuple, list)) and len(ret) == 2, (
-        "_draft_sample must return (token, p_d)"
-    )
+    assert (
+        isinstance(ret, (tuple, list)) and len(ret) == 2
+    ), "_draft_sample must return (token, p_d)"
     tok, p_d = ret
     toks = torch.as_tensor(tok).reshape(-1).tolist()
     assert len(toks) == B
@@ -300,9 +324,7 @@ def test_draft_sample_tempered_probabilities():
 
         sel = _selected_prob(p_d, toks, V, B)
         tempered = torch.softmax(logits / T, dim=-1)
-        exp_sel = tempered.gather(
-            1, torch.tensor(toks, dtype=torch.long).view(B, 1)
-        ).reshape(-1)
+        exp_sel = tempered.gather(1, torch.tensor(toks, dtype=torch.long).view(B, 1)).reshape(-1)
         assert torch.allclose(sel, exp_sel.float(), atol=1e-5), (
             f"_draft_sample p_d at temperature={T} must be the tempered "
             "softmax probability softmax(logits/T) of the selected token"
@@ -331,9 +353,9 @@ def test_verify_forced_rejection_residual_is_target_minus_draft():
     target_logits[0, 0, 2] = 0.0  # target: point mass at token 2
 
     result = _verify(draft_tokens, target_logits, draft_probs, temperature=1.0)
-    assert isinstance(result, (tuple, list)) and len(result) == 2, (
-        "_verify must return (accepted_tokens, n_accepted)"
-    )
+    assert (
+        isinstance(result, (tuple, list)) and len(result) == 2
+    ), "_verify must return (accepted_tokens, n_accepted)"
     accepted, n_accepted = result
 
     assert int(n_accepted) == 0, "acceptance ratio is 0 here; token 1 must be rejected"
@@ -402,9 +424,7 @@ def test_verify_residual_and_acceptance_use_temperature():
 
     torch.manual_seed(0)
     for trial in range(40):
-        accepted, n_accepted = _verify(
-            draft_tokens, target_logits, draft_probs, temperature=T
-        )
+        accepted, n_accepted = _verify(draft_tokens, target_logits, draft_probs, temperature=T)
         assert int(n_accepted) == 0, (
             f"trial {trial}: acceptance ratio must be p_t(1)/p_d(1) ≈ 2e-9 "
             "(tempered), so rejection is forced"
@@ -472,21 +492,25 @@ def test_speculative_matches_direct_sampling_distribution():
     with torch.no_grad():
         for _ in range(n):
             t_direct = target.generate(
-                prompt.clone(), max_new_tokens=1, use_cache=True,
-                temperature=1.0, top_k=None,
+                prompt.clone(),
+                max_new_tokens=1,
+                use_cache=True,
+                temperature=1.0,
+                top_k=None,
             )[0, -1].item()
             t_spec = target.generate(
-                prompt.clone(), max_new_tokens=1, use_cache=True,
-                temperature=1.0, top_k=None,
-                draft_model=draft, draft_tokens=4,
+                prompt.clone(),
+                max_new_tokens=1,
+                use_cache=True,
+                temperature=1.0,
+                top_k=None,
+                draft_model=draft,
+                draft_tokens=4,
             )[0, -1].item()
             direct_counts[t_direct] += 1
             spec_counts[t_spec] += 1
 
-    tvd = 0.5 * sum(
-        abs(spec_counts.get(t, 0) - direct_counts.get(t, 0)) / n
-        for t in range(V)
-    )
+    tvd = 0.5 * sum(abs(spec_counts.get(t, 0) - direct_counts.get(t, 0)) / n for t in range(V))
     assert tvd < 0.25, (
         "speculative decoding (temperature=1.0) is not distribution-preserving: "
         f"TVD vs direct sampling = {tvd:.3f} "

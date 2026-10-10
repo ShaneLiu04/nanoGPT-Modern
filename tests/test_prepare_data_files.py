@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from data.prepare import get_args, _load_mixed_dataset
+from data.prepare import _load_mixed_dataset, get_args
 
 
 def _tiny_parquet(path, texts):
@@ -79,8 +79,8 @@ import numpy as np
 
 def test_prepare_shard_writer_dtype_and_index():
     """_ShardWriter must produce readable shards and a dtype-aware .idx."""
-    from data.prepare import _ShardWriter, _concatenate_shards_to_bin
     from data.openwebtext import _detect_dtype_from_index
+    from data.prepare import _concatenate_shards_to_bin, _ShardWriter
 
     with tempfile.TemporaryDirectory() as tmpdir:
         writer = _ShardWriter(

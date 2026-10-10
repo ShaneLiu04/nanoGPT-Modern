@@ -1,10 +1,10 @@
 """Tests for Sliding Window Attention integration."""
 
 import torch
+from helpers import tiny_modern_config
 
 from model import ModernGPT, ModernGPTConfig
 from model.kv_cache_utils import build_sliding_window_mask
-from helpers import tiny_modern_config
 
 
 def test_build_sliding_window_mask_shape():
@@ -18,9 +18,7 @@ def test_build_sliding_window_mask_shape():
 
 
 def test_forward_with_sliding_window():
-    cfg = tiny_modern_config(
-        n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=4
-    )
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=4)
     model = ModernGPT(cfg)
     x = torch.randint(0, cfg.vocab_size, (2, 8))
     logits, loss, _ = model(x, targets=x)
@@ -45,9 +43,7 @@ def test_sliding_window_changes_output():
 
 
 def test_sliding_window_cache_bounded():
-    cfg = tiny_modern_config(
-        n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=3
-    )
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=3)
     model = ModernGPT(cfg)
     model.eval()
     prompt = torch.randint(0, cfg.vocab_size, (1, 6))

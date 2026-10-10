@@ -1,5 +1,6 @@
 """Rule reward regressions (migrated from test_bugfixes.py)."""
 
+
 def test_rule_reward_perfect_partial_and_malformed():
     """rule_reward must give full credit for perfect answers and partial credit otherwise."""
     from rewards.rule_reward import compute_reward

@@ -2,10 +2,9 @@
 
 import pytest
 import torch
-
-
 from helpers import tiny_modern_config
-from model.modern_gpt import ModernGPT, ModernGPTConfig
+
+from model.modern_gpt import ModernGPT
 from model.quantization import (
     QuantConfig,
     QuantizedLinear,
@@ -88,9 +87,7 @@ def test_dequantize_model_restores_linear_modules():
 def test_quantization_mse_is_small():
     """compute_quantization_mse should report a small average error."""
     model = ModernGPT(_tiny_config()).eval().float()
-    mse = compute_quantization_mse(
-        model, QuantConfig(method="int8", compute_dtype=torch.float32)
-    )
+    mse = compute_quantization_mse(model, QuantConfig(method="int8", compute_dtype=torch.float32))
     assert 0.0 < mse < 1e-4
 
 

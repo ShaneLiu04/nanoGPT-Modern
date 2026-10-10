@@ -2,10 +2,9 @@
 
 import pytest
 import torch
-
-
-from model.modern_gpt import ModernGPT, ModernGPTConfig
 from helpers import tiny_modern_config
+
+from model.modern_gpt import ModernGPT
 
 
 @pytest.mark.parametrize("draft_tokens", [1, 2, 4])

@@ -35,14 +35,12 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-import pytest
 import torch
 
 import training.trainer_base  # noqa: F401  (monkeypatch target module)
 import utils.checkpoint as checkpoint_mod
 from training.train_pretrain import PretrainTrainer
 from utils.checkpoint import set_rng_state
-
 
 # ---------------------------------------------------------------------------
 # Helpers: tiny synthetic data + full args namespace
@@ -60,7 +58,7 @@ def _write_tiny_data(tmp_path):
     for split, n_chunks in (("train", _N_TRAIN_CHUNKS), ("val", _N_VAL_CHUNKS)):
         total = n_chunks * (_BLOCK_SIZE + 1)
         # Deterministic token pattern, all ids < 50257 and uint16-safe.
-        tokens = ((np.arange(total, dtype=np.int64) * 7 + 3) % 50000)
+        tokens = (np.arange(total, dtype=np.int64) * 7 + 3) % 50000
         tokens.astype(np.uint16).tofile(data_dir / f"{split}.bin")
         (data_dir / f"{split}.idx").write_text(
             f"dtype=uint16\n"
@@ -145,6 +143,7 @@ def _load_ckpt(path):
 # 1. CheckpointManager.load restores RNG state
 # ---------------------------------------------------------------------------
 
+
 def test_checkpoint_load_restores_rng(tmp_path, monkeypatch):
     data_dir = _write_tiny_data(tmp_path)
     out_dir = str(Path(tmp_path) / "out")
@@ -169,7 +168,10 @@ def test_checkpoint_load_restores_rng(tmp_path, monkeypatch):
         # --- Behavioral: constructing a --resume trainer rewinds the torch
         # RNG to the save point (nothing after _maybe_resume consumes RNG).
         args_b = _make_args(
-            data_dir, out_dir, max_iters=3, eval_interval=100,
+            data_dir,
+            out_dir,
+            max_iters=3,
+            eval_interval=100,
             resume=str(ckpt_path),
         )
         trainer_b = PretrainTrainer(args_b)
@@ -188,9 +190,7 @@ def test_checkpoint_load_restores_rng(tmp_path, monkeypatch):
         def fake_set_rng_state(rng_state):
             rng_calls.append(rng_state)
 
-        monkeypatch.setattr(
-            checkpoint_mod, "set_rng_state", fake_set_rng_state
-        )
+        monkeypatch.setattr(checkpoint_mod, "set_rng_state", fake_set_rng_state)
         monkeypatch.setattr(
             "training.trainer_base.set_rng_state",
             fake_set_rng_state,
@@ -198,7 +198,10 @@ def test_checkpoint_load_restores_rng(tmp_path, monkeypatch):
         )
 
         args_c = _make_args(
-            data_dir, out_dir, max_iters=3, eval_interval=100,
+            data_dir,
+            out_dir,
+            max_iters=3,
+            eval_interval=100,
             resume=str(ckpt_path),
         )
         trainer_c = PretrainTrainer(args_c)
@@ -219,6 +222,7 @@ def test_checkpoint_load_restores_rng(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # 2. resume_offset advances during training and resumes the data position
 # ---------------------------------------------------------------------------
+
 
 def test_resume_offset_advances_and_resumes_data(tmp_path):
     data_dir = _write_tiny_data(tmp_path)
@@ -245,7 +249,10 @@ def test_resume_offset_advances_and_resumes_data(tmp_path):
     # Run B resumes from the checkpoint: its first batch must equal the
     # uninterrupted run's next batch (chunk 32..35, sequential shuffle idx).
     args_b = _make_args(
-        data_dir, out_dir, max_iters=16, eval_interval=8,
+        data_dir,
+        out_dir,
+        max_iters=16,
+        eval_interval=8,
         resume=str(ckpt_path),
     )
     trainer_b = PretrainTrainer(args_b)
@@ -261,6 +268,7 @@ def test_resume_offset_advances_and_resumes_data(tmp_path):
 # ---------------------------------------------------------------------------
 # 3. early_stop_counter save / restore / old-format default
 # ---------------------------------------------------------------------------
+
 
 def test_early_stop_counter_roundtrip(tmp_path):
     data_dir = _write_tiny_data(tmp_path)
@@ -289,7 +297,10 @@ def test_early_stop_counter_roundtrip(tmp_path):
 
     # Resume from the new-format checkpoint: counter restored to 1.
     args_b = _make_args(
-        data_dir, out_dir, max_iters=12, eval_interval=4,
+        data_dir,
+        out_dir,
+        max_iters=12,
+        eval_interval=4,
         resume=str(ckpt_path),
     )
     trainer_b = PretrainTrainer(args_b)
@@ -313,7 +324,10 @@ def test_early_stop_counter_roundtrip(tmp_path):
         old_path,
     )
     args_c = _make_args(
-        data_dir, out_dir, max_iters=12, eval_interval=4,
+        data_dir,
+        out_dir,
+        max_iters=12,
+        eval_interval=4,
         resume=str(old_path),
     )
     trainer_c = PretrainTrainer(args_c)
@@ -327,14 +341,13 @@ def test_early_stop_counter_roundtrip(tmp_path):
 # 4. --ckpt_interval: extra latest saves between eval points
 # ---------------------------------------------------------------------------
 
+
 def test_ckpt_interval_saves_more_often(tmp_path):
     data_dir = _write_tiny_data(tmp_path)
     out_dir = str(Path(tmp_path) / "out")
 
     # --- ckpt_interval=5: latest saves at iters 5 and 10 (off eval points).
-    args = _make_args(
-        data_dir, out_dir, max_iters=11, eval_interval=100, ckpt_interval=5
-    )
+    args = _make_args(data_dir, out_dir, max_iters=11, eval_interval=100, ckpt_interval=5)
     trainer = PretrainTrainer(args)
     try:
         saved = []
@@ -355,9 +368,7 @@ def test_ckpt_interval_saves_more_often(tmp_path):
 
     # --- Default ckpt_interval=0: latest saves only at eval-multiple steps
     # (in-loop eval at 4, final block at 8 — both multiples of eval_interval).
-    args2 = _make_args(
-        data_dir, out_dir, max_iters=8, eval_interval=4, ckpt_interval=0
-    )
+    args2 = _make_args(data_dir, out_dir, max_iters=8, eval_interval=4, ckpt_interval=0)
     trainer2 = PretrainTrainer(args2)
     try:
         saved2 = []
@@ -378,6 +389,7 @@ def test_ckpt_interval_saves_more_often(tmp_path):
 # ---------------------------------------------------------------------------
 # 5. Old-format checkpoint: missing keys default without error
 # ---------------------------------------------------------------------------
+
 
 def test_old_checkpoint_missing_keys_defaults(tmp_path):
     data_dir = _write_tiny_data(tmp_path)
@@ -406,7 +418,10 @@ def test_old_checkpoint_missing_keys_defaults(tmp_path):
         ref.cleanup()
 
     args = _make_args(
-        data_dir, out_dir, max_iters=6, eval_interval=100,
+        data_dir,
+        out_dir,
+        max_iters=6,
+        eval_interval=100,
         resume=str(old_path),
     )
     trainer = PretrainTrainer(args)

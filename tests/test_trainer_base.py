@@ -7,17 +7,16 @@ from pathlib import Path
 import pytest
 import torch
 
-
+from model.modern_gpt import ModernGPT
 from training.trainer_base import (
-    setup_distributed,
-    set_seed,
-    infer_device,
-    build_amp_context,
-    CheckpointManager,
     BaseTrainer,
+    CheckpointManager,
+    build_amp_context,
+    infer_device,
     make_worker_init_fn,
+    set_seed,
+    setup_distributed,
 )
-from model.modern_gpt import ModernGPT, ModernGPTConfig
 
 
 def test_setup_distributed_single_process():
@@ -176,7 +175,8 @@ def test_make_worker_init_fn_deterministic():
 # ---------------------------------------------------------------------------
 
 from helpers import tiny_modern_config
-from utils.checkpoint import save_checkpoint, load_checkpoint, get_rng_state
+
+from utils.checkpoint import get_rng_state, load_checkpoint, save_checkpoint
 
 
 def test_optimizer_weight_tying_dedup():

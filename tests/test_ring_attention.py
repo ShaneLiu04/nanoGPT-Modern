@@ -3,12 +3,11 @@
 import pytest
 import torch
 import torch.nn.functional as F
-
+from helpers import tiny_modern_config
 
 from model import ModernGPT, ModernGPTConfig
 from model import ring_attention as ring_attn_module
 from model.attention_utils import set_attention_backend
-from helpers import tiny_modern_config
 
 
 def _reference_sdpa(q, k, v, causal=True, scale=None):

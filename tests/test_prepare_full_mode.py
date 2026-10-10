@@ -62,12 +62,9 @@ def test_max_docs_help_documents_default_semantics():
         "`--split train` 1M-subset trap must be visible"
     )
     assert re.search(r"1,000,000|1M", help_text), (
-        "--help must spell out the default max_docs magnitude "
-        "('1,000,000' or '1M')"
+        "--help must spell out the default max_docs magnitude " "('1,000,000' or '1M')"
     )
-    assert "train" in help_text, (
-        "--help must tie the default docs cap to the train split"
-    )
+    assert "train" in help_text, "--help must tie the default docs cap to the train split"
 
 
 def test_full_mode_help_mentioned():
@@ -87,6 +84,6 @@ def test_full_mode_help_mentioned():
         # Strip the flag token itself so a bare `--full` (no description)
         # cannot pass; the remainder must still say "full" or 「全量」.
         remainder = line.replace("--full", "")
-        assert re.search(r"full|全量", remainder, re.IGNORECASE), (
-            f"--full help line lacks full-dataset semantics: {line!r}"
-        )
+        assert re.search(
+            r"full|全量", remainder, re.IGNORECASE
+        ), f"--full help line lacks full-dataset semantics: {line!r}"
