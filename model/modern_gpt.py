@@ -1507,6 +1507,9 @@ def _verify(
 
 
 class ModernGPT(nn.Module):
+    # FR12 capability flag: ModernGPT implements KV-cache generation.
+    supports_kv_cache = True
+
     def __init__(self, config: ModernGPTConfig):
         super().__init__()
         self.config = config

@@ -21,10 +21,7 @@ def evaluate_model(model, data, tokenizer, device, max_response_len=20):
         for prompt in prompts:
             toks = tokenizer.encode(prompt)
             input_ids = torch.tensor([toks], dtype=torch.long, device=device)
-            if (
-                hasattr(model, "generate")
-                and "use_cache" in model.generate.__code__.co_varnames
-            ):
+            if getattr(model, "supports_kv_cache", False):
                 generated = model.generate(
                     input_ids,
                     max_new_tokens=max_response_len,
