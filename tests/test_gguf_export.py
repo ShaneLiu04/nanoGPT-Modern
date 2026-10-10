@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 
+from helpers import tiny_modern_config
 from model.gguf_utils import (
     GGMLQuantizationType,
     GGUFWriter,
@@ -22,7 +23,7 @@ from model.modern_gpt import ModernGPT, ModernGPTConfig
 
 
 def _tiny_config():
-    return ModernGPTConfig(
+    return tiny_modern_config(
         n_layer=1, n_head=2, n_embd=16, block_size=32, vocab_size=50, dropout=0.0
     )
 

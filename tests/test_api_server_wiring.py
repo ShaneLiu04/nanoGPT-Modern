@@ -85,6 +85,7 @@ from fastapi.testclient import TestClient
 import api_server
 import inference.continuous_batching as cb
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 MAX_TOKENS = 8
 SEED = 1234
@@ -239,7 +240,7 @@ def server(tmp_path, monkeypatch):
     deleted again, so the module stays clean for later importers)."""
     _force_ord_tokenizer(monkeypatch)
     torch.manual_seed(SEED)
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=2,
         n_head=4,
         n_embd=32,

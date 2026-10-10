@@ -11,6 +11,7 @@ import torch
 
 from model.attention_utils import probe_gqa_sdpa_support, reset_gqa_probe_cache
 from model.modern_gpt import ModernGPT, ModernGPTConfig, _gqa_grouped_sdpa
+from helpers import tiny_modern_config
 
 # ---------------------------------------------------------------------------
 #  _gqa_grouped_sdpa unit tests
@@ -185,7 +186,7 @@ class TestGQABroadcastIntegration:
     """Integration tests: GQA broadcast strategy with full model."""
 
     def _make_model(self, gqa_broadcast="auto", **kw):
-        cfg = ModernGPTConfig(
+        cfg = tiny_modern_config(
             n_layer=1,
             n_head=4,
             n_embd=64,
@@ -261,7 +262,7 @@ class TestGQABroadcastIntegration:
 
     def test_gqa_broadcast_config_serialization(self):
         """gqa_broadcast round-trips through to_dict / from_dict."""
-        cfg = ModernGPTConfig(
+        cfg = tiny_modern_config(
             n_layer=1,
             n_head=4,
             n_embd=64,
@@ -275,7 +276,7 @@ class TestGQABroadcastIntegration:
     def test_gqa_broadcast_invalid_raises(self):
         """Invalid gqa_broadcast value raises ValueError."""
         with pytest.raises(ValueError, match="gqa_broadcast"):
-            ModernGPTConfig(
+            tiny_modern_config(
                 n_layer=1,
                 n_head=4,
                 n_embd=64,
@@ -285,7 +286,7 @@ class TestGQABroadcastIntegration:
     def test_mha_no_gqa_ignores_broadcast_mode(self):
         """When n_kv_head == n_head (MHA), broadcast mode is irrelevant."""
         model = ModernGPT(
-            ModernGPTConfig(
+            tiny_modern_config(
                 n_layer=1,
                 n_head=4,
                 n_embd=64,

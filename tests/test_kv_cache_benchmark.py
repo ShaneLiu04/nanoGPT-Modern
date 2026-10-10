@@ -13,12 +13,13 @@ import pytest
 import torch
 
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for timing")
 def test_kv_cache_decode_completes_efficiently():
     """Cache path must complete in bounded time for long sequences."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=12,
         n_head=8,
         n_embd=512,
@@ -69,7 +70,7 @@ def test_kv_cache_decode_completes_efficiently():
 
 def test_kv_cache_outputs_match_no_cache():
     """Cache and no-cache paths must produce identical token outputs."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=2,
         n_head=4,
         n_embd=128,

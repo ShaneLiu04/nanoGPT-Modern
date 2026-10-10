@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 @pytest.mark.skipif(
@@ -11,7 +12,7 @@ from model.modern_gpt import ModernGPT, ModernGPTConfig
 )
 def test_kv_cache_generation_memory_stable():
     """Repeated long generations should not leak memory beyond normal cache size."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=4,
         n_head=4,
         n_embd=256,

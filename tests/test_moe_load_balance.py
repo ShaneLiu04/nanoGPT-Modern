@@ -3,10 +3,11 @@
 import torch
 
 from model import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 def test_dense_swiglu_has_zero_aux_loss():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, num_experts=1)
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=16, num_experts=1)
     model = ModernGPT(cfg)
     x = torch.randint(0, cfg.vocab_size, (2, 8))
     logits, loss, _, aux_loss = model(x, targets=x, return_aux_loss=True)
@@ -15,7 +16,7 @@ def test_dense_swiglu_has_zero_aux_loss():
 
 
 def test_moe_returns_aux_loss():
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=2,
         n_head=2,
         n_embd=32,
@@ -33,7 +34,7 @@ def test_moe_returns_aux_loss():
 
 
 def test_moe_aux_loss_is_differentiable():
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=32,
@@ -51,7 +52,7 @@ def test_moe_aux_loss_is_differentiable():
 
 def test_moe_capacity_drops_tokens():
     """Capacity factor 0.5 with 4 experts should force some tokens to be dropped."""
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=32,
@@ -67,7 +68,7 @@ def test_moe_capacity_drops_tokens():
 
 
 def test_moe_config_serialization_roundtrip():
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=32,

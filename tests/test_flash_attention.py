@@ -13,6 +13,7 @@ import torch
 
 from model import ModernGPT, ModernGPTConfig
 from model import flash_attention as flash_attn_module
+from helpers import tiny_modern_config
 
 # ---------------------------------------------------------------------------
 #  Availability introspection
@@ -117,7 +118,7 @@ def test_flash_attention_with_cache_returns_none_when_unavailable():
 
 
 def test_model_runs_with_flash_flag_when_unavailable():
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=32,
@@ -131,7 +132,7 @@ def test_model_runs_with_flash_flag_when_unavailable():
 
 
 def test_flash_flag_config_serialization():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, use_flash_attn=True)
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, use_flash_attn=True)
     d = cfg.to_dict()
     cfg2 = ModernGPTConfig.from_dict(d)
     assert cfg2.use_flash_attn is True
@@ -139,7 +140,7 @@ def test_flash_flag_config_serialization():
 
 def test_flash_attn_with_gqa_model_forward():
     """GQA + use_flash_attn should work (falls back gracefully)."""
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=4,
         n_embd=32,
@@ -155,7 +156,7 @@ def test_flash_attn_with_gqa_model_forward():
 
 def test_flash_attn_with_gqa_model_generate():
     """GQA + use_flash_attn generate() should work (falls back gracefully)."""
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=4,
         n_embd=32,

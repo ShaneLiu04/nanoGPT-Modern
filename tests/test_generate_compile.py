@@ -7,12 +7,13 @@ import torch
 
 
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 @pytest.mark.parametrize("use_cache", [False, True])
 def test_generate_compile_matches_eager(use_cache):
     """generate(compile=True) must produce identical greedy output to eager mode."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=2,
         n_head=2,
         n_embd=32,
@@ -48,7 +49,7 @@ def test_generate_compile_matches_eager(use_cache):
 
 def test_generate_compile_no_op_on_cpu():
     """On CPU, compile=True should gracefully fall back to eager."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=16,
@@ -69,7 +70,7 @@ def test_generate_compile_no_op_on_cpu():
 @pytest.mark.parametrize("use_cache", [False, True])
 def test_generate_fullgraph_matches_eager(use_cache):
     """generate(compile='fullgraph') must match eager greedy output."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=2,
         n_head=2,
         n_embd=32,
@@ -104,7 +105,7 @@ def test_generate_fullgraph_matches_eager(use_cache):
 
 def test_generate_fullgraph_no_op_on_cpu():
     """On CPU, compile='fullgraph' should gracefully fall back to eager."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=16,

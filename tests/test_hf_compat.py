@@ -9,11 +9,12 @@ pytest.importorskip("transformers")
 
 from model.hf_model import NanoGPTModernConfig, NanoGPTModernForCausalLM
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 def test_hf_config_round_trip():
     """``NanoGPTModernConfig`` must round-trip to ``ModernGPTConfig``."""
-    original = ModernGPTConfig(
+    original = tiny_modern_config(
         n_layer=2,
         n_head=2,
         n_embd=32,
@@ -42,7 +43,7 @@ def test_hf_config_round_trip():
 
 def test_hf_save_load_state_dict():
     """Saving and loading via HF format must preserve weights."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=2,
         n_head=2,
         n_embd=32,
@@ -69,7 +70,7 @@ def test_hf_save_load_state_dict():
 
 def test_hf_forward_matches_native():
     """The HF wrapper forward must match the native model forward."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=2,
         n_head=2,
         n_embd=32,
@@ -96,7 +97,7 @@ def test_hf_forward_matches_native():
 
 def test_hf_generate_matches_native():
     """``generate`` through the wrapper must match native ``generate``."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=2,
         n_head=2,
         n_embd=32,

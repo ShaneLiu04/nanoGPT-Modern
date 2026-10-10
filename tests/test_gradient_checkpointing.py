@@ -5,6 +5,7 @@ import torch
 
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 @pytest.mark.parametrize(
@@ -47,7 +48,7 @@ def test_gradient_checkpointing_runs(model_cls, config_cls):
 
 def test_gradient_checkpointing_no_cache_in_training():
     """When gradient checkpointing is on, training forward must not return KV cache."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=2,
         n_head=4,
         n_embd=128,
@@ -67,5 +68,5 @@ def test_gradient_checkpointing_no_cache_in_training():
 
 def test_gradient_checkpointing_disabled_by_default():
     """Default config must not enable gradient checkpointing."""
-    config = ModernGPTConfig()
+    config = tiny_modern_config()
     assert not config.gradient_checkpointing

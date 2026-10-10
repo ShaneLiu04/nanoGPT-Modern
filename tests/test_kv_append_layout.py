@@ -63,7 +63,7 @@ def _make_model(seed, **cfg_overrides):
         dropout=0.0,
     )
     kwargs.update(cfg_overrides)
-    model = ModernGPT(ModernGPTConfig(**kwargs))
+    model = ModernGPT(tiny_modern_config(**kwargs))
     model.eval()
     return model
 
@@ -632,7 +632,7 @@ def test_decode_speedup_at_least_1_5x():
     margin below the observed ceiling.
     """
     torch.manual_seed(1000)
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         vocab_size=256,
         n_layer=8,
         n_head=8,
@@ -717,3 +717,159 @@ def test_cache_object_gqa_and_sliding_window_compat():
     logits_values, _ = _manual_decode(model_sw, prompt_sw, 12, "values")
     logits_object, _ = _manual_decode(model_sw, prompt_sw, 12, "object")
     _assert_logits_lists_equal(logits_values, logits_object, "sliding-window")
+
+
+# ---------------------------------------------------------------------------
+# Migrated from tests/test_bugfixes.py (FR11b split)
+# ---------------------------------------------------------------------------
+
+from helpers import tiny_model, tiny_modern_config
+
+
+def test_modern_gpt_kv_cache_dtype():
+    """ModernGPT.generate(use_cache=True) must not crash on dtype mismatch."""
+    config = tiny_modern_config(
+        n_head=4,
+        n_embd=128,
+        block_size=64,
+        n_kv_head=2,
+    )
+    model = ModernGPT(config)
+    model.eval()
+    idx = torch.tensor([[1, 2, 3, 4, 5]])
+    with torch.no_grad():
+        out = model.generate(idx, max_new_tokens=5, use_cache=True)
+    assert out.shape[0] == 1
+    assert out.shape[1] == 10
+    print("[OK] ModernGPT KV cache dtype fix works")
+
+
+def test_kv_cache_ring_buffer_order():
+    """Ring-buffer cache must return keys/values in logical order."""
+    B, n_layers, n_kv_heads, head_dim, max_len = 2, 1, 2, 4, 6
+    cache = KVCacheManager(
+        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
+    )
+    cache.init_cache(B, "cpu", torch.float32)
+
+    # Write 4 tokens.
+    tok4 = (
+        torch.arange(B * n_kv_heads * 4 * head_dim)
+        .view(B, n_kv_heads, 4, head_dim)
+        .float()
+    )
+    cache.update(0, tok4, tok4.clone())
+    cache.advance(4)
+    blocks = cache.get_cache()
+    assert len(blocks) == 1
+    assert torch.equal(blocks[0][0], tok4)
+    assert torch.equal(blocks[0][1], tok4)
+    assert cache.cache_len == 4
+
+    # Write 3 more tokens (wraps around, evicts oldest tokens).
+    # One slot is reserved for the next single-token decode step, so the
+    # effective capacity is max_len - 1.
+    tok3 = (
+        torch.arange(B * n_kv_heads * 3 * head_dim)
+        .view(B, n_kv_heads, 3, head_dim)
+        .float()
+        + 1000
+    )
+    cache.update(0, tok3, tok3.clone())
+    cache.advance(3)
+    effective_len = max_len - 1
+    assert cache.cache_len == effective_len
+    assert cache.start_pos == 2
+
+    blocks = cache.get_cache()
+    # When wrapped, the single layer is represented by two contiguous blocks.
+    assert isinstance(blocks[0], list)
+    assert len(blocks[0]) == 2
+    recovered = torch.cat([blocks[0][0][0], blocks[0][1][0]], dim=2)
+    expected = torch.cat([tok4[:, :, 2:, :], tok3], dim=2)
+    assert torch.equal(recovered, expected)
+    print("[OK] KV Cache ring buffer ordering works")
+
+
+def test_kv_cache_sliding_window_eviction():
+    """Cache must keep only the last max_cache_len tokens."""
+    B, n_layers, n_kv_heads, head_dim, max_len = 1, 1, 1, 2, 4
+    cache = KVCacheManager(
+        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
+    )
+    cache.init_cache(B, "cpu", torch.float32)
+
+    for step in range(8):
+        new = torch.full((B, n_kv_heads, 1, head_dim), float(step))
+        cache.update(0, new, new.clone())
+        cache.advance(1)
+
+    # Effective capacity is max_len - 1 to leave room for the next decode token.
+    effective_len = max_len - 1
+    assert cache.cache_len == effective_len
+    assert cache.start_pos == 5
+    layer_cache = cache.get_cache()[0]
+    if isinstance(layer_cache, list):
+        recovered = torch.cat([b[0] for b in layer_cache], dim=2)
+    else:
+        recovered = layer_cache[0]
+    expected = (
+        torch.arange(5, 8)
+        .view(1, 1, effective_len, 1)
+        .expand(-1, -1, -1, head_dim)
+        .float()
+    )
+    assert torch.equal(recovered, expected)
+    print("[OK] KV Cache sliding window eviction works")
+
+
+def test_kv_cache_long_generate_consistency():
+    """generate(use_cache=True) must match no-cache output even when exceeding cache length."""
+    model = tiny_model()
+    config = model.config
+
+    idx = torch.randint(0, config.vocab_size, (1, 5))
+    # Use greedy decoding so sampled tokens depend only on the logits, not on
+    # the RNG state difference between the two generate() calls.
+    with torch.no_grad():
+        out_cache = model.generate(idx, max_new_tokens=40, use_cache=True, top_k=1)
+        out_nocache = model.generate(idx, max_new_tokens=40, use_cache=False, top_k=1)
+
+    assert out_cache.shape == out_nocache.shape
+    assert torch.equal(out_cache, out_nocache)
+    print("[OK] Long generation with KV cache matches no-cache output")
+
+
+def test_kv_cache_set_restore():
+    """set_cache must restore logical order and state."""
+    B, n_layers, n_kv_heads, head_dim, max_len = 1, 2, 2, 4, 8
+    cache = KVCacheManager(
+        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
+    )
+    cache.init_cache(B, "cpu", torch.float32)
+
+    k = torch.randn(B, n_kv_heads, 5, head_dim)
+    v = torch.randn(B, n_kv_heads, 5, head_dim)
+    cache.update(0, k, v)
+    cache.update(1, k, v)
+    cache.advance(5)
+
+    snapshot = cache.get_cache()
+    cache2 = KVCacheManager(
+        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
+    )
+    cache2.init_cache(B, "cpu", torch.float32)
+    cache2.set_cache(snapshot)
+
+    assert cache2.cache_len == cache.cache_len
+    assert cache2.start_pos == cache.start_pos
+    restored = cache2.get_cache()
+    for i in range(n_layers):
+        if isinstance(snapshot[i], list):
+            for j in range(len(snapshot[i])):
+                assert torch.equal(snapshot[i][j][0], restored[i][j][0])
+                assert torch.equal(snapshot[i][j][1], restored[i][j][1])
+        else:
+            assert torch.equal(snapshot[i][0], restored[i][0])
+            assert torch.equal(snapshot[i][1], restored[i][1])
+    print("[OK] KV Cache set/restore works")

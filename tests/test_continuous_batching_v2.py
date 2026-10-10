@@ -81,6 +81,7 @@ import torch
 import inference.continuous_batching as cb
 from inference.generate_utils import _sample_logits
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 VOCAB = 64
 # Out-of-vocab sentinel EOS id: greedy argmax is always < VOCAB, so a
@@ -96,7 +97,7 @@ SENTINEL_EOS = VOCAB + 1000
 def _tiny_model(seed=0, position_encoding="rope"):
     """Tiny fp32 ModernGPT in eval mode (2 layers, 4 heads, 32 dim)."""
     torch.manual_seed(seed)
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=2,
         n_head=4,
         n_embd=32,
