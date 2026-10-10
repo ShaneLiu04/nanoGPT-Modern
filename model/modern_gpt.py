@@ -1,6 +1,16 @@
 """
-ModernGPT: RMSNorm + SwiGLU FFN + RoPE (Rotary Position Embedding).
-Supports KV Cache for efficient autoregressive generation.
+ModernGPT: a modernized GPT with RMSNorm, SwiGLU FFN and RoPE (Rotary
+Position Embedding), plus GQA (Grouped Query Attention), optional MoE
+(Mixture of Experts) experts in the FFN, multi-token prediction (MTP),
+sliding-window attention, document-aware masking, KV Cache (append-layout
+with ring eviction) for efficient autoregressive generation, and
+speculative decoding (draft/verify) on the generation path.
+
+Layout (see the ``SECTION:`` banners below for navigation):
+  1. architecture components (norm / RoPE / attention / FFN / block / config)
+  2. KV cache (paged & append-layout cache utilities live in kv_cache_utils)
+  3. speculative decoding (sampling, draft/verify helpers)
+  4. generation (ModernGPT forward, generate, compile, EMA)
 """
 
 from __future__ import annotations
@@ -19,14 +29,26 @@ from . import ring_attention as _ring_attention
 from .attention_utils import sdpa_supports_enable_gqa
 from .kv_cache_utils import build_sliding_window_mask
 
+# ============================================================================
+# SECTION: ARCHITECTURE COMPONENTS (norm / RoPE / attention / FFN / block)
+# ============================================================================
+
 
 class RMSNorm(nn.Module):
+    """Root-mean-square layer norm (no mean subtraction, no bias).
+
+    Delegates to PyTorch's fused ``F.rms_norm`` when available
+    (PyTorch >= 2.4) and falls back to a numerically stable fp32 manual
+    implementation otherwise.
+    """
+
     def __init__(self, ndim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(ndim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize ``x`` over the last dimension and rescale by ``weight``."""
         # Use PyTorch's fused RMSNorm when available (PyTorch >= 2.4).
         if hasattr(F, "rms_norm") and not torch.jit.is_scripting():
             return F.rms_norm(x, x.shape[-1:], self.weight, self.eps)
@@ -91,6 +113,11 @@ class RotaryEmbedding(nn.Module):
     def forward(
         self, x: torch.Tensor, seq_len: int | None = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the ``[:seq_len]`` cos/sin RoPE tables, building them lazily.
+
+        ``seq_len`` defaults to the sequence length of ``x``. The tables are
+        cached and only rebuilt when a longer context is requested.
+        """
         if seq_len is None:
             seq_len = x.shape[-3]
         self._ensure_cache(seq_len, device=x.device, dtype=self.inv_freq.dtype)
@@ -116,11 +143,14 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 def apply_rotary_pos_emb_single(
     x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> torch.Tensor:
-    # x: [batch, n_heads, seq_len, head_dim]
-    # cos, sin: [seq_len, head_dim] (shared positions) or
-    # [batch, seq_len, head_dim] (per-row explicit positions, e.g. the
-    # iteration-level continuous batching decode where each batch row
-    # sits at its own absolute position).
+    """Apply RoPE with explicit position tables (no cache assumptions).
+
+    x: [batch, n_heads, seq_len, head_dim]
+    cos, sin: [seq_len, head_dim] (shared positions) or
+    [batch, seq_len, head_dim] (per-row explicit positions, e.g. the
+    iteration-level continuous batching decode where each batch row
+    sits at its own absolute position).
+    """
     if cos.ndim == 3:
         cos = cos.unsqueeze(1)
         sin = sin.unsqueeze(1)
@@ -329,6 +359,14 @@ class CausalSelfAttention(nn.Module):
         positions: torch.Tensor | None = None,
         kv_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+        """Project, attend, and return ``(attn_out, present_kv)``.
+
+        ``present_kv`` is the layer's updated ``(k, v)`` when ``use_cache``
+        is set (append-layout buffer views included), else ``None``.
+        Causal/padding/document/sliding-window masks are combined into a
+        single additive mask; when no masking is needed the fused SDPA
+        ``is_causal`` fast path is used instead.
+        """
         B, T, C = x.size()
         # attention_mask: optional [B, T] or [B, 1, T] bool tensor.  True = attend,
         # False = mask out.  Used for left-padded batch generation/GRPO.
@@ -854,6 +892,12 @@ class SwiGLU(nn.Module):
         self.register_state_dict_post_hook(_save_translate)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """SwiGLU (or MoE router dispatch) FFN forward.
+
+        Returns ``(out, aux_loss)``: with a single expert the aux loss is a
+        zero scalar; with MoE the router dispatches the top-k experts per
+        token (vectorized) and the aux loss is the load-balancing term.
+        """
         if self.num_experts <= 1:
             gate = F.silu(self.gate_proj(x))
             up = self.up_proj(x)
@@ -938,6 +982,7 @@ class GELUFFN(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """GELU FFN forward; returns ``(out, zero_aux_loss)`` for Block parity."""
         out = self.proj(F.gelu(self.fc(x)))
         return self.dropout(out), torch.zeros((), device=x.device, dtype=x.dtype)
 
@@ -984,6 +1029,14 @@ class Block(nn.Module):
         tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]
         | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None, torch.Tensor]
     ):
+        """One transformer block: attention sub-layer + FFN sub-layer.
+
+        Applies the configured norm position (pre/post), optionally
+        checkpointing each sub-layer (training + gradient_checkpointing
+        enabled). Returns ``(x, present_kv)`` or, with
+        ``return_aux_loss``, ``(x, present_kv, aux_loss)`` where the aux
+        loss carries the MoE load-balancing term (zero for dense FFNs).
+        """
         gc_enabled = self.training and getattr(self.config, "gradient_checkpointing", False)
 
         aux_loss = torch.zeros((), device=x.device, dtype=x.dtype)
@@ -1225,6 +1278,7 @@ class ModernGPTConfig:
 
     @n_rep.setter
     def n_rep(self, value):
+        """Store the GQA repeat factor explicitly (checkpoint round-trip)."""
         self._n_rep = value
 
     def to_dict(self) -> dict:
@@ -1321,6 +1375,12 @@ class ModernGPTConfig:
         )
 
 
+# ============================================================================
+# SECTION: KV CACHE GENERATION UTILITIES (sampling helpers for the cached
+#          decode path; the cache managers live in kv_cache_utils.py)
+# ============================================================================
+
+
 def _mask_logits(
     logits: torch.Tensor,
     top_k: int | None = None,
@@ -1357,6 +1417,11 @@ def _sample(
     logits = _mask_logits(logits, top_k, top_p)
     probs = F.softmax(logits, dim=-1)
     return torch.multinomial(probs, num_samples=1)
+
+
+# ============================================================================
+# SECTION: SPECULATIVE DECODING (draft sampling + verification)
+# ============================================================================
 
 
 def _draft_sample(logits: torch.Tensor, temperature: float) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1439,7 +1504,23 @@ def _verify(
     return accepted, n_accepted
 
 
+# ============================================================================
+# SECTION: GENERATION (ModernGPT: forward / generate / compile / EMA)
+# ============================================================================
+
+
 class ModernGPT(nn.Module):
+    """Modern transformer LM (RMSNorm + RoPE + GQA + SwiGLU/MoE FFN).
+
+    Supports KV-cache generation (append-layout buffers with ring
+    eviction), document-aware attention, sliding windows, multi-token
+    prediction heads (MTP), speculative decoding, optional
+    torch.compile of the decode step, and EMA weight tracking for
+    evaluation. ``forward`` returns ``(logits, loss, kvs_or_aux)``
+    (FR12 3-tuple contract); see the class-level ``supports_kv_cache``
+    capability flag.
+    """
+
     # FR12 capability flag: ModernGPT implements KV-cache generation.
     supports_kv_cache = True
 
@@ -1570,6 +1651,16 @@ class ModernGPT(nn.Module):
         tuple[torch.Tensor, torch.Tensor | None, Any]
         | tuple[torch.Tensor, torch.Tensor | None, Any, torch.Tensor]
     ):
+        """Full LM forward: embeddings -> blocks -> head (FR12 3-tuple).
+
+        Returns ``(logits, loss, kvs)`` where ``loss`` is the next-token
+        cross-entropy when ``targets`` is given (else None) and ``kvs``
+        is the per-layer KV cache when ``use_cache=True`` (else None).
+        With ``return_aux_loss=True`` the MoE/MTP auxiliary loss is
+        appended as a fourth element. Explicit ``positions``/``kv_mask``
+        drive the continuous-batching decode path; ``document_ids`` adds
+        document-boundary masking.
+        """
         device = idx.device
         b, t = idx.size()
         max_len = self.config.effective_block_size
@@ -1713,6 +1804,7 @@ class ModernGPT(nn.Module):
         return logits, loss, new_past_kvs
 
     def crop_block_size(self, block_size: int) -> None:
+        """Shrink the model's context window (GPT-2 style warmup helper)."""
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
 
@@ -1723,6 +1815,12 @@ class ModernGPT(nn.Module):
         betas: tuple[float, float],
         device_type: str,
     ) -> torch.optim.Optimizer:
+        """Build AdamW with weight-decay groups (2D+ params decay, 1D don't).
+
+        Parameters are deduplicated by tensor id (``wte`` and ``lm_head``
+        share a weight tensor), and the fused CUDA AdamW kernel is used
+        when available.
+        """
         # Deduplicate parameters by tensor id.  wte and lm_head share the same
         # weight tensor, so without deduplication AdamW would update it twice.
         param_dict = {id(p): (n, p) for n, p in self.named_parameters() if p.requires_grad}
@@ -2775,6 +2873,7 @@ class ModernGPT(nn.Module):
         self.apply_ema_weights()
 
     def get_num_params(self, non_embedding=True):
+        """Count parameters, optionally excluding the token embedding."""
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
             n_params -= self.transformer.wte.weight.numel()
