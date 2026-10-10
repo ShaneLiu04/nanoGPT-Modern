@@ -119,9 +119,16 @@ def apply_rotary_pos_emb_single(
     x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> torch.Tensor:
     # x: [batch, n_heads, seq_len, head_dim]
-    # cos, sin: [seq_len, head_dim]
-    cos = cos.unsqueeze(0).unsqueeze(0)
-    sin = sin.unsqueeze(0).unsqueeze(0)
+    # cos, sin: [seq_len, head_dim] (shared positions) or
+    # [batch, seq_len, head_dim] (per-row explicit positions, e.g. the
+    # iteration-level continuous batching decode where each batch row
+    # sits at its own absolute position).
+    if cos.ndim == 3:
+        cos = cos.unsqueeze(1)
+        sin = sin.unsqueeze(1)
+    else:
+        cos = cos.unsqueeze(0).unsqueeze(0)
+        sin = sin.unsqueeze(0).unsqueeze(0)
     return x * cos + rotate_half(x) * sin
 
 
@@ -323,6 +330,8 @@ class CausalSelfAttention(nn.Module):
         start_pos: int = 0,
         attention_mask: Optional[torch.Tensor] = None,
         document_ids: Optional[torch.Tensor] = None,
+        positions: Optional[torch.Tensor] = None,
+        kv_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         B, T, C = x.size()
         # attention_mask: optional [B, T] or [B, 1, T] bool tensor.  True = attend,
@@ -330,6 +339,13 @@ class CausalSelfAttention(nn.Module):
         # document_ids: optional [B, T] long tensor.  When provided, position i is
         # only allowed to attend to positions j <= i within the same document id.
         # This enables packed sequences with multiple documents per sample.
+        # positions: optional [B, T] long tensor of explicit 0-based absolute
+        # positions.  When given, RoPE indexes the cos/sin tables by these
+        # positions instead of the implicit start_pos + past_len + j arithmetic
+        # (iteration-level continuous batching: each row has its own length).
+        # kv_mask: optional [B, past_len] bool tensor (True = valid KV).  With a
+        # value-form past, False positions are additively masked out, i.e. they
+        # behave exactly as if those KV entries did not exist.
 
         # --- project to Q / K / V ---
         q = self.q_proj(x)  # [B, T, n_embd]
@@ -374,6 +390,8 @@ class CausalSelfAttention(nn.Module):
                 T == 1
                 and attention_mask is None
                 and document_ids is None
+                and positions is None
+                and kv_mask is None
                 and (self.sliding_window_size is None or self.sliding_window_size <= 0)
                 and not cache_obj.evicted
                 and getattr(cache_obj, "layout", "append") == "append"
@@ -396,9 +414,19 @@ class CausalSelfAttention(nn.Module):
             past_len = past_kv[0].shape[2]
         total_len = past_len + T
         if self.position_encoding == "learned":
-            # Absolute position embedding: no rotary transform is applied.
+            # Absolute position embedding: no rotary transform is applied
+            # (explicit positions are consumed at the model level via wpe).
             q_embed = q
             k_embed = k
+        elif positions is not None:
+            # Explicit per-row absolute positions: gather the cos/sin rows
+            # by position index instead of the implicit slice arithmetic.
+            seq_needed = int(positions.max().item()) + 1
+            cos_full, sin_full = self.rope(q, seq_len=seq_needed)
+            cos_pos = cos_full[positions]  # [B, T, head_dim]
+            sin_pos = sin_full[positions]
+            q_embed = apply_rotary_pos_emb_single(q, cos_pos, sin_pos)
+            k_embed = apply_rotary_pos_emb_single(k, cos_pos, sin_pos)
         else:
             cos_full, sin_full = self.rope(q, seq_len=start_pos + total_len)
 
@@ -608,6 +636,26 @@ class CausalSelfAttention(nn.Module):
                                 additive_mask.expand(-1, -1, T, -1) + attn_mask
                             )
                         attn_mask = additive_mask
+
+                if kv_mask is not None:
+                    # Per-row past-KV validity mask ([B, past_len] bool).
+                    # Rows of a batch may carry unequal real KV lengths
+                    # (iteration-level batching); the invalid tail of the
+                    # buffer must not contribute to attention.
+                    total_kv = k_embed.shape[2]
+                    cur_valid = torch.ones(
+                        (B, total_kv - kv_mask.shape[1]),
+                        dtype=torch.bool,
+                        device=x.device,
+                    )
+                    kv_valid = torch.cat([kv_mask, cur_valid], dim=1)
+                    kv_add = torch.zeros(
+                        (B, 1, 1, total_kv), device=x.device, dtype=q_embed.dtype
+                    )
+                    kv_add.masked_fill_(
+                        ~kv_valid.unsqueeze(1).unsqueeze(2), float("-inf")
+                    )
+                    attn_mask = kv_add if attn_mask is None else attn_mask + kv_add
 
                 # GQA broadcast strategy — ``_gqa_mode`` is one of
                 # "native" / "raw" / "grouped" / "repeat".
@@ -978,6 +1026,8 @@ class Block(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         document_ids: Optional[torch.Tensor] = None,
         return_aux_loss: bool = False,
+        positions: Optional[torch.Tensor] = None,
+        kv_mask: Optional[torch.Tensor] = None,
     ) -> Union[
         Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]],
         Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], torch.Tensor],
@@ -1019,6 +1069,8 @@ class Block(nn.Module):
                 start_pos=start_pos,
                 attention_mask=attention_mask,
                 document_ids=document_ids,
+                positions=positions,
+                kv_mask=kv_mask,
             )
             x = x + attn_out
             mlp_out, mlp_aux = self.mlp(self.ln_2(x))
@@ -1055,6 +1107,8 @@ class Block(nn.Module):
                 start_pos=start_pos,
                 attention_mask=attention_mask,
                 document_ids=document_ids,
+                positions=positions,
+                kv_mask=kv_mask,
             )
             x = self.ln_1(residual + attn_out)
             mlp_out, mlp_aux = self.mlp(x)
@@ -1578,6 +1632,8 @@ class ModernGPT(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         document_ids: Optional[torch.Tensor] = None,
         return_aux_loss: bool = False,
+        positions: Optional[torch.Tensor] = None,
+        kv_mask: Optional[torch.Tensor] = None,
     ) -> Union[
         Tuple[torch.Tensor, Optional[torch.Tensor], Any],
         Tuple[torch.Tensor, Optional[torch.Tensor], Any, torch.Tensor],
@@ -1599,30 +1655,47 @@ class ModernGPT(nn.Module):
         if learned_pe:
             # Absolute position embedding: the j-th current token sits at absolute
             # index start_pos + past_len + j (mirrors the RoPE slice logic),
-            # independent of any cache trimming offsets.
-            if past_kvs is not None:
-                if not isinstance(past_kvs, (list, tuple)) and hasattr(
-                    past_kvs, "cache_len"
-                ):
-                    # KVCacheManager object form.
-                    past_len = past_kvs.cache_len
-                else:
-                    first = past_kvs[0]
-                    if isinstance(first, list):
-                        past_len = sum(bk.shape[2] for bk, _ in first)
-                    else:
-                        past_len = first[0].shape[2]
+            # independent of any cache trimming offsets.  Explicit ``positions``
+            # (e.g. the continuous batching scheduler decode) override the
+            # implicit arithmetic.
+            if positions is not None:
+                if tuple(positions.shape) != (b, t):
+                    raise ValueError(
+                        f"positions must have shape [batch, seq_len] = "
+                        f"[{b}, {t}], got {tuple(positions.shape)}"
+                    )
+                pos_max = int(positions.max().item())
+                if pos_max >= self.config.block_size:
+                    raise ValueError(
+                        f"learned position encoding supports at most "
+                        f"block_size={self.config.block_size} absolute "
+                        f"positions, got {pos_max}"
+                    )
+                tok_emb = tok_emb + self.transformer.wpe(positions)
             else:
-                past_len = 0
-            pos_end = start_pos + past_len + t
-            if pos_end > self.config.block_size:
-                raise ValueError(
-                    f"learned position encoding supports at most "
-                    f"block_size={self.config.block_size} absolute positions, "
-                    f"got {pos_end}"
-                )
-            positions = torch.arange(start_pos + past_len, pos_end, device=device)
-            tok_emb = tok_emb + self.transformer.wpe(positions)
+                if past_kvs is not None:
+                    if not isinstance(past_kvs, (list, tuple)) and hasattr(
+                        past_kvs, "cache_len"
+                    ):
+                        # KVCacheManager object form.
+                        past_len = past_kvs.cache_len
+                    else:
+                        first = past_kvs[0]
+                        if isinstance(first, list):
+                            past_len = sum(bk.shape[2] for bk, _ in first)
+                        else:
+                            past_len = first[0].shape[2]
+                else:
+                    past_len = 0
+                pos_end = start_pos + past_len + t
+                if pos_end > self.config.block_size:
+                    raise ValueError(
+                        f"learned position encoding supports at most "
+                        f"block_size={self.config.block_size} absolute positions, "
+                        f"got {pos_end}"
+                    )
+                pos_idx = torch.arange(start_pos + past_len, pos_end, device=device)
+                tok_emb = tok_emb + self.transformer.wpe(pos_idx)
         x = self.transformer.drop(tok_emb)
 
         new_past_kvs: Any = [] if use_cache else None
@@ -1653,6 +1726,8 @@ class ModernGPT(nn.Module):
                     attention_mask=attention_mask,
                     document_ids=document_ids,
                     return_aux_loss=True,
+                    positions=positions,
+                    kv_mask=kv_mask,
                 )
                 total_aux_loss = total_aux_loss + block_aux
             else:
@@ -1663,6 +1738,8 @@ class ModernGPT(nn.Module):
                     start_pos=start_pos,
                     attention_mask=attention_mask,
                     document_ids=document_ids,
+                    positions=positions,
+                    kv_mask=kv_mask,
                 )
             if use_cache:
                 assert new_past_kvs is not None
