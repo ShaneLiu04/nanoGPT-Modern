@@ -7,23 +7,10 @@ import json
 import torch
 
 
-from model.modern_gpt import ModernGPT, ModernGPTConfig
-from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from data.arithmetic import generate_easy, generate_medium, generate_hard
 from rewards.rule_reward import compute_reward_batch
+from training.trainer_base import load_model_from_checkpoint
 import tiktoken
-
-
-def load_model(path, model_type, device):
-    ckpt = torch.load(path, map_location=device, weights_only=False)
-    config = ckpt.get(
-        "config", ModernGPTConfig() if model_type == "modern" else BaselineGPTConfig()
-    )
-    model = ModernGPT(config) if model_type == "modern" else BaselineGPT(config)
-    model.load_state_dict(ckpt["model"])
-    model = model.to(device)
-    model.eval()
-    return model
 
 
 def evaluate_model(model, data, tokenizer, device, max_response_len=20):
@@ -108,7 +95,9 @@ def main():
         if not os.path.exists(path):
             print(f"  SKIP: {path} not found")
             continue
-        model = load_model(path, mtype, device)
+        model, _ = load_model_from_checkpoint(
+            path, device=device, model_type=mtype, eval_mode=True
+        )
         model_results = {}
         for level, data in eval_data.items():
             res = evaluate_model(model, data, tokenizer, device, max_response_len=20)

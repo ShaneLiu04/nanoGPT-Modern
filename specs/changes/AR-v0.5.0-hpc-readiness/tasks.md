@@ -32,7 +32,7 @@
 | T015 | FR7b api_server 接线新调度器（asyncio.to_thread/线程安全队列）+ 补齐或删除 --continuous_batching 声称 | T014 | passing | |
 | T016 | FR10 根目录收编：导出 4 脚本 → tools/、profile 2 脚本 → tools/、编排脚本处置（[project.scripts] 与测试路径同步）、删除死文件（run_inference_ablation.py/generate_experiment_log.py/logs_prepare*.txt） | - | passing | 删除前全库引用检查 |
 | T017 | FR11a training/args.py 公共 flag 提取（23 个重复 flag，~350 行净删） | - | passing | 可与 A 阶段并行提前 |
-| T018 | FR11b load_model 统一到 load_model_from_checkpoint（7 份拷贝收敛）+ tests/conftest.py tiny fixture + test_bugfixes.py 拆分 | T017 | pending | |
+| T018 | FR11b load_model 统一到 load_model_from_checkpoint（7 份拷贝收敛）+ tests/conftest.py tiny fixture + test_bugfixes.py 拆分 | T017 | passing | |
 | T019 | FR12 接口统一（breaking）：BaselineGPT 3-tuple 返回、no-op 参数显式化、调用点全量同步、反射 hack 清理、CHANGELOG | T013,T014 | pending | v0.5.0 大版本 |
 | T020 | FR13 lint/测试基建：black line-length=100 统一 + ruff 配置 + mypy 版本对齐 + test_kv_cache_benchmark 相对断言/perf marker + 文档数字刷新 | T017,T018 | pending | 一次性格式化对齐 |
 | T021 | FR14 理解力交付物：docs/ARCHITECTURE.md（训练基座）、modern_gpt.py 分区导航 + docstring 100%、GRPO 家族对比笔记、与 MIGRATION.md 交叉引用 | T011,T019 | pending | 收尾任务 |
@@ -354,3 +354,41 @@
 - 公共组以「定义完全一致」为入选标准，default 有差异的 13 个留脚本（AC「公共 flag 默认值/类型/--help 快照一致」反向要求公共组 default 必须相同）
 - ckpt_interval 语义沿用 B2 边界（0 = 跟随 eval_interval），trainer_base 消费端已有 getattr 兜底，新注入脚本零接线成本
 - iterative_grpo main() 不调 set_attention_backend（4 个 hydra 变体有）→ 注入 attn_backend flag 后暂不消费，无害；行为修复归 FR8/T019 范畴，记遗留
+
+### 2026-10-10 T018 会话记录（FR11b load_model 统一 + conftest tiny fixture + test_bugfixes 拆分）
+
+**调研（explore 子代理）：**
+- load_model 拷贝实测 **7 份函数级**（trainer_base 权威 + generate/run_full_evaluation/export_to_onnx/api_server/eval_benchmark 部分拷贝 + benchmark_suite 死代码）+ **2 处内联**（export_gguf/export_to_hf main 内）
+- 关键行为差异矩阵：仅权威实现支持 strict 参数；返回形式 4 种（(model,ckpt)/(model,config)/model 单值/3-tuple）；eval 语义 6/7 处 eval、权威实现不 eval（训练 resume 语义）；run_full_evaluation **完全不做 from_dict**（dict 直接当 config 用，统一后顺带修复）；generate 的 baseline+dict 分支有隐患
+- ModernGPTConfig( 手工构造 **97 处/32 文件**（目标 <40）；conftest.py 不存在；markers 未注册；tiny 超参事实标准 n_layer2/n_head2/n_embd64/block32/vocab100/drop0
+- test_bugfixes.py 670 行/18 用例；design 未给逐函数映射，按主题自定映射并写入测试锁定
+
+**Red（19 用例 test_fr11b_consolidation.py：17 Red + 1 error + 1 pin）：**
+- A 组：统一签名含 strict/eval_mode（pin：strict=True 现状已正确）；eval_mode 行为（training True/False）；strict=False 容忍缺键；6 个本地拷贝删除静态断言（generate/run_full_evaluation/export_to_onnx/benchmark_suite 死代码/api_server 委托 spy/eval_benchmark 内联）；generate 端到端 smoke
+- B 组：conftest 存在 + tiny_modern_config/tiny_model fixture；默认值锁定 + overrides 透传；pyproject markers（perf/slow）；**ModernGPTConfig( 计数 <40**（FR11-AC3，97 → Red）
+- C 组：test_bugfixes.py 删除；手动 runner 全库清零；18 用例 → 7 目标文件映射表（test_bugfixes_cases_live_at_new_homes 按 importlib hasattr 锁定）
+
+**Red 期修正 3 个测试自身缺陷：**
+- ModelServer → ModelState（类名调研不足，读 api_server 修正）
+- 跨脚本 help 一致比较改单测试内收集（沿 T017 教训）
+- `__main__` runner 扫描自指命中（测试文件引用 pattern 本身）→ 排除自身
+- generate smoke 两轮修正：vocab 50 → ord 越界（vocab 1000）→ 仍炸（本机 tiktoken gpt2 id 31373 > 1000）→ monkeypatch get_encoding 强制 ord fallback（T015 同款手法）
+
+**Green：**
+- A 组：trainer_base.load_model_from_checkpoint 加 `eval_mode=False` 参数（默认保持训练 resume 语义，15 个既有调用点零破坏）；7 处拷贝全部收敛——generate.py（load_model 删除+main 改调）、generate_hydra.py（import 改）、run_full_evaluation.py（顺带修复 from_dict 缺失）、export_to_onnx.py、api_server.py（_load 委托薄壳保留 (model,config) 接口）、benchmark_suite.py（死函数删除+清理 unused imports）、eval_benchmark.py（_auto_export_hf 改用统一函数，model_type 探测改 isinstance(model, ModernGPT)）、export_gguf.py/export_to_hf.py（内联拷贝收敛）
+- B 组：tests/helpers.py（TINY_DEFAULTS + tiny_modern_config/tiny_model 普通函数，供直接 import）+ tests/conftest.py（fixture 再导出 + pytest_configure markers）+ pyproject pythonpath 加 "tests"（conftest 导入早于 rootdir-prepend，须显式路径）+ markers 注册
+- C 组：test_bugfixes.py 按映射迁 7 文件（KV 5 → test_kv_append_layout、GRPO 3+2 helper → test_grpo、optimizer/EMA 2 → test_trainer_base、DocBoundary 2 → test_packing、prepare 2 → test_prepare_data_files、arithmetic 2 → 新建 test_arithmetic_data、rewards 2 → 新建 test_rule_reward），迁移时 Config 构造改 helpers 调用（**_make_tiny_checkpoint 保留显式 vocab_size=50257**——GRPO 用 GPT2 tokenizer ids，tiny 默认 vocab=100 会越界）；**保留 try/finally trainer.cleanup()**（Windows RotatingFileHandler 句柄阻塞 tmp 清理的既有约束）；删手动 runner
+- **Config 收敛**：脚本替换 89 处 `ModernGPTConfig(` → `tiny_modern_config(` + 自动插 import；**排除 3 风险文件**（test_dpo_trainer/test_grpo/test_packing——未传 vocab 且文件硬编码大 token id）；计数 97 → **5**（3 排除 + 2 计数测试 docstring 字样）
+- 脚本 bug 修正 1 次：多行 import 括号内误插 import 行（2 文件 SyntaxError，手工修复 + compileall 全验）
+
+**验证：**
+- 目标 19/19 全绿；迁移用例 50p/1s；全量 **588 passed / 3 skipped**（~93s；569 基线 - 18 重收 + 19 新增 + 18 迁移用例并入既有文件净计）零破坏
+- test_kv_append_layout 的既有 perf 用例 decode 1.5x 出现一次波动失败（全量并发计时边界），单独重跑通过、后续全量也过——flaky perf 非回归
+- FR11-AC3：计数 5 < 40 ✓；AC1：588 ≥ 338 基线 ✓
+
+**关键决策：**
+- eval_mode 默认 False（训练 resume 语义不变），推理/导出调用点显式传 True——既有 15 个训练调用点零改动
+- api_server._load 保留为薄壳（返回 (model, config) 接口不变，T015 接线测试零影响），内部委托统一函数
+- helpers.py 与 conftest fixture 并存：fixture 满足 design 接口，普通函数供 89 处直接 import（避免大范围函数签名插参）；config = model.config 替代 ckpt config 提取（两模型均有 .config 属性，已验证）
+- _make_tiny_checkpoint 显式 vocab 50257：tiny 默认 vocab=100 对 GPT2 tokenizer 路径是破坏性变更，该处保留原值
+- eval_benchmark._auto_export_hf 的 model_type 探测从 config dict 改 isinstance(model, ModernGPT)——语义等价（saved model_type 驱动构造），且少一份 config 解析重复

@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 def _tiny_config(**overrides):
@@ -21,7 +22,7 @@ def _tiny_config(**overrides):
         dropout=0.0,
     )
     kwargs.update(overrides)
-    return ModernGPTConfig(**kwargs)
+    return tiny_modern_config(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +35,7 @@ def test_config_invalid_position_encoding_raises_valueerror():
     cfg = _tiny_config(position_encoding="learned")
     assert cfg.position_encoding == "learned"
     with pytest.raises(ValueError):
-        ModernGPTConfig(position_encoding="sinusoid")
+        tiny_modern_config(position_encoding="sinusoid")
 
 
 def test_config_invalid_ffn_variant_raises_valueerror():
@@ -42,7 +43,7 @@ def test_config_invalid_ffn_variant_raises_valueerror():
     cfg = _tiny_config(ffn_variant="gelu")
     assert cfg.ffn_variant == "gelu"
     with pytest.raises(ValueError):
-        ModernGPTConfig(ffn_variant="relu")
+        tiny_modern_config(ffn_variant="relu")
 
 
 def test_config_intermediate_size_gelu_default():
@@ -51,7 +52,7 @@ def test_config_intermediate_size_gelu_default():
     n_embd=96 distinguishes the two rules: swiglu-aligned would be 256,
     gelu must be 384.
     """
-    cfg = ModernGPTConfig(n_embd=96, ffn_variant="gelu")
+    cfg = tiny_modern_config(n_embd=96, ffn_variant="gelu")
     assert cfg.intermediate_size == 4 * 96  # 384, not 256
 
 
@@ -60,7 +61,7 @@ def test_config_intermediate_size_swiglu_default_regression():
 
     n_embd=64: int(8/3*64)=170 -> aligned up to 256.
     """
-    cfg = ModernGPTConfig(n_embd=64)
+    cfg = tiny_modern_config(n_embd=64)
     assert cfg.intermediate_size == 256
     assert cfg.ffn_variant == "swiglu"
 
@@ -69,17 +70,17 @@ def test_config_learned_with_rope_scaling_raises_valueerror():
     """learned absolute PE + rope_scaling is an invalid combination."""
     scaling = {"type": "ntk", "factor": 2.0}
     # rope + scaling remains valid
-    cfg_rope = ModernGPTConfig(n_embd=64, rope_scaling=scaling)
+    cfg_rope = tiny_modern_config(n_embd=64, rope_scaling=scaling)
     assert cfg_rope.rope_scaling == scaling
     with pytest.raises(ValueError):
-        ModernGPTConfig(
+        tiny_modern_config(
             n_embd=64, position_encoding="learned", rope_scaling=scaling
         )
 
 
 def test_config_to_dict_includes_ablation_fields():
     """to_dict serializes the new fields; defaults are rope/swiglu."""
-    d = ModernGPTConfig(n_embd=64).to_dict()
+    d = tiny_modern_config(n_embd=64).to_dict()
     assert d["position_encoding"] == "rope"
     assert d["ffn_variant"] == "swiglu"
 
