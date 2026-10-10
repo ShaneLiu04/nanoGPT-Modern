@@ -4,6 +4,26 @@
 
 ---
 
+## v0.5.0（Unreleased）
+
+### ⚠️ Breaking Changes
+
+- **`BaselineGPT.forward` 统一返回 3-tuple `(logits, loss, None)`**（FR12）：
+  此前返回 2-tuple `(logits, loss)`，与 `ModernGPT.forward` 的
+  `(logits, loss, past_kvs)` 形状不一致，训练器需要 2-tuple 补偿 hack。
+  v0.5.0 起两模型解包长度一致（第三个槽位对 baseline 恒为 `None`）。
+  **迁移**：所有 `logits, loss = baseline_model(...)` 的 2-tuple 解包改为
+  3-tuple 解包（仓库内已全部同步，外部代码需跟进）。
+- `BaselineGPT.forward` 收到 `attention_mask` 时不再静默忽略：发出一次性
+  `UserWarning`（跨文档掩码需 ModernGPT）。
+- `BaselineGPT.generate` 的 `top_p` 从 no-op 变为**真实的 nucleus 采样**；
+  `use_cache=True` 仍为 no-op 但会发出显式警告（baseline 无 KV cache 基础设施）。
+- 新增能力属性 `supports_kv_cache`（`BaselineGPT=False` / `ModernGPT=True`），
+  取代 `__code__.co_varnames` 签名反射探测（后者曾把 baseline 的 no-op
+  `use_cache` 参数误判为"支持缓存"）。
+
+---
+
 ## 版本概览
 
 | 版本 | 时间 | 关键里程碑 |
