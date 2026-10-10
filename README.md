@@ -7,7 +7,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
   <a href="requirements.txt"><img src="https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C.svg" alt="PyTorch 2.0+"></a>
-  <img src="https://img.shields.io/badge/tests-230%2B%20passing-brightgreen.svg" alt="230+ tests">
+  <img src="https://img.shields.io/badge/tests-600%2B%20passing-brightgreen.svg" alt="600+ tests">
   <img src="https://img.shields.io/badge/version-0.3.0-8B5CF6.svg" alt="v0.3.0">
 </p>
 
@@ -66,7 +66,7 @@
 - **配置系统** — YAML + argparse 双向覆盖 · Hydra 可组合配置 · Pydantic 结构化校验（`n_head % n_kv_head == 0` 等规则）
 - **数据管道** — 全局 Shuffle（预计算索引）· 质量评分过滤 · MinHash+LSH 增量去重 · 多语言（tiktoken/SentencePiece + 语言检测加权采样）· 代码数据（AST 语法过滤）· 文档边界 / Packing（跨文档 mask）· 对话模板（chatml/llama-2/gemma）
 - **生态互操作** — HuggingFace 格式导出/加载（round-trip）· GGUF 导出（f32/f16/q8_0，内置无依赖 writer）· ONNX 导出（动态轴 + Runtime 验证）
-- **质量保障** — 230+ 回归测试（含确定性测试：固定种子 loss 曲线完全一致）· CI（pytest + mypy + black + ruff + CPU 冒烟训练）· 多阶段 Docker（训练 + TensorBoard + API）· pre-commit · 6 篇 ADR
+- **质量保障** — 600+ 回归测试（含确定性测试：固定种子 loss 曲线完全一致）· CI（pytest + mypy + black + ruff + CPU 冒烟训练）· 多阶段 Docker（训练 + TensorBoard + API）· pre-commit · 6 篇 ADR
 
 ---
 
@@ -402,7 +402,7 @@ nanogpt-modern/
 │   ├── dpo_utils.py         # DPO/IPO/KTO 损失
 │   ├── monitoring.py        # Loss Spike 检测 / 梯度范数分层
 │   └── profiler.py          # PyTorch Profiler + Chrome trace
-├── tests/                   # 230+ 回归测试
+├── tests/                   # 600+ 回归测试
 ├── docs/                    # 白皮书 / 变更日志 / 实验记录 / 6 篇 ADR
 ├── tools/export/            # 导出/互操作脚本（export_to_hf / load_from_hf / export_gguf / export_to_onnx）
 ├── api_server.py            # FastAPI OpenAI 兼容服务
