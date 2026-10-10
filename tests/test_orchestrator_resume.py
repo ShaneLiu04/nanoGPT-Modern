@@ -37,15 +37,14 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 import torch
 
 import run_component_ablations as rca
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _write_manifest(exp_dir, status="completed"):
     """Fake a T001 manifest.json inside an experiment dir."""
@@ -71,11 +70,10 @@ def _write_group_ckpt(out_root, name, iter_num, config):
 # 1. Completed-group skip (pre-existing FR4 contract regression)
 # ---------------------------------------------------------------------------
 
+
 def test_completed_group_skipped(tmp_path, monkeypatch):
     """A completed manifest skips the group without launching training."""
-    _write_manifest(
-        Path(rca.group_exp_dir(str(tmp_path), "baseline")), status="completed"
-    )
+    _write_manifest(Path(rca.group_exp_dir(str(tmp_path), "baseline")), status="completed")
     called = []
 
     def fake_run(cmd, *args, **kwargs):
@@ -84,12 +82,18 @@ def test_completed_group_skipped(tmp_path, monkeypatch):
 
     monkeypatch.setattr(rca.subprocess, "run", fake_run)
 
-    args = rca.get_args([
-        "--stage", "train",
-        "--groups", "baseline",
-        "--out_root", str(tmp_path),
-        "--config", str(tmp_path / "cfg.yaml"),
-    ])
+    args = rca.get_args(
+        [
+            "--stage",
+            "train",
+            "--groups",
+            "baseline",
+            "--out_root",
+            str(tmp_path),
+            "--config",
+            str(tmp_path / "cfg.yaml"),
+        ]
+    )
     result = rca.run_train_stage(args)
 
     assert called == []  # subprocess.run never invoked
@@ -101,6 +105,7 @@ def test_completed_group_skipped(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # 2. find_group_checkpoint: present / missing / corrupt
 # ---------------------------------------------------------------------------
+
 
 def test_find_group_checkpoint_three_states(tmp_path):
     out_root = str(tmp_path)
@@ -130,15 +135,14 @@ def test_find_group_checkpoint_three_states(tmp_path):
     # State 3: corrupt file (garbage bytes) -> None, no exception raised.
     corrupt_dir = Path(rca.group_out_dir(out_root, "moe"))
     corrupt_dir.mkdir(parents=True, exist_ok=True)
-    (corrupt_dir / "latest_ckpt.pt").write_bytes(
-        b"these are not torch archive bytes"
-    )
+    (corrupt_dir / "latest_ckpt.pt").write_bytes(b"these are not torch archive bytes")
     assert rca.find_group_checkpoint(out_root, "moe") is None
 
 
 # ---------------------------------------------------------------------------
 # 3. ckpt_matches_group: architecture-field comparison
 # ---------------------------------------------------------------------------
+
 
 def test_ckpt_matches_group():
     cfg = {
@@ -149,20 +153,17 @@ def test_ckpt_matches_group():
         "ffn_variant": "swiglu",
     }
     # Fully matching config vs flags.
-    assert rca.ckpt_matches_group(
-        cfg, ["--model", "modern", "--n_kv_head", "2"]
-    ) is True
+    assert rca.ckpt_matches_group(cfg, ["--model", "modern", "--n_kv_head", "2"]) is True
 
     # n_kv_head mismatch (ckpt 4 vs flag 2).
-    assert rca.ckpt_matches_group(
-        dict(cfg, n_kv_head=4), ["--model", "modern", "--n_kv_head", "2"]
-    ) is False
+    assert (
+        rca.ckpt_matches_group(dict(cfg, n_kv_head=4), ["--model", "modern", "--n_kv_head", "2"])
+        is False
+    )
 
     # n_kv_head=None in ckpt falls back to n_head (2) and matches the flag.
     gqa_cfg = dict(cfg, n_kv_head=None, n_head=2)
-    assert rca.ckpt_matches_group(
-        gqa_cfg, ["--model", "modern", "--n_kv_head", "2"]
-    ) is True
+    assert rca.ckpt_matches_group(gqa_cfg, ["--model", "modern", "--n_kv_head", "2"]) is True
 
     # num_experts: explicit flag matches.
     moe_cfg = {
@@ -171,9 +172,7 @@ def test_ckpt_matches_group():
         "position_encoding": "rope",
         "ffn_variant": "swiglu",
     }
-    assert rca.ckpt_matches_group(
-        moe_cfg, ["--model", "modern", "--num_experts", "4"]
-    ) is True
+    assert rca.ckpt_matches_group(moe_cfg, ["--model", "modern", "--num_experts", "4"]) is True
     # num_experts=4 vs no flag (default 1) -> False.
     assert rca.ckpt_matches_group(moe_cfg, ["--model", "modern"]) is False
 
@@ -183,19 +182,26 @@ def test_ckpt_matches_group():
     assert rca.ckpt_matches_group(base_cfg, ["--model", "baseline"]) is True
 
     # position_encoding / ffn_variant mismatches.
-    assert rca.ckpt_matches_group(
-        dict(cfg, position_encoding="learned"),
-        ["--model", "modern", "--n_kv_head", "2"],
-    ) is False
-    assert rca.ckpt_matches_group(
-        dict(cfg, ffn_variant="gelu"),
-        ["--model", "modern", "--n_kv_head", "2"],
-    ) is False
+    assert (
+        rca.ckpt_matches_group(
+            dict(cfg, position_encoding="learned"),
+            ["--model", "modern", "--n_kv_head", "2"],
+        )
+        is False
+    )
+    assert (
+        rca.ckpt_matches_group(
+            dict(cfg, ffn_variant="gelu"),
+            ["--model", "modern", "--n_kv_head", "2"],
+        )
+        is False
+    )
 
 
 # ---------------------------------------------------------------------------
 # 4. build_train_command: --resume injection
 # ---------------------------------------------------------------------------
+
 
 def test_build_train_command_injects_resume():
     # Without resume_from the command never contains --resume.
@@ -204,18 +210,14 @@ def test_build_train_command_injects_resume():
 
     # Path resume_from -> ["--resume", str(resume_from)].
     resume_from = Path("x") / "latest_ckpt.pt"
-    cmd = rca.build_train_command(
-        "moe", "cfg.yaml", out_root="o", resume_from=resume_from
-    )
+    cmd = rca.build_train_command("moe", "cfg.yaml", out_root="o", resume_from=resume_from)
     assert "--resume" in cmd
     assert cmd[cmd.index("--resume") + 1] == str(resume_from)
     # The rest of the FR4 command contract is unchanged.
     assert cmd[cmd.index("--exp_id") + 1] == "ablation-moe"
 
     # String resume_from is passed through verbatim.
-    cmd = rca.build_train_command(
-        "moe", "cfg.yaml", out_root="o", resume_from="x/latest_ckpt.pt"
-    )
+    cmd = rca.build_train_command("moe", "cfg.yaml", out_root="o", resume_from="x/latest_ckpt.pt")
     assert cmd[cmd.index("--resume") + 1] == "x/latest_ckpt.pt"
 
 
@@ -223,12 +225,11 @@ def test_build_train_command_injects_resume():
 # 5. run_train_stage: resumed failure falls back to a rerun
 # ---------------------------------------------------------------------------
 
+
 def test_resume_failure_falls_back_to_rerun(tmp_path, monkeypatch):
     out_root = str(tmp_path)
     name = "baseline"
-    _write_group_ckpt(
-        out_root, name, iter_num=77, config={"model_type": "baseline"}
-    )
+    _write_group_ckpt(out_root, name, iter_num=77, config={"model_type": "baseline"})
     # No manifest -> group not completed.
 
     calls = []
@@ -242,12 +243,18 @@ def test_resume_failure_falls_back_to_rerun(tmp_path, monkeypatch):
 
     monkeypatch.setattr(rca.subprocess, "run", fake_run)
 
-    args = rca.get_args([
-        "--stage", "train",
-        "--groups", name,
-        "--out_root", out_root,
-        "--config", str(tmp_path / "cfg.yaml"),
-    ])
+    args = rca.get_args(
+        [
+            "--stage",
+            "train",
+            "--groups",
+            name,
+            "--out_root",
+            out_root,
+            "--config",
+            str(tmp_path / "cfg.yaml"),
+        ]
+    )
     result = rca.run_train_stage(args)
 
     # Exactly two launches: resume attempt then plain rerun.
@@ -268,12 +275,11 @@ def test_resume_failure_falls_back_to_rerun(tmp_path, monkeypatch):
 # 6. run_train_stage: resumed_from_iter recording
 # ---------------------------------------------------------------------------
 
+
 def test_run_train_stage_records_resumed_from_iter(tmp_path, monkeypatch):
     out_root = str(tmp_path)
     name = "baseline"
-    _write_group_ckpt(
-        out_root, name, iter_num=123, config={"model_type": "baseline"}
-    )
+    _write_group_ckpt(out_root, name, iter_num=123, config={"model_type": "baseline"})
 
     calls = []
 
@@ -283,12 +289,18 @@ def test_run_train_stage_records_resumed_from_iter(tmp_path, monkeypatch):
 
     monkeypatch.setattr(rca.subprocess, "run", fake_run)
 
-    args = rca.get_args([
-        "--stage", "train",
-        "--groups", name,
-        "--out_root", out_root,
-        "--config", str(tmp_path / "cfg.yaml"),
-    ])
+    args = rca.get_args(
+        [
+            "--stage",
+            "train",
+            "--groups",
+            name,
+            "--out_root",
+            out_root,
+            "--config",
+            str(tmp_path / "cfg.yaml"),
+        ]
+    )
     result = rca.run_train_stage(args)
 
     # One launch, carrying --resume pointing at the group's latest_ckpt.pt.

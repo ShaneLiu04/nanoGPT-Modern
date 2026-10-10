@@ -1,9 +1,9 @@
 """Tests for Multi-Token Prediction (MTP)."""
 
 import torch
+from helpers import tiny_modern_config
 
 from model import ModernGPT, ModernGPTConfig
-from helpers import tiny_modern_config
 
 
 def test_mtp_adds_no_parameters_when_disabled():

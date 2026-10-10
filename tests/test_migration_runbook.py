@@ -65,9 +65,7 @@ def test_migration_doc_covers_required_sections():
     }
 
     missing = [name for name, check in required.items() if not check()]
-    assert not missing, (
-        f"docs/MIGRATION.md is missing required sections: {missing}"
-    )
+    assert not missing, f"docs/MIGRATION.md is missing required sections: {missing}"
 
 
 def test_reproduction_commands_use_full_mode():

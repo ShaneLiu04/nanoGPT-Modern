@@ -17,9 +17,7 @@ from utils.hydra_utils import to_namespace, validate_required  # noqa: E402
 
 
 def _config_dir():
-    return os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "config", "hydra")
-    )
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "hydra"))
 
 
 def _clear_hydra():
@@ -76,9 +74,7 @@ class TestHydraConfigs:
     def test_pretrain_cli_override(self):
         _clear_hydra()
         with initialize_config_dir(version_base=None, config_dir=_config_dir()):
-            cfg = compose(
-                config_name="pretrain", overrides=["batch_size=16", "n_layer=2"]
-            )
+            cfg = compose(config_name="pretrain", overrides=["batch_size=16", "n_layer=2"])
             assert cfg.batch_size == 16
             assert cfg.n_layer == 2
 

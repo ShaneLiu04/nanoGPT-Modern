@@ -2,14 +2,12 @@
 
 import pytest
 import torch
-
-from model.modern_gpt import ModernGPT, ModernGPTConfig
 from helpers import tiny_modern_config
 
+from model.modern_gpt import ModernGPT
 
-@pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required for memory test"
-)
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for memory test")
 def test_kv_cache_generation_memory_stable():
     """Repeated long generations should not leak memory beyond normal cache size."""
     config = tiny_modern_config(
@@ -47,9 +45,5 @@ def test_kv_cache_generation_memory_stable():
     # Allow a small tolerance for allocator fragmentation, but no unbounded growth.
     mb = 1024**2
     growth_mb = (final - baseline) / mb
-    print(
-        f"memory baseline={baseline/mb:.1f}MB, final={final/mb:.1f}MB, growth={growth_mb:.1f}MB"
-    )
-    assert (
-        growth_mb <= 10.0
-    ), f"Memory grew by {growth_mb:.1f}MB after repeated generations"
+    print(f"memory baseline={baseline/mb:.1f}MB, final={final/mb:.1f}MB, growth={growth_mb:.1f}MB")
+    assert growth_mb <= 10.0, f"Memory grew by {growth_mb:.1f}MB after repeated generations"

@@ -1,10 +1,10 @@
 """Tests for PagedKVCacheManager."""
 
 import torch
+from helpers import tiny_modern_config
 
 from model import ModernGPT, ModernGPTConfig
 from model.paged_kv_cache import PagedKVCacheManager
-from helpers import tiny_modern_config
 
 
 def test_paged_manager_api_matches_kv_manager():
@@ -54,12 +54,8 @@ def test_paged_generation_matches_ring_buffer():
     prompt = torch.randint(0, cfg_ring.vocab_size, (1, 16))
     with torch.no_grad():
         # Use top_k=1 to make sampling deterministic (greedy).
-        out_ring = model_ring.generate(
-            prompt, max_new_tokens=8, use_cache=True, top_k=1
-        )
-        out_paged = model_paged.generate(
-            prompt, max_new_tokens=8, use_cache=True, top_k=1
-        )
+        out_ring = model_ring.generate(prompt, max_new_tokens=8, use_cache=True, top_k=1)
+        out_paged = model_paged.generate(prompt, max_new_tokens=8, use_cache=True, top_k=1)
     assert torch.equal(out_ring, out_paged)
 
 

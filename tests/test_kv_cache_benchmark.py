@@ -14,9 +14,9 @@ import time
 
 import pytest
 import torch
+from helpers import tiny_modern_config
 
 from model.modern_gpt import ModernGPT
-from helpers import tiny_modern_config
 
 
 @pytest.mark.perf

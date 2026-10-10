@@ -6,8 +6,7 @@ import tempfile
 import numpy as np
 import torch
 
-
-from data.openwebtext import PackingDataset, MemmapDataset
+from data.openwebtext import MemmapDataset, PackingDataset
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 
 
@@ -56,12 +55,8 @@ def test_packing_cross_document_mask_changes_output():
     model.eval()
 
     # Two documents packed into one sequence.
-    x = torch.tensor(
-        [[1, 2, 3, 4, 50256, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.long
-    )
-    y = torch.tensor(
-        [[2, 3, 4, 50256, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, -1]], dtype=torch.long
-    )
+    x = torch.tensor([[1, 2, 3, 4, 50256, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.long)
+    y = torch.tensor([[2, 3, 4, 50256, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, -1]], dtype=torch.long)
     document_ids = torch.tensor(
         [[0, 0, 0, 0, 0, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1]], dtype=torch.long
     )
@@ -96,7 +91,7 @@ def test_packing_long_document_chunks_share_doc_id():
         doc_id = doc_ids.pop()
         # The last target of a full block should be the next token in the doc,
         # not the EOT.
-        for x, y, dids in full_blocks:
+        for _x, y, dids in full_blocks:
             assert (dids == doc_id).all()
             if y[-1].item() != -1:
                 # y[-1] predicts the token after this block.

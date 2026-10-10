@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 import torch
-
 from helpers import tiny_modern_config
+
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT
 
@@ -32,9 +32,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _baseline(**overrides):
-    cfg_kwargs = dict(
-        n_layer=1, n_head=2, n_embd=32, block_size=16, vocab_size=100
-    )
+    cfg_kwargs = dict(n_layer=1, n_head=2, n_embd=32, block_size=16, vocab_size=100)
     cfg_kwargs.update(overrides)
     return BaselineGPT(BaselineGPTConfig(**cfg_kwargs))
 
@@ -128,9 +126,7 @@ def test_baseline_generate_top_p_executes_and_keeps_greedy():
     idx = torch.randint(0, 100, (1, 4))
     with torch.no_grad():
         a = model.generate(idx, max_new_tokens=3, temperature=0.0)
-        b = model.generate(
-            idx, max_new_tokens=3, temperature=0.0, top_p=0.1
-        )
+        b = model.generate(idx, max_new_tokens=3, temperature=0.0, top_p=0.1)
     assert a.shape == (1, 7)
     assert b.shape == (1, 7)
     # greedy (temperature=0) argmax is always inside the nucleus

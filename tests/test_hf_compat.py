@@ -7,9 +7,10 @@ import torch
 
 pytest.importorskip("transformers")
 
-from model.hf_model import NanoGPTModernConfig, NanoGPTModernForCausalLM
-from model.modern_gpt import ModernGPT, ModernGPTConfig
 from helpers import tiny_modern_config
+
+from model.hf_model import NanoGPTModernConfig, NanoGPTModernForCausalLM
+from model.modern_gpt import ModernGPT
 
 
 def test_hf_config_round_trip():

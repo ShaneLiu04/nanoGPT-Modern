@@ -34,18 +34,18 @@ import time
 import pytest
 import torch
 
-from model import ModernGPT, ModernGPTConfig
+import model.modern_gpt as modern_gpt_module
+from model import ModernGPT
 from model.kv_cache_utils import (
     KVCacheManager,
     QuantizedKVCacheManager,
     build_sliding_window_mask,
 )
-import model.modern_gpt as modern_gpt_module
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_model(seed, **cfg_overrides):
     """Tiny fp32 ModernGPT in eval mode.
@@ -70,11 +70,7 @@ def _make_model(seed, **cfg_overrides):
 
 def _make_cache(model_or_cfg):
     """Append-layout KVCacheManager sized from a model/config (fp32 storage)."""
-    cfg = (
-        model_or_cfg.config
-        if hasattr(model_or_cfg, "config")
-        else model_or_cfg
-    )
+    cfg = model_or_cfg.config if hasattr(model_or_cfg, "config") else model_or_cfg
     cache = KVCacheManager.from_config(cfg, cache_dtype="fp32")
     return cache
 
@@ -177,8 +173,7 @@ def _reference_sliding_window_mask(seq_len, window_size, device):
 
 def _assert_logits_lists_equal(list_a, list_b, context):
     assert len(list_a) == len(list_b), (
-        f"{context}: logits list length mismatch "
-        f"({len(list_a)} vs {len(list_b)})"
+        f"{context}: logits list length mismatch " f"({len(list_a)} vs {len(list_b)})"
     )
     for i, (la, lb) in enumerate(zip(list_a, list_b)):
         assert torch.equal(la, lb), (
@@ -190,6 +185,7 @@ def _assert_logits_lists_equal(list_a, list_b, context):
 # ---------------------------------------------------------------------------
 # 1. Cache manager layout parameter (Red: new constructor contract)
 # ---------------------------------------------------------------------------
+
 
 def test_cache_manager_layout_default_append():
     """KVCacheManager must default to layout="append" with evicted=False.
@@ -222,6 +218,7 @@ def test_cache_manager_layout_default_append():
 # 2. get_layer_view zero-copy view (Red: new API)
 # ---------------------------------------------------------------------------
 
+
 def test_get_layer_view_zero_copy():
     """get_layer_view must return a zero-copy [B,H,write_pos+extra,D] view.
 
@@ -249,12 +246,12 @@ def test_get_layer_view_zero_copy():
         assert torch.equal(k_view, blocks[li][0])
         assert torch.equal(v_view, blocks[li][1])
         # zero-copy: view base is the pre-allocated buffer itself
-        assert k_view.data_ptr() == cache._k[li].data_ptr(), (
-            "k_view must be a zero-copy view of the cache buffer"
-        )
-        assert v_view.data_ptr() == cache._v[li].data_ptr(), (
-            "v_view must be a zero-copy view of the cache buffer"
-        )
+        assert (
+            k_view.data_ptr() == cache._k[li].data_ptr()
+        ), "k_view must be a zero-copy view of the cache buffer"
+        assert (
+            v_view.data_ptr() == cache._v[li].data_ptr()
+        ), "v_view must be a zero-copy view of the cache buffer"
 
         view1 = cache.get_layer_view(li, extra=1)
         assert view1 is not None
@@ -271,15 +268,14 @@ def test_get_layer_view_zero_copy():
         if cache.evicted:
             break
     assert cache.evicted is True, "overflowing the cache must set evicted=True"
-    assert cache.get_layer_view(0) is None, (
-        "get_layer_view must return None once evicted"
-    )
+    assert cache.get_layer_view(0) is None, "get_layer_view must return None once evicted"
     assert cache.get_layer_view(0, extra=1) is None
 
 
 # ---------------------------------------------------------------------------
 # 3. forward accepts a cache object (Red: new duck-typed past_kvs)
 # ---------------------------------------------------------------------------
+
 
 def test_forward_accepts_cache_object():
     """model.forward(past_kvs=<KVCacheManager>) must not raise TypeError.
@@ -295,9 +291,7 @@ def test_forward_accepts_cache_object():
 
     inp = torch.randint(0, model.config.vocab_size, (1, 1))
     with torch.no_grad():
-        logits, _, new_kvs = model(
-            inp, past_kvs=cache, use_cache=True, start_pos=cache.start_pos
-        )
+        logits, _, new_kvs = model(inp, past_kvs=cache, use_cache=True, start_pos=cache.start_pos)
     assert tuple(logits.shape) == (1, 1, model.config.vocab_size)
     assert torch.isfinite(logits).all()
     # Single-write protocol: the fast path wrote the new K/V in place, so
@@ -308,6 +302,7 @@ def test_forward_accepts_cache_object():
 # ---------------------------------------------------------------------------
 # 4. Fast path bit-identical to value path (Red: core equivalence)
 # ---------------------------------------------------------------------------
+
 
 def test_decode_fast_path_bit_identical():
     """Object-form decode must be bit-identical to value-form decode.
@@ -332,6 +327,7 @@ def test_decode_fast_path_bit_identical():
 # 5. generate(use_cache=True) == generate(use_cache=False) (pin: PASS now)
 # ---------------------------------------------------------------------------
 
+
 def test_generate_cache_vs_nocache_identical():
     """Greedy generate must be token-identical with and without KV cache.
 
@@ -341,21 +337,18 @@ def test_generate_cache_vs_nocache_identical():
     torch.manual_seed(4243)
     idx = torch.randint(0, model.config.vocab_size, (1, 5))
     with torch.no_grad():
-        out_cache = model.generate(
-            idx, max_new_tokens=30, use_cache=True, temperature=0.0
-        )
-        out_nocache = model.generate(
-            idx, max_new_tokens=30, use_cache=False, temperature=0.0
-        )
+        out_cache = model.generate(idx, max_new_tokens=30, use_cache=True, temperature=0.0)
+        out_nocache = model.generate(idx, max_new_tokens=30, use_cache=False, temperature=0.0)
     assert out_cache.shape == out_nocache.shape
-    assert torch.equal(out_cache, out_nocache), (
-        "generate(use_cache=True) must match use_cache=False token-for-token"
-    )
+    assert torch.equal(
+        out_cache, out_nocache
+    ), "generate(use_cache=True) must match use_cache=False token-for-token"
 
 
 # ---------------------------------------------------------------------------
 # 6. Zero torch.cat in a single fast-path forward (Red)
 # ---------------------------------------------------------------------------
+
 
 def test_fast_path_no_cat_in_forward(monkeypatch):
     """Single decode forward: value form does >= 2*n_layer cats, object
@@ -390,14 +383,14 @@ def test_fast_path_no_cat_in_forward(monkeypatch):
     fast = counter.count
     monkeypatch.undo()
     assert fast == 0, (
-        f"object-form (fast path) single forward must issue zero torch.cat "
-        f"calls (got {fast})"
+        f"object-form (fast path) single forward must issue zero torch.cat " f"calls (got {fast})"
     )
 
 
 # ---------------------------------------------------------------------------
 # 7. Eviction falls back to the cat path (Red, B5)
 # ---------------------------------------------------------------------------
+
 
 def test_eviction_falls_back_to_cat_path():
     """After eviction (evicted=True) the object form must fall back to the
@@ -425,24 +418,23 @@ def test_eviction_falls_back_to_cat_path():
         gen_out = model.generate(
             prompt, max_new_tokens=n_steps + 1, use_cache=True, temperature=0.0
         )
-    manual_tokens = torch.cat(
-        [lg.argmax(dim=-1, keepdim=True) for lg in logits_values], dim=1
-    )
-    assert torch.equal(gen_out[:, prompt.shape[1] :], manual_tokens), (
-        "manual value-form decode must match generate() token-for-token"
-    )
+    manual_tokens = torch.cat([lg.argmax(dim=-1, keepdim=True) for lg in logits_values], dim=1)
+    assert torch.equal(
+        gen_out[:, prompt.shape[1] :], manual_tokens
+    ), "manual value-form decode must match generate() token-for-token"
 
     # Object form: same flow, must agree after eviction via fallback.
     logits_object, cache_object = _manual_decode(model, prompt, n_steps, "object")
-    assert cache_object.evicted is True, (
-        "advance() past max_cache_len - 1 must set cache.evicted = True"
-    )
+    assert (
+        cache_object.evicted is True
+    ), "advance() past max_cache_len - 1 must set cache.evicted = True"
     _assert_logits_lists_equal(logits_values, logits_object, "post-eviction")
 
 
 # ---------------------------------------------------------------------------
 # 8. int8 lazy dequant of the view slice only (Red)
 # ---------------------------------------------------------------------------
+
 
 def test_int8_lazy_dequant_slice(monkeypatch):
     """QuantizedKVCacheManager + object form: _dequantize_cache must only
@@ -476,9 +468,7 @@ def test_int8_lazy_dequant_slice(monkeypatch):
 
     inp = logits_last.argmax(dim=-1, keepdim=True)
     with torch.no_grad():
-        logits, _, new_kvs = model(
-            inp, past_kvs=cache, use_cache=True, start_pos=cache.start_pos
-        )
+        logits, _, new_kvs = model(inp, past_kvs=cache, use_cache=True, start_pos=cache.start_pos)
     assert torch.isfinite(logits).all()
 
     expected_len = cache._write_pos + 1  # fast path does not advance
@@ -489,9 +479,9 @@ def test_int8_lazy_dequant_slice(monkeypatch):
         f"slots (got {sorted(set(seq_lens))})"
     )
     assert all(length <= expected_len for length in seq_lens)
-    assert expected_len < cache.max_cache_len, (
-        "the dequantized slice must never span the full max_cache_len buffer"
-    )
+    assert (
+        expected_len < cache.max_cache_len
+    ), "the dequantized slice must never span the full max_cache_len buffer"
 
     # Single-write protocol: the fast path already stored the new K/V.
     assert new_kvs is None
@@ -501,6 +491,7 @@ def test_int8_lazy_dequant_slice(monkeypatch):
 # ---------------------------------------------------------------------------
 # 9. Single-write protocol after the fast path (Red)
 # ---------------------------------------------------------------------------
+
 
 def test_fast_path_single_write_protocol():
     """The fast path must use the single-write protocol: forward writes the
@@ -524,17 +515,18 @@ def test_fast_path_single_write_protocol():
     blocks_obj = cache_object.get_cache()
     blocks_val = cache_values.get_cache()
     for li in range(model.config.n_layer):
-        assert torch.equal(blocks_obj[li][0], blocks_val[li][0]), (
-            f"layer {li}: K buffer diverged between fast path and value path"
-        )
-        assert torch.equal(blocks_obj[li][1], blocks_val[li][1]), (
-            f"layer {li}: V buffer diverged between fast path and value path"
-        )
+        assert torch.equal(
+            blocks_obj[li][0], blocks_val[li][0]
+        ), f"layer {li}: K buffer diverged between fast path and value path"
+        assert torch.equal(
+            blocks_obj[li][1], blocks_val[li][1]
+        ), f"layer {li}: V buffer diverged between fast path and value path"
 
 
 # ---------------------------------------------------------------------------
 # 10. Flash wrapper optional fallback (Red, B9)
 # ---------------------------------------------------------------------------
+
 
 def test_flash_wrapper_optional_fallback(monkeypatch):
     """When flash_attention_with_cache returns None the fast path must fall
@@ -551,9 +543,7 @@ def test_flash_wrapper_optional_fallback(monkeypatch):
 
     def run_object():
         with torch.no_grad():
-            out, _, _ = model(
-                inp, past_kvs=cache, use_cache=True, start_pos=cache.start_pos
-            )
+            out, _, _ = model(inp, past_kvs=cache, use_cache=True, start_pos=cache.start_pos)
         return out
 
     # Reference: object form without any monkeypatching.
@@ -570,15 +560,13 @@ def test_flash_wrapper_optional_fallback(monkeypatch):
     )
     out_none = run_object()
     monkeypatch.undo()
-    assert torch.equal(out_none, ref), (
-        "flash wrapper returning None must fall back to SDPA bit-identically"
-    )
+    assert torch.equal(
+        out_none, ref
+    ), "flash wrapper returning None must fall back to SDPA bit-identically"
 
     # (b) wrapper returns a wrong-value tensor -> must not be used.
     def garbage_wrapper(*args, **kwargs):
-        return torch.full(
-            (1, model.config.n_head, 1, head_dim), 777.0, dtype=torch.float32
-        )
+        return torch.full((1, model.config.n_head, 1, head_dim), 777.0, dtype=torch.float32)
 
     monkeypatch.setattr(
         modern_gpt_module._flash_attention,
@@ -587,14 +575,15 @@ def test_flash_wrapper_optional_fallback(monkeypatch):
     )
     out_garbage = run_object()
     monkeypatch.undo()
-    assert torch.equal(out_garbage, ref), (
-        "a wrong-value wrapper result must never reach the attention output"
-    )
+    assert torch.equal(
+        out_garbage, ref
+    ), "a wrong-value wrapper result must never reach the attention output"
 
 
 # ---------------------------------------------------------------------------
 # 11. build_sliding_window_mask vectorized (Red: static source contract)
 # ---------------------------------------------------------------------------
+
 
 def test_sliding_window_mask_vectorized():
     """The mask must match the double-for-loop reference bit-for-bit and its
@@ -604,9 +593,9 @@ def test_sliding_window_mask_vectorized():
         ref = _reference_sliding_window_mask(seq_len, window_size, "cpu")
         got = build_sliding_window_mask(seq_len, window_size, "cpu")
         assert got.shape == ref.shape
-        assert torch.equal(got, ref), (
-            f"mask mismatch at (seq_len={seq_len}, window_size={window_size})"
-        )
+        assert torch.equal(
+            got, ref
+        ), f"mask mismatch at (seq_len={seq_len}, window_size={window_size})"
 
     src = inspect.getsource(build_sliding_window_mask)
     assert "for " not in src, (
@@ -618,6 +607,7 @@ def test_sliding_window_mask_vectorized():
 # ---------------------------------------------------------------------------
 # 12. Decode speedup benchmark (Red: >= 1.5x)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.perf
 def test_decode_speedup_at_least_1_5x():
@@ -675,7 +665,9 @@ def test_decode_speedup_at_least_1_5x():
 
         def step_object():
             _, _, new_kvs = model(
-                inp, past_kvs=cache_object, use_cache=True,
+                inp,
+                past_kvs=cache_object,
+                use_cache=True,
                 start_pos=cache_object.start_pos,
             )
             # Single-write protocol: fast path wrote K/V in place
@@ -696,6 +688,7 @@ def test_decode_speedup_at_least_1_5x():
 # ---------------------------------------------------------------------------
 # 13. GQA + sliding-window compatibility (pin value baseline + Red object)
 # ---------------------------------------------------------------------------
+
 
 def test_cache_object_gqa_and_sliding_window_compat():
     """Object-form decode must be bit-identical to value-form decode for a
@@ -748,17 +741,11 @@ def test_modern_gpt_kv_cache_dtype():
 def test_kv_cache_ring_buffer_order():
     """Ring-buffer cache must return keys/values in logical order."""
     B, n_layers, n_kv_heads, head_dim, max_len = 2, 1, 2, 4, 6
-    cache = KVCacheManager(
-        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
-    )
+    cache = KVCacheManager(n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len)
     cache.init_cache(B, "cpu", torch.float32)
 
     # Write 4 tokens.
-    tok4 = (
-        torch.arange(B * n_kv_heads * 4 * head_dim)
-        .view(B, n_kv_heads, 4, head_dim)
-        .float()
-    )
+    tok4 = torch.arange(B * n_kv_heads * 4 * head_dim).view(B, n_kv_heads, 4, head_dim).float()
     cache.update(0, tok4, tok4.clone())
     cache.advance(4)
     blocks = cache.get_cache()
@@ -771,10 +758,7 @@ def test_kv_cache_ring_buffer_order():
     # One slot is reserved for the next single-token decode step, so the
     # effective capacity is max_len - 1.
     tok3 = (
-        torch.arange(B * n_kv_heads * 3 * head_dim)
-        .view(B, n_kv_heads, 3, head_dim)
-        .float()
-        + 1000
+        torch.arange(B * n_kv_heads * 3 * head_dim).view(B, n_kv_heads, 3, head_dim).float() + 1000
     )
     cache.update(0, tok3, tok3.clone())
     cache.advance(3)
@@ -795,9 +779,7 @@ def test_kv_cache_ring_buffer_order():
 def test_kv_cache_sliding_window_eviction():
     """Cache must keep only the last max_cache_len tokens."""
     B, n_layers, n_kv_heads, head_dim, max_len = 1, 1, 1, 2, 4
-    cache = KVCacheManager(
-        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
-    )
+    cache = KVCacheManager(n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len)
     cache.init_cache(B, "cpu", torch.float32)
 
     for step in range(8):
@@ -814,12 +796,7 @@ def test_kv_cache_sliding_window_eviction():
         recovered = torch.cat([b[0] for b in layer_cache], dim=2)
     else:
         recovered = layer_cache[0]
-    expected = (
-        torch.arange(5, 8)
-        .view(1, 1, effective_len, 1)
-        .expand(-1, -1, -1, head_dim)
-        .float()
-    )
+    expected = torch.arange(5, 8).view(1, 1, effective_len, 1).expand(-1, -1, -1, head_dim).float()
     assert torch.equal(recovered, expected)
     print("[OK] KV Cache sliding window eviction works")
 
@@ -844,9 +821,7 @@ def test_kv_cache_long_generate_consistency():
 def test_kv_cache_set_restore():
     """set_cache must restore logical order and state."""
     B, n_layers, n_kv_heads, head_dim, max_len = 1, 2, 2, 4, 8
-    cache = KVCacheManager(
-        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
-    )
+    cache = KVCacheManager(n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len)
     cache.init_cache(B, "cpu", torch.float32)
 
     k = torch.randn(B, n_kv_heads, 5, head_dim)
@@ -856,9 +831,7 @@ def test_kv_cache_set_restore():
     cache.advance(5)
 
     snapshot = cache.get_cache()
-    cache2 = KVCacheManager(
-        n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len
-    )
+    cache2 = KVCacheManager(n_layers, n_kv_heads, n_kv_heads, head_dim, max_cache_len=max_len)
     cache2.init_cache(B, "cpu", torch.float32)
     cache2.set_cache(snapshot)
 

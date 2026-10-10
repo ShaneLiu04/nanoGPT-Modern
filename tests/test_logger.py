@@ -5,14 +5,11 @@ from unittest import mock
 
 import torch
 
-
 from utils.logging import Logger
 
 
 def test_logger_degrades_on_tensorboard_failure():
-    with mock.patch(
-        "torch.utils.tensorboard.SummaryWriter", side_effect=ImportError("no tb")
-    ):
+    with mock.patch("torch.utils.tensorboard.SummaryWriter", side_effect=ImportError("no tb")):
         logger = Logger(
             project_name="test",
             run_name="tb_fail",

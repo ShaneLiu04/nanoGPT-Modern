@@ -7,16 +7,13 @@ import tempfile
 import pytest
 import torch
 
-
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 from training.train_grpo import GRPOTrainer
 from utils.checkpoint import save_checkpoint
 
 
 def _make_sft_checkpoint(path, dropout=0.0):
-    config = ModernGPTConfig(
-        block_size=32, n_layer=2, n_head=2, n_embd=32, dropout=dropout
-    )
+    config = ModernGPTConfig(block_size=32, n_layer=2, n_head=2, n_embd=32, dropout=dropout)
     model = ModernGPT(config)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     save_checkpoint(
@@ -113,7 +110,6 @@ def test_grpo_allows_dropout_with_flag():
 from types import SimpleNamespace
 
 import numpy as np
-
 from helpers import tiny_modern_config
 
 
@@ -275,11 +271,8 @@ def test_grpo_gradient_accumulation():
                 "ref_logprobs": ref_logprobs,
                 "masks": masks,
                 "prompt_lens": [[prompt_len] * batch_size for _ in range(group_size)],
-                "response_lens": [
-                    [response_len] * batch_size for _ in range(group_size)
-                ],
-                "prompt_tokens": prompt_tokens
-                or [[0] * prompt_len for _ in range(batch_size)],
+                "response_lens": [[response_len] * batch_size for _ in range(group_size)],
+                "prompt_tokens": prompt_tokens or [[0] * prompt_len for _ in range(batch_size)],
             }
 
         original_sample_group = trainer.sample_group
@@ -302,9 +295,7 @@ def test_grpo_gradient_accumulation():
             trainer.cleanup()
 
         # 6 rollouts / 3 accum = 2 optimizer steps.
-        assert (
-            len(step_counts) == 2
-        ), f"expected 2 optimizer steps, got {len(step_counts)}"
+        assert len(step_counts) == 2, f"expected 2 optimizer steps, got {len(step_counts)}"
         print("[OK] GRPO gradient accumulation steps correctly")
 
 

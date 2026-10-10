@@ -1,4 +1,5 @@
-"""Red-phase tests: PagedKVCacheManager multi-layer correctness (AR-v0.5.0-hpc-readiness T005 / FR4).
+"""Red-phase tests: PagedKVCacheManager multi-layer correctness
+(AR-v0.5.0-hpc-readiness T005 / FR4).
 
 Target defects these tests must expose:
 
@@ -17,11 +18,11 @@ Target defects these tests must expose:
 
 import pytest
 import torch
-
-from model.modern_gpt import ModernGPT, ModernGPTConfig
-from model.kv_cache_utils import KVCacheManager
-from model.paged_kv_cache import PagedKVCacheManager
 from helpers import tiny_modern_config
+
+from model.kv_cache_utils import KVCacheManager
+from model.modern_gpt import ModernGPT
+from model.paged_kv_cache import PagedKVCacheManager
 
 
 def _make_mgr(n_layers=2, max_cache_len=32, block_size=8, batch=1):

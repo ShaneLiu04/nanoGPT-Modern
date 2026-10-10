@@ -42,10 +42,10 @@ from training.trainer_base import BaseTrainer
 from utils import monitoring as monitoring_module
 from utils.experiment import load_metrics
 
-
 # ---------------------------------------------------------------------------
 # Helpers (same pattern as tests/test_experiment.py)
 # ---------------------------------------------------------------------------
+
 
 class DummyTrainer(BaseTrainer):
     """Minimal concrete trainer: all template hooks keep their pass defaults."""
@@ -89,6 +89,7 @@ def _tiny_model_with_grads():
 # _setup_monitors: construction
 # ---------------------------------------------------------------------------
 
+
 def test_setup_monitors_default_configuration(tmp_path):
     """Default (no_monitoring=False): both monitors are built on master with
     the agreed default LossSpikeDetector parameters."""
@@ -126,9 +127,7 @@ def test_setup_monitors_disabled_with_no_monitoring(tmp_path):
         events = _events(out_dir)
         assert len(events) == 3
         assert all(e["type"] == "train" for e in events)
-        assert not any(
-            e["type"] == "event" and e.get("event") == "loss_spike" for e in events
-        )
+        assert not any(e["type"] == "event" and e.get("event") == "loss_spike" for e in events)
     finally:
         trainer.cleanup()
 
@@ -136,6 +135,7 @@ def test_setup_monitors_disabled_with_no_monitoring(tmp_path):
 def test_setup_monitors_construction_failure_degrades(tmp_path):
     """If monitor construction raises, _setup_monitors must degrade (both
     monitors None) instead of propagating the exception."""
+
     def _boom(*args, **kwargs):
         raise RuntimeError("monitor construction failed")
 
@@ -164,6 +164,7 @@ def test_setup_monitors_construction_failure_degrades(tmp_path):
 # on_step_end: recording path (FR2 acceptance: grad_norm in metrics.jsonl)
 # ---------------------------------------------------------------------------
 
+
 def test_on_step_end_records_grad_norm_over_100_steps(tmp_path):
     """FR2 acceptance: with monitoring enabled and a tiny model with grads,
     100 stable steps must leave 100 train events in metrics.jsonl, each
@@ -184,9 +185,7 @@ def test_on_step_end_records_grad_norm_over_100_steps(tmp_path):
         assert len(train_events) == 100
 
         for ev in train_events:
-            assert "grad_norm" in ev, (
-                f"train event at step {ev['step']} is missing grad_norm"
-            )
+            assert "grad_norm" in ev, f"train event at step {ev['step']} is missing grad_norm"
             assert ev["grad_norm"] > 0.0
             assert ev["lr"] == pytest.approx(6e-4)
             assert ev["loss"] == pytest.approx(3.0 + (ev["step"] % 7) * 1e-3)
@@ -251,12 +250,13 @@ def test_on_step_end_non_master_is_noop(tmp_path):
 # on_step_end: monitoring path (spike detection + LR reduction)
 # ---------------------------------------------------------------------------
 
+
 def test_on_step_end_spike_writes_event_and_reduces_lr(tmp_path):
     """Injected spike (stable window, then a big loss) must:
-      1. write a loss_spike event with z_score > 3, lr_reduce_factor=0.5 and
-         the window_mean/window_std fields,
-      2. multiply every optimizer param_group lr by the multiplier (1.0 -> 0.5),
-      3. still record the regular train event for that step.
+    1. write a loss_spike event with z_score > 3, lr_reduce_factor=0.5 and
+       the window_mean/window_std fields,
+    2. multiply every optimizer param_group lr by the multiplier (1.0 -> 0.5),
+    3. still record the regular train event for that step.
     """
     out_dir = tmp_path / "run42"
     trainer = DummyTrainer(_trainer_args(out_dir))

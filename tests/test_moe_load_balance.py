@@ -1,9 +1,9 @@
 """Tests for MoE load balancing aux loss and capacity limiting."""
 
 import torch
+from helpers import tiny_modern_config
 
 from model import ModernGPT, ModernGPTConfig
-from helpers import tiny_modern_config
 
 
 def test_dense_swiglu_has_zero_aux_loss():

@@ -34,18 +34,19 @@ import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from model import ModernGPT, ModernGPTConfig
-from model.modern_gpt import SwiGLU
 from helpers import tiny_modern_config
 
+from model import ModernGPT
+from model.modern_gpt import SwiGLU
 
 # ---------------------------------------------------------------------------
 # Reference (old) implementation: faithful replica of the pre-T012 MoE forward
 # ---------------------------------------------------------------------------
 
-def _reference_moe_forward(x, gate_list, up_list, down_list, router_weight,
-                           capacity_factor, aux_loss_factor):
+
+def _reference_moe_forward(
+    x, gate_list, up_list, down_list, router_weight, capacity_factor, aux_loss_factor
+):
     """Faithful replica of the current (pre-T012) MoE forward.
 
     Parameters
@@ -112,6 +113,7 @@ def _reference_moe_forward(x, gate_list, up_list, down_list, router_weight,
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_moe_cfg(num_experts, **overrides):
     kwargs = dict(
         n_layer=1,
@@ -170,6 +172,7 @@ def _median_ms(fn, warmup, reps):
 # 1. Structure (Red: requires the new stacked-parameter layout)
 # ---------------------------------------------------------------------------
 
+
 def test_param_structure_stacked():
     """MoE branch must register stacked Parameters gate_w/up_w/down_w.
 
@@ -190,21 +193,20 @@ def test_param_structure_stacked():
             f"(got attributes: {sorted(n for n, _ in mlp.named_parameters())})"
         )
         p = getattr(mlp, name)
-        assert isinstance(p, nn.Parameter), (
-            f"mlp.{name} must be an nn.Parameter, got {type(p).__name__}"
-        )
-        assert tuple(p.shape) == shape, (
-            f"mlp.{name} must have shape {shape}, got {tuple(p.shape)}"
-        )
+        assert isinstance(
+            p, nn.Parameter
+        ), f"mlp.{name} must be an nn.Parameter, got {type(p).__name__}"
+        assert tuple(p.shape) == shape, f"mlp.{name} must have shape {shape}, got {tuple(p.shape)}"
 
-    assert not (hasattr(mlp, "gate_proj") and isinstance(mlp.gate_proj, nn.ModuleList)), (
-        "mlp.gate_proj must no longer be an nn.ModuleList in the MoE branch"
-    )
+    assert not (
+        hasattr(mlp, "gate_proj") and isinstance(mlp.gate_proj, nn.ModuleList)
+    ), "mlp.gate_proj must no longer be an nn.ModuleList in the MoE branch"
 
 
 # ---------------------------------------------------------------------------
 # 2. Static source contract (Red: forward must be loop-free / stack-free)
 # ---------------------------------------------------------------------------
+
 
 def test_forward_no_python_loop():
     """SwiGLU.forward must not contain a per-expert Python loop.
@@ -214,16 +216,15 @@ def test_forward_no_python_loop():
     a load_state_dict pre-hook for legacy checkpoint compatibility.
     """
     src_fwd = inspect.getsource(SwiGLU.forward)
-    assert "for e in" not in src_fwd, (
-        "SwiGLU.forward must not contain a per-expert Python loop ('for e in')"
-    )
+    assert (
+        "for e in" not in src_fwd
+    ), "SwiGLU.forward must not contain a per-expert Python loop ('for e in')"
     assert "torch.stack" not in src_fwd, (
-        "SwiGLU.forward must not call torch.stack (weights must be pre-stacked "
-        "parameters)"
+        "SwiGLU.forward must not call torch.stack (weights must be pre-stacked " "parameters)"
     )
-    assert "numel()" not in src_fwd, (
-        "SwiGLU.forward must not contain numel()-based data-dependent branches"
-    )
+    assert (
+        "numel()" not in src_fwd
+    ), "SwiGLU.forward must not contain numel()-based data-dependent branches"
 
     src_cls = inspect.getsource(SwiGLU)
     assert "_register_load_state_dict_pre_hook" in src_cls, (
@@ -236,6 +237,7 @@ def test_forward_no_python_loop():
 # 3. Forward equivalence vs reference (pin)
 # ---------------------------------------------------------------------------
 
+
 def test_forward_equivalence_vs_reference():
     """Model MoE forward must match the loop-based reference bit-for-bit.
 
@@ -244,7 +246,8 @@ def test_forward_equivalence_vs_reference():
     """
     for num_experts, num_inputs in ((4, 10), (2, 3), (3, 3)):
         cfg, model = _make_tiny_model(
-            num_experts=num_experts, seed=1000 + num_experts,
+            num_experts=num_experts,
+            seed=1000 + num_experts,
             moe_capacity_factor=1.25,
         )
         mlp = model.transformer.h[0].mlp
@@ -255,21 +258,27 @@ def test_forward_equivalence_vs_reference():
             x = torch.randn(2, 8, cfg.n_embd)
             out, aux = mlp(x)
             ref_out, ref_aux = _reference_moe_forward(
-                x, gate_list, up_list, down_list, router_w,
-                cfg.moe_capacity_factor, cfg.moe_aux_loss_factor,
+                x,
+                gate_list,
+                up_list,
+                down_list,
+                router_w,
+                cfg.moe_capacity_factor,
+                cfg.moe_aux_loss_factor,
             )
             assert torch.allclose(out, ref_out, atol=1e-5, rtol=0), (
                 f"E={num_experts}, input {i}: output mismatch "
                 f"(max abs diff {(out - ref_out).abs().max().item():.3e})"
             )
-            assert torch.allclose(aux, ref_aux, atol=1e-5, rtol=0), (
-                f"E={num_experts}, input {i}: aux_loss mismatch"
-            )
+            assert torch.allclose(
+                aux, ref_aux, atol=1e-5, rtol=0
+            ), f"E={num_experts}, input {i}: aux_loss mismatch"
 
 
 # ---------------------------------------------------------------------------
 # 4. Capacity int() truncation semantics (pin)
 # ---------------------------------------------------------------------------
+
 
 def test_capacity_int_truncation_semantics():
     """capacity must be int(cf * N / E) with truncation, NOT ceil.
@@ -279,8 +288,7 @@ def test_capacity_int_truncation_semantics():
     so exactly the first 2 tokens survive and tokens 2..9 are dropped. A ceil
     implementation (cap=3) would keep token 2 and fail this test.
     """
-    cfg, model = _make_tiny_model(num_experts=4, seed=31337,
-                                  moe_capacity_factor=1.0)
+    cfg, model = _make_tiny_model(num_experts=4, seed=31337, moe_capacity_factor=1.0)
     mlp = model.transformer.h[0].mlp
     C = cfg.n_embd
 
@@ -298,18 +306,23 @@ def test_capacity_int_truncation_semantics():
     out, aux = mlp(x)
     gate_list, up_list, down_list, router_w = _extract_moe_weights(mlp)
     ref_out, ref_aux = _reference_moe_forward(
-        x, gate_list, up_list, down_list, router_w,
-        cfg.moe_capacity_factor, cfg.moe_aux_loss_factor,
+        x,
+        gate_list,
+        up_list,
+        down_list,
+        router_w,
+        cfg.moe_capacity_factor,
+        cfg.moe_aux_loss_factor,
     )
-    assert torch.allclose(out, ref_out, atol=1e-5, rtol=0), (
-        "output must match the int()-truncation reference bit-for-bit"
-    )
+    assert torch.allclose(
+        out, ref_out, atol=1e-5, rtol=0
+    ), "output must match the int()-truncation reference bit-for-bit"
     assert torch.allclose(aux, ref_aux, atol=1e-6, rtol=0)
 
     row_norm = out[0].abs().sum(dim=-1)  # [T=10]
-    assert row_norm[:2].min().item() > 0.0, (
-        "first capacity=2 tokens must be processed (non-zero output)"
-    )
+    assert (
+        row_norm[:2].min().item() > 0.0
+    ), "first capacity=2 tokens must be processed (non-zero output)"
     assert row_norm[2:].max().item() == 0.0, (
         "tokens beyond capacity=2 must be dropped exactly (int truncation, "
         "not ceil); a ceil implementation would keep 3 tokens"
@@ -320,10 +333,10 @@ def test_capacity_int_truncation_semantics():
 # 5. Dropped-token set matches reference (pin)
 # ---------------------------------------------------------------------------
 
+
 def test_capacity_dropped_tokens_match_reference():
     """cf=0.25 forces drops; the dropped set must match the reference exactly."""
-    cfg, model = _make_tiny_model(num_experts=2, seed=4242,
-                                  moe_capacity_factor=0.25)
+    cfg, model = _make_tiny_model(num_experts=2, seed=4242, moe_capacity_factor=0.25)
     mlp = model.transformer.h[0].mlp
     # N=8, E=2, cf=0.25 -> capacity = int(0.25*8/2) = 1 per expert
 
@@ -332,8 +345,13 @@ def test_capacity_dropped_tokens_match_reference():
     out, aux = mlp(x)
     gate_list, up_list, down_list, router_w = _extract_moe_weights(mlp)
     ref_out, ref_aux = _reference_moe_forward(
-        x, gate_list, up_list, down_list, router_w,
-        cfg.moe_capacity_factor, cfg.moe_aux_loss_factor,
+        x,
+        gate_list,
+        up_list,
+        down_list,
+        router_w,
+        cfg.moe_capacity_factor,
+        cfg.moe_aux_loss_factor,
     )
 
     # (a) full output equivalence
@@ -343,19 +361,16 @@ def test_capacity_dropped_tokens_match_reference():
     # (b) zero-row (dropped) sets identical
     zero_model = out[0].abs().sum(dim=-1) == 0
     zero_ref = ref_out[0].abs().sum(dim=-1) == 0
-    assert torch.equal(zero_model, zero_ref), (
-        "dropped-token set must match the reference exactly"
-    )
+    assert torch.equal(zero_model, zero_ref), "dropped-token set must match the reference exactly"
 
     # (c) at least one token actually dropped (test is not vacuous)
-    assert zero_ref.sum().item() >= 1, (
-        "cf=0.25 with N=8, E=2 must drop at least one token"
-    )
+    assert zero_ref.sum().item() >= 1, "cf=0.25 with N=8, E=2 must drop at least one token"
 
 
 # ---------------------------------------------------------------------------
 # 6. Legacy checkpoint load equivalence (pin, B1)
 # ---------------------------------------------------------------------------
+
 
 def test_legacy_checkpoint_load_equivalence():
     """An old-format (ModuleList-key) checkpoint must load into a fresh model.
@@ -388,15 +403,16 @@ def test_legacy_checkpoint_load_equivalence():
     tokens = torch.randint(0, cfg.vocab_size, (2, 8))
     logits_a, _, _, aux_a = model_a(tokens, return_aux_loss=True)
     logits_b, _, _, aux_b = model_b(tokens, return_aux_loss=True)
-    assert torch.equal(logits_a, logits_b), (
-        "legacy checkpoint load must give bit-identical model forward"
-    )
+    assert torch.equal(
+        logits_a, logits_b
+    ), "legacy checkpoint load must give bit-identical model forward"
     assert torch.equal(aux_a, aux_b)
 
 
 # ---------------------------------------------------------------------------
 # 7. state_dict saves legacy keys + round-trip (pin, B1)
 # ---------------------------------------------------------------------------
+
 
 def test_state_dict_saves_legacy_keys():
     """state_dict() must keep the on-disk legacy key format exactly.
@@ -417,13 +433,13 @@ def test_state_dict_saves_legacy_keys():
         expected.add(f"up_proj.{e}.weight")
         expected.add(f"down_proj.{e}.weight")
 
-    assert set(sd.keys()) == expected, (
-        f"state_dict keys must be exactly the legacy set; got {sorted(sd.keys())}"
-    )
+    assert (
+        set(sd.keys()) == expected
+    ), f"state_dict keys must be exactly the legacy set; got {sorted(sd.keys())}"
     for bad in ("gate_w", "up_w", "down_w"):
-        assert all(bad not in k for k in sd.keys()), (
-            f"stacked-parameter key '{bad}' must not appear in state_dict"
-        )
+        assert all(
+            bad not in k for k in sd.keys()
+        ), f"stacked-parameter key '{bad}' must not appear in state_dict"
     assert tuple(sd["gate_proj.0.weight"].shape) == (H, C)
     assert tuple(sd["up_proj.0.weight"].shape) == (H, C)
     assert tuple(sd["down_proj.0.weight"].shape) == (C, H)
@@ -446,6 +462,7 @@ def test_state_dict_saves_legacy_keys():
 # ---------------------------------------------------------------------------
 # 8. num_experts <= 1 dense path unchanged (pin)
 # ---------------------------------------------------------------------------
+
 
 def test_num_experts_one_dense_path_unchanged():
     """num_experts=1 must keep the plain dense SwiGLU path and zero aux loss."""
@@ -471,11 +488,11 @@ def test_num_experts_one_dense_path_unchanged():
 # 9. aux loss identical (pin)
 # ---------------------------------------------------------------------------
 
+
 def test_aux_loss_identical():
     """aux_loss must stay on the exact same formula as the reference."""
     for cf in (1.25, 0.5):
-        cfg, model = _make_tiny_model(num_experts=4, seed=606,
-                                      moe_capacity_factor=cf)
+        cfg, model = _make_tiny_model(num_experts=4, seed=606, moe_capacity_factor=cf)
         mlp = model.transformer.h[0].mlp
         gate_list, up_list, down_list, router_w = _extract_moe_weights(mlp)
 
@@ -484,8 +501,13 @@ def test_aux_loss_identical():
             x = torch.randn(2, 8, cfg.n_embd)
             _, aux = mlp(x)
             _, ref_aux = _reference_moe_forward(
-                x, gate_list, up_list, down_list, router_w,
-                cfg.moe_capacity_factor, cfg.moe_aux_loss_factor,
+                x,
+                gate_list,
+                up_list,
+                down_list,
+                router_w,
+                cfg.moe_capacity_factor,
+                cfg.moe_aux_loss_factor,
             )
             assert torch.allclose(aux, ref_aux, atol=1e-6, rtol=0), (
                 f"cf={cf}, input {i}: aux_loss mismatch "
@@ -497,13 +519,13 @@ def test_aux_loss_identical():
 # 10. capacity == 0 boundary (pin)
 # ---------------------------------------------------------------------------
 
+
 def test_capacity_zero_all_dropped():
     """E=8, N=2, cf=1.25 -> capacity = int(0.3125) = 0: everything dropped.
 
     Forward must not crash, output must be all zeros, aux_loss must be finite.
     """
-    cfg, model = _make_tiny_model(num_experts=8, seed=707,
-                                  moe_capacity_factor=1.25)
+    cfg, model = _make_tiny_model(num_experts=8, seed=707, moe_capacity_factor=1.25)
     mlp = model.transformer.h[0].mlp
     assert int(1.25 * 2 / 8) == 0  # sanity of the arithmetic
 
@@ -512,15 +534,16 @@ def test_capacity_zero_all_dropped():
     out, aux = mlp(x)
 
     assert out.shape == (1, 2, cfg.n_embd)
-    assert torch.equal(out, torch.zeros_like(out)), (
-        "with capacity=0 every token is dropped; output must be exactly zero"
-    )
+    assert torch.equal(
+        out, torch.zeros_like(out)
+    ), "with capacity=0 every token is dropped; output must be exactly zero"
     assert torch.isfinite(aux)
 
 
 # ---------------------------------------------------------------------------
 # 11. Speedup benchmark (Red: new implementation must be >= 2x faster)
 # ---------------------------------------------------------------------------
+
 
 def test_moe_speedup_at_least_2x():
     """MoE fwd+bwd must be at least 2x faster than the loop-based reference.
@@ -565,13 +588,9 @@ def test_moe_speedup_at_least_2x():
     down_list = [down_w[e] for e in range(E)]
 
     def run_old():
-        out, _ = _reference_moe_forward(
-            x, gate_list, up_list, down_list, router_w, 1.25, 0.01
-        )
+        out, _ = _reference_moe_forward(x, gate_list, up_list, down_list, router_w, 1.25, 0.01)
         loss = out.square().mean()
-        torch.autograd.grad(
-            loss, [x, gate_w, up_w, down_w, router_w], allow_unused=True
-        )
+        torch.autograd.grad(loss, [x, gate_w, up_w, down_w, router_w], allow_unused=True)
 
     new_params = [x] + list(mlp.parameters())
 
@@ -593,6 +612,7 @@ def test_moe_speedup_at_least_2x():
 # ---------------------------------------------------------------------------
 # 12. torch.compile recompile stability (skip on Windows inductor failure)
 # ---------------------------------------------------------------------------
+
 
 def test_compile_no_recompile_growth():
     """100 identical steps through a compiled MoE layer must not recompile."""
@@ -619,6 +639,4 @@ def test_compile_no_recompile_growth():
         compiled(x)
     after = counters["stats"]["unique_graphs"]
 
-    assert after == before, (
-        f"recompile count grew over 100 identical steps: {before} -> {after}"
-    )
+    assert after == before, f"recompile count grew over 100 identical steps: {before} -> {after}"

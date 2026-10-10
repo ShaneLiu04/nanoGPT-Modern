@@ -42,9 +42,7 @@ def test_state_dict_roundtrip():
         max_iters=100,
     )
     state = sched.state_dict()
-    sched2 = LRScheduler(
-        "linear", learning_rate=0.0, min_lr=0.0, warmup_iters=0, lr_decay_iters=1
-    )
+    sched2 = LRScheduler("linear", learning_rate=0.0, min_lr=0.0, warmup_iters=0, lr_decay_iters=1)
     sched2.load_state_dict(state)
     for step in [0, 5, 10, 50, 100]:
         assert pytest.approx(sched(step), rel=1e-9) == sched2(step)
