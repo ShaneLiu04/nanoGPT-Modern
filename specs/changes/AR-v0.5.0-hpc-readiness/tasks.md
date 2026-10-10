@@ -29,7 +29,7 @@
 | T012 | FR6 MoE 向量化重写（方案 B）：参数改单张量 `Parameter[E,H,C]`（gate/up/down 各一）+ load/save 翻译 hook（磁盘格式不变）、定容 padded bmm `[E,cap,C]` 零 Python 循环（cap 语义与现行 int 截断对齐，容量丢弃 token 输出 0）、compile 兼容；验收 loss atol=1e-5 + ≥2x 基准对比 | - | passing | 2026-10-10 完成；实测 17.9x（137.1→7.7 ms/step @ E=4,H=688,C=256,N=512 CPU 中位），等价 diff ~3e-8 |
 | T013 | FR5 KV decode 去 cat（方案 B）：`KVCacheManager` 新增 `layout="append"` 追加式预分配缓冲 + `get_cache()` 返回 `[:pos]` 视图直喂 SDPA（零拷贝）、int8 惰性反量化切片、滑窗 mask 向量化；`pos ≥ max_cache_len` 切 ring 驱逐语义回退路径（`evicted` 标记，B5）；flash wrapper 仅可选分支（包存在才启用）；验收输出逐位一致 + ≥1.5x | T005 | passing | 2026-10-10 完成；4096ctx CPU 基准 1.61x（21.4→13.3 ms/步），fast path 逐位等价 + 单写协议 |
 | T014 | FR7a 连续批处理 iteration-level 重构：槽位回收/prefill 插入/**左对齐 padding**（右侧 pad 不参与 KV 写入）/RoPE 位置按各序列真实长度/**PrefixCache 与 _init_decode_compile 删除**（设计决策：不留死代码）/批量采样张量化（`[B]` 温度张量，消灭逐序列 Python 循环） | T006,T013 | passing | ~300 行调度器重写；必须保留/继承 T006 的 temperature=0 greedy 语义，验收补 greedy 确定性断言；**T005 定向新发现**：`generate_batch` 解码首步将 prompt 尾 token 重复喂入（KV 已含整个 prompt）——off-by-one 独立缺陷，重构时一并修复 |
-| T015 | FR7b api_server 接线新调度器（asyncio.to_thread/线程安全队列）+ 补齐或删除 --continuous_batching 声称 | T014 | pending | |
+| T015 | FR7b api_server 接线新调度器（asyncio.to_thread/线程安全队列）+ 补齐或删除 --continuous_batching 声称 | T014 | passing | |
 | T016 | FR10 根目录收编：导出 4 脚本 → tools/、profile 2 脚本 → tools/、编排脚本处置（[project.scripts] 与测试路径同步）、删除死文件（run_inference_ablation.py/generate_experiment_log.py/logs_prepare*.txt） | - | pending | 删除前全库引用检查 |
 | T017 | FR11a training/args.py 公共 flag 提取（23 个重复 flag，~350 行净删） | - | pending | 可与 A 阶段并行提前 |
 | T018 | FR11b load_model 统一到 load_model_from_checkpoint（7 份拷贝收敛）+ tests/conftest.py tiny fixture + test_bugfixes.py 拆分 | T017 | pending | |
@@ -267,3 +267,34 @@
 **回归与遗留：**
 - 全量 **512 passed / 3 skipped**（~100s；494 基线 + 本任务 17 + speculative 1）；目标测试 29 全绿
 - 遗留：调度器 decode 仍值路径 cat（kv_mask 与 fast path 不兼容，后续可为 append 布局 + 等长槽场景设计 fast path 变体）；speculative/generate_batch 的 S>1 验证步值路径接线问题不变（T019 接口统一时一并处理）；benchmark 中每请求延迟按 finish_iteration 比例折算（等 iteration 时长假设，保守）
+
+### 2026-10-10 T015 会话记录（FR7b api_server 接线新调度器）
+
+**定向发现：**
+- api_server.py 三处接线缺口坐实：docstring L9-10 声称 `--continuous_batching` 但 get_args() 无此 flag（虚假文档声称）；推理在 async endpoint 内直接同步调用 model_state.generate（阻塞事件循环）；无任何调度器接线
+- 唯一外部依赖面：api_server 无其他模块 import 它（此前 T014 定向已确认），接线零外部破坏
+
+**Red（9 用例 test_api_server_wiring.py，4 Red + 5 Pin，6.5s）：**
+- 结构断言（get_args 源码含 --continuous_batching/--batch_size + 模块源码含 asyncio.to_thread）、CB dispatch 用调用计数 stub 锁定（Red 期 0 次调用 FAIL）；pin：off 模式行为/health/503//v1/models
+- **关键环境发现：tiktoken 在本机可用**（get_encoding("gpt2") 成功）——会把 prompt 编码到 tiny 模型 vocab 之外导致 embedding 越界；测试 monkeypatch tiktoken.get_encoding 抛错强制走 ModelState 文档化的 ord/chr 回退，跨环境确定性
+- 契约形态决策：cb_state 接口锁定为 `generate(prompt_text, max_tokens, temperature, top_k, top_p, repetition_penalty) -> (text, prompt_tokens, completion_tokens, finish_reason)`（阻塞同步，端点在 asyncio.to_thread 内调用）——服务端泵线程实现自由，端点契约锁死
+- 并发测试用 httpx.AsyncClient + ASGITransport + asyncio.gather（TestClient 并发不可靠；httpx 随 fastapi TestClient 依赖存在，importorskip 兜底 E8）
+
+**Green（api_server.py，~100 行净增）：**
+- `ContinuousBatchingState` 适配器：单 daemon dispatcher 线程泵 scheduler.run()（队列空时 5ms 轮询）+ 结果按 request_id 存储（threading.Lock）+ generate() 提交 Request（uuid request_id）后阻塞轮询自身结果（300s 超时）；run 期间到达的请求在下一 iteration 边界被捞起（T014 队列锁保证并发 submit 安全）
+- 两个生成端点：cb_state 非 None → `await asyncio.to_thread(cb_state.generate, ...)`；否则 `await asyncio.to_thread(model_state.generate, ...)`（**两路径都移出事件循环**）；finish_reason 映射：CB eos→"stop"、length→"length"（OpenAI 风格），legacy 路径恒 "stop"
+- get_args 新增 --continuous_batching（store_true）+ --batch_size（默认 4）；main() flag 时构造 cb_state
+- 503 语义保留（model_state None 检查在 cb dispatch 之前——cb_state 依赖 model_state 的 encode/decode）
+
+**验证：**
+- 目标测试 9/9 全绿（5.2s）；全量 **521 passed / 3 skipped**（~109s；512 基线 + 9）零破坏
+- 4 并发 CB 模式经真实 dispatcher 线程 + 线程安全队列全部完成（T014 队列锁的第一次真实并发场景验证）
+
+**关键决策：**
+- dispatcher 泵线程 + request_id 结果存储（而非每请求锁串行 run）：并发请求自然合批（run() 在 iteration 边界捞起后续提交），符合 continuous batching 语义
+- 测试不锁定 ContinuousBatchingState 内部结构（只锁 cb_state.generate 签名与端点 dispatch），服务端实现可自由演化
+- 不测试 uvicorn 启动/main()（进程级行为不锁定）
+
+**遗留：**
+- CB 模式请求 eos_token_id=None（与 legacy ModelState.generate 行为对齐——它也不传 EOS）；生产接线可后续接 tokenizer EOT
+- pump 线程 5ms 轮询（首 token 延迟下限 ~5ms）；条件变量优化留后续
