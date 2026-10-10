@@ -94,7 +94,7 @@ def test_export_gguf_cli_q8_0():
         result = subprocess.run(
             [
                 sys.executable,
-                "export_gguf.py",
+                "tools/export/export_gguf.py",
                 "--checkpoint",
                 ckpt,
                 "--out",
@@ -127,7 +127,7 @@ def test_export_gguf_cli_f16():
         result = subprocess.run(
             [
                 sys.executable,
-                "export_gguf.py",
+                "tools/export/export_gguf.py",
                 "--checkpoint",
                 ckpt,
                 "--out",

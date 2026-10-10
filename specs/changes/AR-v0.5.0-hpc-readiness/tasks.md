@@ -30,7 +30,7 @@
 | T013 | FR5 KV decode 去 cat（方案 B）：`KVCacheManager` 新增 `layout="append"` 追加式预分配缓冲 + `get_cache()` 返回 `[:pos]` 视图直喂 SDPA（零拷贝）、int8 惰性反量化切片、滑窗 mask 向量化；`pos ≥ max_cache_len` 切 ring 驱逐语义回退路径（`evicted` 标记，B5）；flash wrapper 仅可选分支（包存在才启用）；验收输出逐位一致 + ≥1.5x | T005 | passing | 2026-10-10 完成；4096ctx CPU 基准 1.61x（21.4→13.3 ms/步），fast path 逐位等价 + 单写协议 |
 | T014 | FR7a 连续批处理 iteration-level 重构：槽位回收/prefill 插入/**左对齐 padding**（右侧 pad 不参与 KV 写入）/RoPE 位置按各序列真实长度/**PrefixCache 与 _init_decode_compile 删除**（设计决策：不留死代码）/批量采样张量化（`[B]` 温度张量，消灭逐序列 Python 循环） | T006,T013 | passing | ~300 行调度器重写；必须保留/继承 T006 的 temperature=0 greedy 语义，验收补 greedy 确定性断言；**T005 定向新发现**：`generate_batch` 解码首步将 prompt 尾 token 重复喂入（KV 已含整个 prompt）——off-by-one 独立缺陷，重构时一并修复 |
 | T015 | FR7b api_server 接线新调度器（asyncio.to_thread/线程安全队列）+ 补齐或删除 --continuous_batching 声称 | T014 | passing | |
-| T016 | FR10 根目录收编：导出 4 脚本 → tools/、profile 2 脚本 → tools/、编排脚本处置（[project.scripts] 与测试路径同步）、删除死文件（run_inference_ablation.py/generate_experiment_log.py/logs_prepare*.txt） | - | pending | 删除前全库引用检查 |
+| T016 | FR10 根目录收编：导出 4 脚本 → tools/、profile 2 脚本 → tools/、编排脚本处置（[project.scripts] 与测试路径同步）、删除死文件（run_inference_ablation.py/generate_experiment_log.py/logs_prepare*.txt） | - | passing | 删除前全库引用检查 |
 | T017 | FR11a training/args.py 公共 flag 提取（23 个重复 flag，~350 行净删） | - | pending | 可与 A 阶段并行提前 |
 | T018 | FR11b load_model 统一到 load_model_from_checkpoint（7 份拷贝收敛）+ tests/conftest.py tiny fixture + test_bugfixes.py 拆分 | T017 | pending | |
 | T019 | FR12 接口统一（breaking）：BaselineGPT 3-tuple 返回、no-op 参数显式化、调用点全量同步、反射 hack 清理、CHANGELOG | T013,T014 | pending | v0.5.0 大版本 |
@@ -298,3 +298,31 @@
 **遗留：**
 - CB 模式请求 eos_token_id=None（与 legacy ModelState.generate 行为对齐——它也不传 EOS）；生产接线可后续接 tokenizer EOT
 - pump 线程 5ms 轮询（首 token 延迟下限 ~5ms）；条件变量优化留后续
+
+### 2026-10-10 T016 会话记录（FR10 根目录收纳与死文件清理）
+
+**定向发现（删除前全库引用检查）：**
+- 4 个死文件（run_inference_ablation.py / generate_experiment_log.py / logs_prepare*.txt）**零代码引用**（仅 specs 历史文档与 TECH_REPORT 提及，后者为历史记录不改）→ 安全删除
+- 迁移同步面：pyproject [project.scripts] 3 条 export 条目 + [[tool.mypy.overrides]] 裸 "export_to_onnx" + [tool.setuptools.packages.find] **无 tools\***（子代理发现，console script 打包安装需同步）；ci.yml 3 处 lint 命令；tests/test_gguf_export.py 2 处 subprocess CLI 路径；README 命令示例 6 处 + 目录树 6 行；evaluation/eval_benchmark.py docstring
+- nanogpt-ablations = "run_component_ablations:main" 已存在且正确（AC2 pin）；run_component_ablations.py 按 design 保持根目录（v0.4.0 测试契约 pythonpath + console script 稳定）
+
+**Red（9 用例 test_repo_layout.py，全 Red 0.32s，结构断言秒级）：**
+- 根目录 .py 白名单恰等断言（4 个入口）；tools/export/ + tools/profiling/ 存在性 + __init__.py；死文件不存在；run_ablations.py deprecated 标注（含 "deprecated" + "run_component_ablations" 共现）；pyproject 三条 export 条目 → tools.export.*（tomllib 解析，Python 3.11.9 stdlib）；nanogpt-ablations 条目 pin；mypy overrides 更新；ci.yml 路径同步（负向后顾正则 `(?<!/)\bexport_to_hf\.py` 避免误伤新路径）；4 个迁移模块 importable（gguf/onnx 重依赖不锁）
+
+**Green：**
+- `git mv` 保留历史：4 export 脚本 → tools/export/、2 profile 脚本 → tools/profiling/；新建 tools/__init__.py + 两子包 __init__.py（tools 成为包，console script `tools.export.*:main` 可 import）
+- `git rm` 4 死文件
+- profile 脚本 sys.path hack 深度 +1（dirname×3）
+- **4 个 export 脚本补 repo-root bootstrap**（`import os as _os` + `_sys.path.insert(0, dirname×3)`，锚点第一个 `from model.` import）——迁移后 CLI 直跑 `python tools/export/x.py` 需要根在 sys.path（Red 期被 gguf CLI 用例捕获：subprocess returncode != 0）
+- run_ablations.py docstring 加 `.. deprecated:: v0.5.0` RST 段落指向 run_component_ablations/nanogpt-ablations
+- README：6 处命令示例加 tools/ 前缀、目录树 6 行归并为 2 个目录条目
+
+**验证：**
+- 目标 15/15 全绿（repo_layout 9 + test_gguf_export 6——后者的 2 个 CLI 用例经新路径真实跑通 = 迁移后 CLI 功能验证）
+- 全量 **530 passed / 3 skipped**（~100s；521 基线 + 9）零破坏
+- FR10-AC2（nanogpt-ablations --help 仍可用）：条目未动，pyproject 解析 pin 锁定；AC1（CI 全绿）：ci.yml lint 路径已同步（本地 black/mypy/ruff 由 pre-commit 覆盖，CI 执行在 gitee 侧）
+
+**关键决策：**
+- 白名单「恰等」断言（== 而非 ⊆）：比 srs AC3「仅剩入口必要性文件」更强，防未来脚本再散落根目录
+- export 脚本 bootstrap 用 `_os`/`_sys` 别名避免与脚本内既有 `import os` 语义纠缠；插入点统一锚定 `from model.` 首次出现（各脚本 import 区格式不一，docstring 内 "import" 文本会干扰按行锚定）
+- test_gguf_export.py subprocess 路径改 "tools/export/export_gguf.py"（保持 cwd=repo-root 既有假设，最小改动）
