@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/cover.svg" alt="nanoGPT-Modern — 轻量级 LLM 全栈框架">
+  <img src="docs/assets/cover.png" alt="nanoGPT-Modern — 轻量级 LLM 全栈框架">
 </p>
 
 <p align="center">
@@ -17,19 +17,19 @@
 
 > v0.3.0 完成模型架构、训练系统、数据管道、推理服务、评估观测与工程 DevOps 六大领域共 **42 项现代化升级**。
 >
-> 📊 技术白皮书 [docs/TECH_REPORT.md](docs/TECH_REPORT.md) · 📝 变更日志 [docs/CHANGELOG.md](docs/CHANGELOG.md) · 🧪 实验记录 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) · 🏗️ 架构决策 [docs/adr/](docs/adr/README.md)
+> 技术白皮书 [docs/TECH_REPORT.md](docs/TECH_REPORT.md) · 变更日志 [docs/CHANGELOG.md](docs/CHANGELOG.md) · 实验记录 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) · 架构决策 [docs/adr/](docs/adr/README.md)
 
 ---
 
-## ✨ 核心亮点
+## 核心亮点
 
-### 🧭 双轨对照实验
+### 双轨对照实验
 同一仓库实现两种架构，共享数据顺序、随机种子与超参——**唯一变量是架构本身**：
 
 - **BaselineGPT** — GPT-2 经典架构（LayerNorm + GELU + 可学习绝对位置编码）
 - **ModernGPT** — LLaMA/Gemma 风格现代架构（RMSNorm + SwiGLU + RoPE + GQA）
 
-### 🏗️ 现代组件全集成
+### 现代组件全集成
 | 类别 | 组件 |
 |------|------|
 | 归一化 | RMSNorm（自动探测 PyTorch ≥ 2.4 fused kernel）· QK-Norm |
@@ -38,28 +38,28 @@
 | 注意力 | MHA / **GQA（零拷贝 grouped broadcast）** / FlashAttention 封装 / SDPA 后端切换 / Sliding Window / Attention Temperature |
 | 序列 | 多 Token 预测（MTP heads）· **Ring Attention**（纯 PyTorch blockwise，长上下文确定性回退） |
 
-### 🎯 完整对齐流水线
+### 完整对齐流水线
 - **预训练** — OpenWebText 因果语言建模
 - **SFT** — 算术 + Chain-of-Thought 逐步推理格式（`<reasoning>` + `<answer>`）
 - **GRPO** — 组相对策略优化（组大小可调 G4/G8/G16，KL 惩罚 + PPO clip + 优势归一化/裁剪）
 - **DPO / IPO / KTO** — 偏好对齐，支持**从 GRPO 轨迹自动生成偏好对** + 胜率评估
 - **Iterative GRPO** — 拒绝采样微调 + EMA 参考模型更新循环
 
-### 🚀 生产级推理
+### 生产级推理
 - **KV Cache 家族** — 静态环形缓存 / Paged KV Cache（块表管理）/ **INT8·FP8 量化缓存**
 - **投机解码** — draft-then-verify，支持 batch > 1 与接受率自适应降级
 - **连续批处理** — `RequestQueue` + `ContinuousBatchScheduler` + **Prefix Cache** 共享 prefill
 - **API 服务** — FastAPI，OpenAI 兼容（`/v1/completions` + `/v1/chat/completions`）
 - torch.compile 自动探测与回退 · CUDA Events 精确计时（prefill/decode 分离）
 
-### 🔬 评估与可观测
+### 评估与可观测
 - 标准 Benchmark 集成（lm-eval：MMLU / ARC / HellaSwag / GSM8K …）+ 本地 PPL
 - **Needle-in-Haystack** 长上下文检索评估
 - **胜率评估**（RuleJudge / LengthPenaltyJudge）· 对齐质量评估（reward 分解 + KL）
 - **注意力可视化**（heatmap）+ **Logit Lens**（逐层 top-k 预测）
 - 训练/推理 Profiler（Chrome trace + 显存分层报告）· 监控工具箱（Loss Spike >3σ 检测、梯度范数分层）
 
-### 🛠️ 工程化设施
+### 工程化设施
 - **统一训练抽象** — `BaseTrainer` 模板方法，五种训练器共享基础设施
 - **分布式与显存** — DDP / FSDP（full/grad/no 分片策略）· AMP bf16/fp16 · 梯度累积 · 梯度检查点
 - **训练稳定性** — EMA 影子权重 · Early Stopping · LR 调度（cosine/linear/WSD/constant + warmup）· 完整 checkpoint 生命周期（模型 + 优化器 + scaler + scheduler + EMA + RNG + resume offset，`keep_last_n` 自动清理）
@@ -70,7 +70,7 @@
 
 ---
 
-## 🏗️ 架构对比
+## 架构对比
 
 | 维度 | BaselineGPT | ModernGPT |
 |------|-------------|-----------|
@@ -94,7 +94,7 @@
 
 ---
 
-## 🚀 快速开始
+## 快速开始
 
 ### 1. 安装
 
@@ -148,7 +148,7 @@ python -m pytest tests/ -q
 
 ---
 
-## 🔬 完整对齐流水线
+## 完整对齐流水线
 
 ```bash
 # ① 预训练（EMA + checkpoint 自动清理）
@@ -184,7 +184,7 @@ python evaluation/eval_benchmark.py \
 
 ---
 
-## 🧩 更多用法
+## 更多用法
 
 <details>
 <summary><b>Hydra 可组合配置入口</b></summary>
@@ -321,7 +321,7 @@ docker-compose up train    # 仅训练
 
 ---
 
-## 📊 实验与结果
+## 实验与结果
 
 完整记录见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。快速验证环境：RTX 4060 Laptop (8GB) · PyTorch 2.4.1+cu121 · seed 1337。
 
@@ -337,7 +337,7 @@ docker-compose up train    # 仅训练
 
 ---
 
-## 📁 项目结构
+## 项目结构
 
 <details>
 <summary>展开完整目录树</summary>
@@ -418,7 +418,7 @@ nanogpt-modern/
 
 ---
 
-## 📚 文档索引
+## 文档索引
 
 | 文档 | 内容 |
 |------|------|
@@ -429,7 +429,7 @@ nanogpt-modern/
 
 ---
 
-## 📖 参考文献
+## 参考文献
 
 - [nanoGPT](https://github.com/karpathy/nanoGPT) — Andrej Karpathy
 - RMSNorm — *Root Mean Square Layer Normalization* (Zhang & Sennrich, 2019)
@@ -444,7 +444,7 @@ nanogpt-modern/
 
 ---
 
-## 📄 许可
+## 许可
 
 基于 nanoGPT 思想构建，仅供研究与学习使用。[MIT License](LICENSE)。
 
