@@ -9,7 +9,7 @@ new Hydra entry points can reuse the old trainers without modification.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Set
+from typing import Any
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
@@ -51,7 +51,7 @@ def to_namespace(cfg: DictConfig) -> NestedNamespace:
     return NestedNamespace(plain)
 
 
-def missing_keys(cfg: DictConfig) -> List[str]:
+def missing_keys(cfg: DictConfig) -> list[str]:
     """Return the list of missing mandatory keys in ``cfg``.
 
     Uses ``OmegaConf.missing_keys`` recursively so that nested missing values
@@ -60,7 +60,7 @@ def missing_keys(cfg: DictConfig) -> List[str]:
     return list(OmegaConf.missing_keys(cfg))
 
 
-def validate_required(cfg: DictConfig, required: Optional[Set[str]] = None) -> None:
+def validate_required(cfg: DictConfig, required: set[str] | None = None) -> None:
     """Raise ``ValueError`` if any required key is missing.
 
     Parameters

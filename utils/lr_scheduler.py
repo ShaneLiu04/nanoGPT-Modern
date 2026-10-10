@@ -77,9 +77,7 @@ class LRScheduler:
             return self.min_lr
 
         # --- decay phase ---
-        ratio = (step - self.warmup_iters) / max(
-            self.decay_iters - self.warmup_iters, 1
-        )
+        ratio = (step - self.warmup_iters) / max(self.decay_iters - self.warmup_iters, 1)
         if self.schedule == "cosine":
             coeff = 0.5 * (1.0 + math.cos(math.pi * ratio))
         elif self.schedule == "linear":

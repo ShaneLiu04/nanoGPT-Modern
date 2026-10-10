@@ -11,14 +11,15 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from typing import Any, Mapping, Optional
+from collections.abc import Mapping
+from typing import Any
 
 WEBHOOK_ENV_VAR = "NANOGPT_WEBHOOK_URL"
 
 
 def notify_webhook(
     message: str,
-    env: Optional[Mapping[str, str]] = None,
+    env: Mapping[str, str] | None = None,
     timeout: float = 10.0,
 ) -> bool:
     """POST ``{"text": message}`` to the configured webhook URL.

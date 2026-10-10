@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Optional
+from typing import Any
 
 import torch
 
@@ -54,7 +54,7 @@ class Profiler:
         profile_memory: bool = True,
         with_stack: bool = False,
         with_flops: bool = False,
-        activities: Optional[Any] = None,
+        activities: Any | None = None,
     ):
         self.output_dir = output_dir
         self.chrome_trace = chrome_trace
@@ -64,8 +64,8 @@ class Profiler:
         self.with_stack = with_stack
         self.with_flops = with_flops
         self.activities = activities
-        self.prof: Optional[Any] = None
-        self._start_mem: Optional[int] = None
+        self.prof: Any | None = None
+        self._start_mem: int | None = None
         self._peak_mem_mb: float = 0.0
 
     def __enter__(self):

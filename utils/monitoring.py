@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -60,7 +60,7 @@ class LossSpikeDetector:
         self._filled: bool = False
         self._spike_count: int = 0
 
-    def update(self, loss: float, step: int) -> Dict[str, Any]:
+    def update(self, loss: float, step: int) -> dict[str, Any]:
         """Record a new loss value and check for spikes.
 
         Returns
@@ -69,7 +69,7 @@ class LossSpikeDetector:
             Contains ``spike_detected`` (bool), ``z_score`` (float),
             ``lr_multiplier`` (float or None), and ``message`` (str).
         """
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "spike_detected": False,
             "z_score": 0.0,
             "lr_multiplier": None,
@@ -148,7 +148,7 @@ class GradientNormMonitor:
         self.logger = logger_obj
         self.tag_prefix = tag_prefix
 
-    def compute(self, model: nn.Module, step: int) -> Dict[str, float]:
+    def compute(self, model: nn.Module, step: int) -> dict[str, float]:
         """Compute total and per-layer gradient norms.
 
         Returns
@@ -157,7 +157,7 @@ class GradientNormMonitor:
             ``total_norm`` plus per-layer norms keyed by sanitized parameter name.
         """
         total_norm = 0.0
-        norms: Dict[str, float] = {}
+        norms: dict[str, float] = {}
         for name, p in model.named_parameters():
             if p.grad is not None:
                 param_norm = p.grad.data.norm(2).item()
@@ -171,9 +171,7 @@ class GradientNormMonitor:
                 import torch
 
                 layer_norms = torch.tensor(list(norms.values()), dtype=torch.float32)
-                self.logger.log_histogram(
-                    f"{self.tag_prefix}/layer_norms", layer_norms, step
-                )
+                self.logger.log_histogram(f"{self.tag_prefix}/layer_norms", layer_norms, step)
 
         return {"total_norm": total_norm, **{k: round(v, 6) for k, v in norms.items()}}
 
@@ -190,7 +188,7 @@ class MemoryProfiler:
         self._peak_allocated: int = 0
         self._peak_reserved: int = 0
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         """Return a structured memory report.
 
         Returns
@@ -263,7 +261,7 @@ class ThroughputMonitor:
             1 = keep previous value).
         """
         self.smoothing = smoothing
-        self._last_time: Optional[float] = None
+        self._last_time: float | None = None
         self._tokens_per_s: float = 0.0
         self._samples_per_s: float = 0.0
 
@@ -271,7 +269,7 @@ class ThroughputMonitor:
         self,
         tokens_since_last: int,
         samples_since_last: int,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Record a timing tick and return throughput metrics.
 
         Parameters
@@ -305,9 +303,7 @@ class ThroughputMonitor:
         raw_tok = tokens_since_last / dt
         raw_sam = samples_since_last / dt
 
-        self._tokens_per_s = (
-            self.smoothing * self._tokens_per_s + (1.0 - self.smoothing) * raw_tok
-        )
+        self._tokens_per_s = self.smoothing * self._tokens_per_s + (1.0 - self.smoothing) * raw_tok
         self._samples_per_s = (
             self.smoothing * self._samples_per_s + (1.0 - self.smoothing) * raw_sam
         )
@@ -340,7 +336,7 @@ class MetricsHeartbeatWatchdog(threading.Thread):
         self,
         metrics_path: str,
         group_name: str,
-        on_alert: Optional[Callable[[str], None]] = None,
+        on_alert: Callable[[str], None] | None = None,
         poll_interval: float = 5.0,
         baseline_window: int = 10,
         timeout_factor: float = 3.0,

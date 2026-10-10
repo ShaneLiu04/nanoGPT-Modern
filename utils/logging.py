@@ -9,10 +9,10 @@ Features
 * Configurable log level for console output.
 """
 
-import os
 import logging
 import logging.handlers
-from typing import Any, Dict, Optional
+import os
+from typing import Any, Optional
 
 
 class Logger:
@@ -43,7 +43,7 @@ class Logger:
         log_dir: str = "logs",
         use_wandb: bool = False,
         use_tensorboard: bool = True,
-        config: Optional[Dict[str, Any]] = None,
+        config: Optional[dict[str, Any]] = None,
         log_level: int = logging.INFO,
     ):
         self.use_wandb = use_wandb
@@ -85,8 +85,7 @@ class Logger:
                 self.file_handler = file_handler
             except OSError as e:
                 self._console.warning(
-                    f"Rotating file log init failed: {e}. "
-                    "Continuing with console logging only."
+                    f"Rotating file log init failed: {e}. " "Continuing with console logging only."
                 )
 
         # TensorBoard
@@ -119,9 +118,7 @@ class Logger:
                 if self.run is None:
                     raise RuntimeError("wandb.init returned None")
             except Exception as e:
-                self._console.warning(
-                    f"wandb init failed: {e}. Continuing without wandb logging."
-                )
+                self._console.warning(f"wandb init failed: {e}. Continuing without wandb logging.")
                 self.run = None
                 self.use_wandb = False
 
@@ -132,7 +129,7 @@ class Logger:
         if self.run is not None:
             self.run.log({tag: value}, step=step)
 
-    def log_scalars(self, scalars: Dict[str, float], step: int):
+    def log_scalars(self, scalars: dict[str, float], step: int):
         """Log a dictionary of scalars."""
         if self.writer is not None:
             for tag, value in scalars.items():
@@ -188,7 +185,7 @@ class Logger:
 
         total_norm = 0.0
         norms = []
-        for name, p in model.named_parameters():
+        for _name, p in model.named_parameters():
             if p.grad is not None:
                 param_norm = p.grad.data.norm(2).item()
                 norms.append(param_norm)
@@ -206,7 +203,7 @@ class Logger:
             safe_name = name.replace(".", "/")
             self.log_histogram(f"{tag_prefix}/{safe_name}", p.data, step)
 
-    def log_config(self, config: Dict[str, Any]):
+    def log_config(self, config: dict[str, Any]):
         """Log a configuration dictionary to all active backends."""
         if self.run is not None:
             self.run.config.update(config, allow_val_change=True)
