@@ -45,9 +45,7 @@ def test_dpo_loss_increases_when_policy_prefers_rejected():
     policy_rejected = torch.tensor([0.0])
     ref_chosen = torch.tensor([0.0])
     ref_rejected = torch.tensor([0.0])
-    loss, _ = compute_dpo_loss(
-        policy_chosen, policy_rejected, ref_chosen, ref_rejected, beta=0.1
-    )
+    loss, _ = compute_dpo_loss(policy_chosen, policy_rejected, ref_chosen, ref_rejected, beta=0.1)
     assert loss.item() > 0.5
 
 

@@ -77,11 +77,11 @@ import threading
 
 import pytest
 import torch
+from helpers import tiny_modern_config
 
 import inference.continuous_batching as cb
 from inference.generate_utils import _sample_logits
-from model.modern_gpt import ModernGPT, ModernGPTConfig
-from helpers import tiny_modern_config
+from model.modern_gpt import ModernGPT
 
 VOCAB = 64
 # Out-of-vocab sentinel EOS id: greedy argmax is always < VOCAB, so a
@@ -137,9 +137,7 @@ def _run_scheduler(model, requests, batch_size):
     queue = cb.RequestQueue()
     for req in requests:
         queue.enqueue(req)
-    scheduler = cb.ContinuousBatchScheduler(
-        queue, model, device="cpu", batch_size=batch_size
-    )
+    scheduler = cb.ContinuousBatchScheduler(queue, model, device="cpu", batch_size=batch_size)
     results = scheduler.run()
     return scheduler, results
 
@@ -156,7 +154,7 @@ def _generate_reference(model, prompt, max_tokens):
         use_cache=True,
         eos_token_id=None,
     )
-    return out[0, len(prompt):].tolist()
+    return out[0, len(prompt) :].tolist()
 
 
 def _completion_of(result, prompt):
@@ -166,7 +164,7 @@ def _completion_of(result, prompt):
         f"prompt (got {result.token_ids[: len(prompt)]}, "
         f"expected {list(prompt)})"
     )
-    return result.token_ids[len(prompt):]
+    return result.token_ids[len(prompt) :]
 
 
 # ---------------------------------------------------------------------------
@@ -184,16 +182,14 @@ def test_prefix_cache_and_dead_code_removed():
         "inference/continuous_batching.py"
     )
     assert "class BatchGenerator" not in src, (
-        "BatchGenerator must be deleted from "
-        "inference/continuous_batching.py"
+        "BatchGenerator must be deleted from " "inference/continuous_batching.py"
     )
     assert "_init_decode_compile" not in src, (
         "_init_decode_compile (never called) must be deleted from "
         "inference/continuous_batching.py"
     )
     assert "threading.Lock" in src, (
-        "RequestQueue must protect its internal state with "
-        "threading.Lock"
+        "RequestQueue must protect its internal state with " "threading.Lock"
     )
 
 
@@ -207,13 +203,9 @@ def test_generate_result_and_run_signature():
     ContinuousBatchScheduler(queue, model, device=..., batch_size=...) is
     constructible, run() has a max_steps parameter, the scheduler exposes
     iteration_count, and a single greedy request runs to 'length'."""
-    assert hasattr(cb, "GenerateResult"), (
-        "inference.continuous_batching must define GenerateResult"
-    )
+    assert hasattr(cb, "GenerateResult"), "inference.continuous_batching must define GenerateResult"
     generate_result_cls = cb.GenerateResult
-    assert dataclasses.is_dataclass(generate_result_cls), (
-        "GenerateResult must be a dataclass"
-    )
+    assert dataclasses.is_dataclass(generate_result_cls), "GenerateResult must be a dataclass"
     field_names = {f.name for f in dataclasses.fields(generate_result_cls)}
     assert {
         "request_id",
@@ -238,23 +230,17 @@ def test_generate_result_and_run_signature():
     model = _tiny_model(seed=41)
     prompt = [3, 17, 5, 42, 9, 11]
     queue = cb.RequestQueue()
-    queue.enqueue(
-        _make_request(prompt, max_tokens=4, request_id="r0", eos_token_id=None)
-    )
-    scheduler = cb.ContinuousBatchScheduler(
-        queue, model, device="cpu", batch_size=2
-    )
-    assert "max_steps" in inspect.signature(scheduler.run).parameters, (
-        "ContinuousBatchScheduler.run must accept a max_steps parameter"
-    )
-    assert hasattr(scheduler, "iteration_count"), (
-        "ContinuousBatchScheduler must expose an iteration_count attribute"
-    )
+    queue.enqueue(_make_request(prompt, max_tokens=4, request_id="r0", eos_token_id=None))
+    scheduler = cb.ContinuousBatchScheduler(queue, model, device="cpu", batch_size=2)
+    assert (
+        "max_steps" in inspect.signature(scheduler.run).parameters
+    ), "ContinuousBatchScheduler.run must accept a max_steps parameter"
+    assert hasattr(
+        scheduler, "iteration_count"
+    ), "ContinuousBatchScheduler must expose an iteration_count attribute"
 
     results = scheduler.run()
-    assert isinstance(results, list), (
-        "run() must return List[GenerateResult], not a dict"
-    )
+    assert isinstance(results, list), "run() must return List[GenerateResult], not a dict"
     assert len(results) == 1
     res = results[0]
     assert res.request_id == "r0"
@@ -318,10 +304,7 @@ def test_prefill_first_token_no_offbyone():
     prompts = [p_short, p_long]
     scheduler, results = _run_scheduler(
         model,
-        [
-            _make_request(p, max_tokens=1, request_id=f"r{i}")
-            for i, p in enumerate(prompts)
-        ],
+        [_make_request(p, max_tokens=1, request_id=f"r{i}") for i, p in enumerate(prompts)],
         batch_size=2,
     )
     assert isinstance(results, list) and len(results) == 2
@@ -358,8 +341,7 @@ def test_left_padded_batch_matches_separate():
     scheduler, results = _run_scheduler(
         model,
         [
-            _make_request(p, max_tokens=max_tokens, request_id=f"r{i}",
-                          eos_token_id=SENTINEL_EOS)
+            _make_request(p, max_tokens=max_tokens, request_id=f"r{i}", eos_token_id=SENTINEL_EOS)
             for i, p in enumerate(prompts)
         ],
         batch_size=3,
@@ -404,15 +386,11 @@ def test_slot_recycling_iteration_boundaries():
     queue = cb.RequestQueue()
     for req in requests:
         queue.enqueue(req)
-    scheduler = cb.ContinuousBatchScheduler(
-        queue, model, device="cpu", batch_size=2
-    )
+    scheduler = cb.ContinuousBatchScheduler(queue, model, device="cpu", batch_size=2)
     results = scheduler.run()
     assert isinstance(results, list)
     by_id = {r.request_id: r for r in results}
-    assert set(by_id) == {"short", "long", "third"}, (
-        "all three requests must complete"
-    )
+    assert set(by_id) == {"short", "long", "third"}, "all three requests must complete"
     assert by_id["short"].finish_iteration == 3, (
         "short (max_tokens=3) must finish in iteration 3 "
         f"(got {by_id['short'].finish_iteration})"
@@ -423,16 +401,14 @@ def test_slot_recycling_iteration_boundaries():
         f"{by_id['third'].finish_iteration}"
     )
     assert by_id["long"].finish_iteration == 8, (
-        "long (max_tokens=8) must finish in iteration 8 "
-        f"(got {by_id['long'].finish_iteration})"
+        "long (max_tokens=8) must finish in iteration 8 " f"(got {by_id['long'].finish_iteration})"
     )
     assert scheduler.iteration_count == 8, (
-        "the whole run must take exactly 8 iterations "
-        f"(got {scheduler.iteration_count})"
+        "the whole run must take exactly 8 iterations " f"(got {scheduler.iteration_count})"
     )
-    assert len(_completion_of(by_id["long"], prompt)) == 8, (
-        "short finishing early must not disturb long's completion"
-    )
+    assert (
+        len(_completion_of(by_id["long"], prompt)) == 8
+    ), "short finishing early must not disturb long's completion"
     assert len(_completion_of(by_id["short"], prompt)) == 3
     assert len(_completion_of(by_id["third"], prompt)) == 1
     assert all(r.finish_reason == "length" for r in results)
@@ -452,12 +428,8 @@ def test_max_steps_partial():
 
     queue = cb.RequestQueue()
     for i in range(2):
-        queue.enqueue(
-            _make_request(prompt, max_tokens=20, request_id=f"r{i}")
-        )
-    scheduler = cb.ContinuousBatchScheduler(
-        queue, model, device="cpu", batch_size=4
-    )
+        queue.enqueue(_make_request(prompt, max_tokens=20, request_id=f"r{i}"))
+    scheduler = cb.ContinuousBatchScheduler(queue, model, device="cpu", batch_size=4)
     partial = scheduler.run(max_steps=5)
     assert isinstance(partial, list) and len(partial) == 0, (
         "after 5 iterations of max_tokens=20 requests nothing is "
@@ -469,12 +441,8 @@ def test_max_steps_partial():
     # fresh queue and a fresh scheduler for the full run.
     queue2 = cb.RequestQueue()
     for i in range(2):
-        queue2.enqueue(
-            _make_request(prompt, max_tokens=20, request_id=f"r{i}")
-        )
-    scheduler2 = cb.ContinuousBatchScheduler(
-        queue2, model, device="cpu", batch_size=4
-    )
+        queue2.enqueue(_make_request(prompt, max_tokens=20, request_id=f"r{i}"))
+    scheduler2 = cb.ContinuousBatchScheduler(queue2, model, device="cpu", batch_size=4)
     full = scheduler2.run(max_steps=None)
     assert isinstance(full, list) and len(full) == 2
     for res in full:
@@ -508,16 +476,14 @@ def test_vectorized_sampling_mixed_temperatures():
     out = _sample_logits_batched(logits, temps, top_ks=torch.full((4,), 3))
     assert out.shape == (4,)
     assert out.dtype == torch.long
-    assert out[0].item() == argmax[0].item(), (
-        "temperature=0 rows must be strict argmax regardless of top_k"
-    )
+    assert (
+        out[0].item() == argmax[0].item()
+    ), "temperature=0 rows must be strict argmax regardless of top_k"
     assert out[1].item() == argmax[1].item()
     assert all(0 <= int(t) < V for t in out[2:].tolist())
 
     # top_k=1 at temperature 1 keeps only the top-1 token -> argmax.
-    out_k1 = _sample_logits_batched(
-        logits, torch.ones(4), top_ks=torch.ones(4, dtype=torch.long)
-    )
+    out_k1 = _sample_logits_batched(logits, torch.ones(4), top_ks=torch.ones(4, dtype=torch.long))
     assert out_k1.tolist() == argmax.tolist()
 
     # top_p=0.0 at temperature 1: cumulative prob > 0 masks every sorted
@@ -540,14 +506,11 @@ def test_vectorized_sampling_mixed_temperatures():
     # legal (RNG consumption order differs between the batched and the
     # per-row paths).
     for b in range(4):
-        ref = _sample_logits(
-            logits[b : b + 1], temperature=float(temps[b])
-        )
+        ref = _sample_logits(logits[b : b + 1], temperature=float(temps[b]))
         assert 0 <= int(ref[0]) < V
         if float(temps[b]) == 0.0:
             assert out[b].item() == int(ref[0]), (
-                f"row {b}: temperature=0 rows must match the per-row "
-                "_sample_logits argmax"
+                f"row {b}: temperature=0 rows must match the per-row " "_sample_logits argmax"
             )
 
     # --- integration: mixed-temperature batch through the scheduler ---
@@ -559,7 +522,9 @@ def test_vectorized_sampling_mixed_temperatures():
     def make_requests():
         return [
             _make_request(
-                p, max_tokens=max_tokens, request_id=f"r{i}",
+                p,
+                max_tokens=max_tokens,
+                request_id=f"r{i}",
                 temperature=t,
             )
             for i, (p, t) in enumerate(zip(prompts, temps_list))
@@ -603,10 +568,7 @@ def test_greedy_determinism():
     def run_once():
         scheduler, results = _run_scheduler(
             model,
-            [
-                _make_request(p, max_tokens=4, request_id=f"r{i}")
-                for i, p in enumerate(prompts)
-            ],
+            [_make_request(p, max_tokens=4, request_id=f"r{i}") for i, p in enumerate(prompts)],
             batch_size=2,
         )
         assert isinstance(results, list)
@@ -616,8 +578,7 @@ def test_greedy_determinism():
     out2 = run_once()
     assert set(out1) == set(out2) == {"r0", "r1"}
     assert out1 == out2, (
-        "greedy (temperature=0) scheduling must be deterministic across "
-        "independent runs"
+        "greedy (temperature=0) scheduling must be deterministic across " "independent runs"
     )
 
 
@@ -647,10 +608,10 @@ def test_empty_slot_no_contamination():
             raw = {r.request_id: list(r.token_ids) for r in results}
         out = {}
         for rid, prompt in prompts_by_id.items():
-            assert raw[rid][: len(prompt)] == list(prompt), (
-                f"request {rid}: token_ids must start with the prompt"
-            )
-            out[rid] = raw[rid][len(prompt):]
+            assert raw[rid][: len(prompt)] == list(
+                prompt
+            ), f"request {rid}: token_ids must start with the prompt"
+            out[rid] = raw[rid][len(prompt) :]
         return out
 
     def completions(batch_size, requests):
@@ -659,18 +620,19 @@ def test_empty_slot_no_contamination():
         return completions_by_id(results, prompts_by_id)
 
     reqs = [
-        _make_request(p, max_tokens=max_tokens, request_id=f"p{i}")
-        for i, p in enumerate(prompts)
+        _make_request(p, max_tokens=max_tokens, request_id=f"p{i}") for i, p in enumerate(prompts)
     ]
     c4 = completions(4, reqs)
-    c3 = completions(3, [
-        _make_request(p, max_tokens=max_tokens, request_id=f"p{i}")
-        for i, p in enumerate(prompts)
-    ])
+    c3 = completions(
+        3,
+        [
+            _make_request(p, max_tokens=max_tokens, request_id=f"p{i}")
+            for i, p in enumerate(prompts)
+        ],
+    )
     assert set(c4) == set(c3) == {"p0", "p1", "p2"}
     assert c4 == c3, (
-        "one empty slot (batch_size=4 with 3 requests) must not change "
-        "any completion"
+        "one empty slot (batch_size=4 with 3 requests) must not change " "any completion"
     )
     assert all(
         0 <= t < VOCAB for comp in c4.values() for t in comp
@@ -721,16 +683,11 @@ def test_request_queue_thread_safety():
     def enqueue_worker(tid):
         try:
             for i in range(25):
-                queue.enqueue(
-                    _make_request([tid, i], max_tokens=1,
-                                  request_id=f"t{tid}-{i}")
-                )
+                queue.enqueue(_make_request([tid, i], max_tokens=1, request_id=f"t{tid}-{i}"))
         except Exception as exc:  # pragma: no cover - failure path
             errors.append(exc)
 
-    threads = [
-        threading.Thread(target=enqueue_worker, args=(t,)) for t in range(8)
-    ]
+    threads = [threading.Thread(target=enqueue_worker, args=(t,)) for t in range(8)]
     for t in threads:
         t.start()
     for t in threads:
@@ -758,16 +715,12 @@ def test_request_queue_thread_safety():
     for t in threads:
         t.join()
     assert not errors, (
-        f"concurrent dequeue raised (check-then-pop race without a "
-        f"lock): {errors}"
+        f"concurrent dequeue raised (check-then-pop race without a " f"lock): {errors}"
     )
-    assert len(collected) == 200, (
-        f"expected all 200 requests to be dequeued (got {len(collected)})"
-    )
+    assert len(collected) == 200, f"expected all 200 requests to be dequeued (got {len(collected)})"
     counts = collections.Counter(collected)
     assert all(v == 1 for v in counts.values()), (
-        "no request_id may be duplicated or lost across concurrent "
-        "drainers"
+        "no request_id may be duplicated or lost across concurrent " "drainers"
     )
     assert queue.is_empty()
 
@@ -813,8 +766,7 @@ def test_forward_positions_semantics(position_encoding):
         out_implicit = model(x)[0]
         assert out_explicit.shape == out_implicit.shape
         assert torch.allclose(out_explicit, out_implicit, atol=1e-6), (
-            "positions=arange(0,T) must reproduce the default "
-            "(implicit) position indexing"
+            "positions=arange(0,T) must reproduce the default " "(implicit) position indexing"
         )
 
         # (b1) explicit offset == implicit start_pos offset
@@ -874,10 +826,7 @@ def test_forward_kv_mask_semantics(position_encoding):
     k_full = torch.randn(1, H, L_total, D)
     v_full = torch.randn(1, H, L_total, D)
     past_full = [(k_full, v_full) for _ in range(n_layer)]
-    past_clean = [
-        (k_full[:, :, :L_valid], v_full[:, :, :L_valid])
-        for _ in range(n_layer)
-    ]
+    past_clean = [(k_full[:, :, :L_valid], v_full[:, :, :L_valid]) for _ in range(n_layer)]
     kv_mask = torch.zeros(1, L_total, dtype=torch.bool)
     kv_mask[:, :L_valid] = True
     x = torch.randint(0, VOCAB, (1, 1))
@@ -907,9 +856,9 @@ def test_forward_kv_mask_semantics(position_encoding):
             use_cache=False,
             positions=torch.tensor([[L_valid]]),
         )[0]
-        assert not torch.allclose(out_polluted, out_clean, atol=1e-4), (
-            "sanity: the unmasked garbage tail must perturb the logits"
-        )
+        assert not torch.allclose(
+            out_polluted, out_clean, atol=1e-4
+        ), "sanity: the unmasked garbage tail must perturb the logits"
 
     # --- B=2: per-row valid lengths, batched vs per-row ---
     L_total2 = 12
@@ -940,12 +889,8 @@ def test_forward_kv_mask_semantics(position_encoding):
                 )
                 for _ in range(n_layer)
             ]
-            out_row = model(
-                x2[b : b + 1], past_kvs=past_b, use_cache=False
-            )
-            assert torch.allclose(
-                out_batch[b], out_row[0], atol=1e-5
-            ), (
+            out_row = model(x2[b : b + 1], past_kvs=past_b, use_cache=False)
+            assert torch.allclose(out_batch[b], out_row[0], atol=1e-5), (
                 f"row {b}: batched kv_mask decode must match the row run "
                 "alone with a clean past slice"
             )
@@ -970,7 +915,9 @@ def test_repetition_penalty_semantics():
     batch_requests = [
         _make_request(prompt, max_tokens=max_tokens, request_id="nopen"),
         _make_request(
-            prompt, max_tokens=max_tokens, request_id="pen",
+            prompt,
+            max_tokens=max_tokens,
+            request_id="pen",
             repetition_penalty=1.5,
         ),
     ]
@@ -980,7 +927,9 @@ def test_repetition_penalty_semantics():
 
     solo_requests = [
         _make_request(
-            prompt, max_tokens=max_tokens, request_id="pen",
+            prompt,
+            max_tokens=max_tokens,
+            request_id="pen",
             repetition_penalty=1.5,
         ),
     ]
@@ -996,8 +945,7 @@ def test_repetition_penalty_semantics():
 
     expected = _generate_reference(model, prompt, max_tokens)
     assert _completion_of(by_id["nopen"], prompt) == expected, (
-        "the no-penalty row must equal the plain greedy generate "
-        "reference"
+        "the no-penalty row must equal the plain greedy generate " "reference"
     )
 
 
@@ -1020,7 +968,9 @@ def test_eos_finish_reason_and_token_inclusion():
         model,
         [
             _make_request(
-                prompt, max_tokens=5, request_id="eosr",
+                prompt,
+                max_tokens=5,
+                request_id="eosr",
                 eos_token_id=greedy_first,
             )
         ],
@@ -1029,12 +979,11 @@ def test_eos_finish_reason_and_token_inclusion():
     assert isinstance(results, list) and len(results) == 1
     res = results[0]
     assert res.finish_reason == "eos", (
-        f"hitting eos_token_id must finish with 'eos' "
-        f"(got {res.finish_reason!r})"
+        f"hitting eos_token_id must finish with 'eos' " f"(got {res.finish_reason!r})"
     )
-    assert res.token_ids[-1] == greedy_first, (
-        "the eos token must be included at the end of token_ids"
-    )
+    assert (
+        res.token_ids[-1] == greedy_first
+    ), "the eos token must be included at the end of token_ids"
     completion = _completion_of(res, prompt)
     assert len(completion) == 1 and completion[0] == greedy_first, (
         "generation must stop at the sampled eos token (completion must "

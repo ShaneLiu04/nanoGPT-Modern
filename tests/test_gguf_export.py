@@ -7,9 +7,8 @@ import tempfile
 
 import numpy as np
 import torch
-
-
 from helpers import tiny_modern_config
+
 from model.gguf_utils import (
     GGMLQuantizationType,
     GGUFWriter,
@@ -19,7 +18,7 @@ from model.gguf_utils import (
     read_gguf_tensor_data,
     read_gguf_tensor_info,
 )
-from model.modern_gpt import ModernGPT, ModernGPTConfig
+from model.modern_gpt import ModernGPT
 
 
 def _tiny_config():

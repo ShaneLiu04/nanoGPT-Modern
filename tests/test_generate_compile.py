@@ -4,10 +4,9 @@ import warnings
 
 import pytest
 import torch
-
-
-from model.modern_gpt import ModernGPT, ModernGPTConfig
 from helpers import tiny_modern_config
+
+from model.modern_gpt import ModernGPT
 
 
 @pytest.mark.parametrize("use_cache", [False, True])

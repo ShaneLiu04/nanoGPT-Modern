@@ -10,10 +10,10 @@ Covers:
 """
 
 import torch
+from helpers import tiny_modern_config
 
 from model import ModernGPT, ModernGPTConfig
 from model import flash_attention as flash_attn_module
-from helpers import tiny_modern_config
 
 # ---------------------------------------------------------------------------
 #  Availability introspection

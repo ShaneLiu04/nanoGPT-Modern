@@ -33,7 +33,6 @@ tests/test_ddp_shard.py (block_size=32).
 import argparse
 import contextlib
 import inspect
-import os
 import warnings
 from pathlib import Path
 
@@ -265,9 +264,7 @@ class TestFSDPConstruction:
     L287/L320: FSDP wrap first, torch.compile after (compile outermost).
     """
 
-    def test_fsdp_wrap_sets_fsdp_module_and_raw_model(
-        self, tmp_path, monkeypatch
-    ):
+    def test_fsdp_wrap_sets_fsdp_module_and_raw_model(self, tmp_path, monkeypatch):
         """wrap_distributed must remember the FSDP wrapper.
 
         ``trainer._fsdp_module`` is the FullyShardedDataParallel root,
@@ -310,8 +307,7 @@ class TestFSDPConstruction:
                 return name
 
             fsdp_params = {
-                strip_prefix(name): param
-                for name, param in trainer._fsdp_module.named_parameters()
+                strip_prefix(name): param for name, param in trainer._fsdp_module.named_parameters()
             }
             assert fsdp_params, (
                 "FSDP root has no parameters: FSDP flattened them away "
@@ -325,9 +321,9 @@ class TestFSDPConstruction:
                 "model (use_orig_params=True must preserve them)"
             )
             for name, ref_p in ref_params.items():
-                assert fsdp_params[name].shape == ref_p.shape, (
-                    f"parameter {name} changed shape under FSDP"
-                )
+                assert (
+                    fsdp_params[name].shape == ref_p.shape
+                ), f"parameter {name} changed shape under FSDP"
         finally:
             trainer.cleanup()
 
@@ -344,9 +340,7 @@ class TestFSDPConstruction:
         args, trainer = _make_fsdp_trainer(tmp_path, monkeypatch, port=29513)
         try:
             n_wrappers = sum(
-                1
-                for m in trainer._fsdp_module.modules()
-                if isinstance(m, FullyShardedDataParallel)
+                1 for m in trainer._fsdp_module.modules() if isinstance(m, FullyShardedDataParallel)
             )
             assert n_wrappers >= 3, (
                 f"expected root + >= 2 per-Block FSDP wrappers, got "
@@ -371,9 +365,7 @@ class TestFSDPConstruction:
         lines = src.splitlines()
 
         fsdp_lines = [i for i, line in enumerate(lines) if "FSDP(" in line]
-        compile_lines = [
-            i for i, line in enumerate(lines) if "torch.compile(" in line
-        ]
+        compile_lines = [i for i, line in enumerate(lines) if "torch.compile(" in line]
         assert fsdp_lines, "wrap_distributed never constructs FSDP(...)"
         assert compile_lines, "wrap_distributed never calls torch.compile"
 
@@ -383,8 +375,7 @@ class TestFSDPConstruction:
             "because FSDP1 does not handle _orig_mod)"
         )
         assert "use_orig_params=True" in src, (
-            "FSDP construction must pass use_orig_params=True "
-            "(torch.compile compatibility)"
+            "FSDP construction must pass use_orig_params=True " "(torch.compile compatibility)"
         )
         assert "auto_wrap_policy" in src, (
             "FSDP construction must pass an auto_wrap_policy "
@@ -425,12 +416,10 @@ class TestStateDictHooks:
             assert not any("_fsdp_wrapped_module." in key for key in keys)
 
             assert trainer.ckpt_manager.state_dict_fn is not None, (
-                "configure_checkpointing must pass "
-                "state_dict_fn=self._get_model_state_dict"
+                "configure_checkpointing must pass " "state_dict_fn=self._get_model_state_dict"
             )
             assert trainer.ckpt_manager.load_state_fn is not None, (
-                "configure_checkpointing must pass "
-                "load_state_fn=self._load_model_state_dict"
+                "configure_checkpointing must pass " "load_state_fn=self._load_model_state_dict"
             )
         finally:
             trainer.cleanup()
@@ -459,13 +448,12 @@ class TestStateDictHooks:
         manager.flush()  # async by default (T022): flush before reading
 
         ckpt = torch.load(path, weights_only=False)
-        assert set(ckpt["model"]) == {"custom"}, (
-            "payload must come from state_dict_fn, not model.state_dict()"
-        )
+        assert set(ckpt["model"]) == {
+            "custom"
+        }, "payload must come from state_dict_fn, not model.state_dict()"
         assert torch.equal(ckpt["model"]["custom"], torch.ones(3))
         assert ckpt["config"]["model_type"] in {"modern", "baseline"}, (
-            "model_type detection must keep working alongside the "
-            "state_dict_fn hook"
+            "model_type detection must keep working alongside the " "state_dict_fn hook"
         )
 
     def test_checkpoint_manager_load_delegates(self, tmp_path):
@@ -502,18 +490,14 @@ class TestStateDictHooks:
 
         manager.load(path)
 
-        assert len(calls) == 1, (
-            "load must delegate to load_state_fn exactly once"
-        )
+        assert len(calls) == 1, "load must delegate to load_state_fn exactly once"
         model_arg, sd_arg = calls[0]
         assert model_arg is tiny
         assert set(sd_arg) == {"custom"}
         assert torch.equal(sd_arg["custom"], torch.arange(3.0))
 
         # The default path must not have run: weights are unchanged.
-        for before, after in zip(
-            weights_before, [p.detach().clone() for p in tiny.parameters()]
-        ):
+        for before, after in zip(weights_before, [p.detach().clone() for p in tiny.parameters()]):
             assert torch.equal(before, after)
 
     def test_get_model_state_dict_fsdp_routing(self, tmp_path, monkeypatch):
@@ -534,12 +518,8 @@ class TestStateDictHooks:
             stub = nn.Sequential(nn.Linear(2, 2))
             monkeypatch.setattr(trainer.args, "fsdp", True)
             monkeypatch.setattr(trainer, "distributed", True)
-            monkeypatch.setattr(
-                trainer, "_fsdp_module", stub, raising=False
-            )
-            monkeypatch.setattr(
-                stub, "state_dict", lambda: {"fake": torch.zeros(2)}
-            )
+            monkeypatch.setattr(trainer, "_fsdp_module", stub, raising=False)
+            monkeypatch.setattr(stub, "state_dict", lambda: {"fake": torch.zeros(2)})
 
             recorded = []
             _recording_state_dict_type(monkeypatch, recorded)
@@ -550,12 +530,8 @@ class TestStateDictHooks:
             assert torch.equal(out["fake"], torch.zeros(2))
             assert recorded, "FSDP.state_dict_type context must be entered"
             module_arg, sd_args, sd_kwargs = recorded[0]
-            assert module_arg is stub, (
-                "state_dict_type must target self._fsdp_module"
-            )
-            sd_type = (
-                sd_args[0] if sd_args else sd_kwargs.get("state_dict_type")
-            )
+            assert module_arg is stub, "state_dict_type must target self._fsdp_module"
+            sd_type = sd_args[0] if sd_args else sd_kwargs.get("state_dict_type")
             assert sd_type == StateDictType.FULL_STATE_DICT
         finally:
             trainer.cleanup()
@@ -576,9 +552,7 @@ class TestStateDictHooks:
             stub = nn.Sequential(nn.Linear(2, 2))
             monkeypatch.setattr(trainer.args, "fsdp", True)
             monkeypatch.setattr(trainer, "distributed", True)
-            monkeypatch.setattr(
-                trainer, "_fsdp_module", stub, raising=False
-            )
+            monkeypatch.setattr(trainer, "_fsdp_module", stub, raising=False)
 
             recorded = []
             _recording_state_dict_type(monkeypatch, recorded)
@@ -597,25 +571,17 @@ class TestStateDictHooks:
                 lambda sd, strict=True: raw_calls.append(sd),
             )
 
-            trainer._load_model_state_dict(
-                trainer.raw_model, {"w": torch.ones(1)}
-            )
+            trainer._load_model_state_dict(trainer.raw_model, {"w": torch.ones(1)})
 
             assert recorded, "FSDP.state_dict_type context must be entered"
             module_arg, sd_args, sd_kwargs = recorded[0]
             assert module_arg is stub
-            sd_type = (
-                sd_args[0] if sd_args else sd_kwargs.get("state_dict_type")
-            )
+            sd_type = sd_args[0] if sd_args else sd_kwargs.get("state_dict_type")
             assert sd_type == StateDictType.FULL_STATE_DICT
 
-            assert len(stub_calls) == 1, (
-                "the FSDP wrapper's load_state_dict must be called once"
-            )
+            assert len(stub_calls) == 1, "the FSDP wrapper's load_state_dict must be called once"
             assert torch.equal(stub_calls[0]["w"], torch.ones(1))
-            assert raw_calls == [], (
-                "raw model load_state_dict must not run on the FSDP path"
-            )
+            assert raw_calls == [], "raw model load_state_dict must not run on the FSDP path"
         finally:
             trainer.cleanup()
 
@@ -637,8 +603,7 @@ class TestStateDictHooks:
             "gathered dict (rank0 checkpointing without device copies)"
         )
         assert "rank0_only" in src_get, (
-            "full state dict only materializes on rank 0 (the "
-            "checkpointing rank)"
+            "full state dict only materializes on rank 0 (the " "checkpointing rank)"
         )
 
         src_load = inspect.getsource(BaseTrainer._load_model_state_dict)
@@ -694,12 +659,12 @@ class TestFSDPAtomicity:
 
         # E7: the old checkpoint is untouched and fully loadable.
         still = torch.load(path, weights_only=False)
-        assert still["iter_num"] == 1, (
-            "the interrupted save must not corrupt the previous checkpoint"
-        )
-        assert list(Path(out_dir).glob("*.tmp")) == [], (
-            "no half-written tmp file may survive the failed save"
-        )
+        assert (
+            still["iter_num"] == 1
+        ), "the interrupted save must not corrupt the previous checkpoint"
+        assert (
+            list(Path(out_dir).glob("*.tmp")) == []
+        ), "no half-written tmp file may survive the failed save"
 
 
 # ---------------------------------------------------------------------------
@@ -724,9 +689,9 @@ class TestPretrainRemoval:
             "_get_model_state_dict moved to BaseTrainer; the "
             "PretrainTrainer override must be removed"
         )
-        assert "_get_model_state_dict" in vars(BaseTrainer), (
-            "BaseTrainer provides the generalized state-dict hook"
-        )
-        assert "_load_model_state_dict" in vars(BaseTrainer), (
-            "BaseTrainer provides the generalized load hook"
-        )
+        assert "_get_model_state_dict" in vars(
+            BaseTrainer
+        ), "BaseTrainer provides the generalized state-dict hook"
+        assert "_load_model_state_dict" in vars(
+            BaseTrainer
+        ), "BaseTrainer provides the generalized load hook"

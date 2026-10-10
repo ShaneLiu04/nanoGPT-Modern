@@ -2,10 +2,10 @@
 
 import pytest
 import torch
+from helpers import tiny_modern_config
 
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
-from helpers import tiny_modern_config
 
 
 @pytest.mark.parametrize(

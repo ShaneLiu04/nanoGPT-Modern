@@ -21,12 +21,11 @@ C. ``tests/test_bugfixes.py`` (670-line grab-bag) is split by theme
 """
 
 import inspect
-import io
 import re
-import tomllib
 from pathlib import Path
 
 import pytest
+import tomllib
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -45,9 +44,7 @@ def _read(rel):
 def _make_tiny_ckpt(path, extra_state=None, drop_config=False, vocab_size=50):
     from model.modern_gpt import ModernGPT, ModernGPTConfig
 
-    cfg = ModernGPTConfig(
-        n_layer=1, n_head=2, n_embd=32, block_size=16, vocab_size=vocab_size
-    )
+    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, vocab_size=vocab_size)
     model = ModernGPT(cfg)
     ckpt = {"model": model.state_dict(), "iter_num": 7}
     if not drop_config:
@@ -82,16 +79,12 @@ def test_unified_loader_eval_mode(tmp_path):
     ckpt_file = tmp_path / "tiny.pt"
     _make_tiny_ckpt(ckpt_file)
 
-    model, ckpt = load_model_from_checkpoint(
-        str(ckpt_file), device="cpu", eval_mode=True
-    )
+    model, ckpt = load_model_from_checkpoint(str(ckpt_file), device="cpu", eval_mode=True)
     assert isinstance(model, ModernGPT)
     assert model.training is False
     assert ckpt["iter_num"] == 7
 
-    model2, _ = load_model_from_checkpoint(
-        str(ckpt_file), device="cpu", eval_mode=False
-    )
+    model2, _ = load_model_from_checkpoint(str(ckpt_file), device="cpu", eval_mode=False)
     assert model2.training is True
 
 
@@ -104,9 +97,7 @@ def test_unified_loader_strict_flag(tmp_path):
     with pytest.raises(RuntimeError):
         load_model_from_checkpoint(str(ckpt_file), device="cpu", strict=True)
 
-    model, _ = load_model_from_checkpoint(
-        str(ckpt_file), device="cpu", strict=False
-    )
+    model, _ = load_model_from_checkpoint(str(ckpt_file), device="cpu", strict=False)
     assert model is not None
 
 

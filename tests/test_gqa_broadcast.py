@@ -8,10 +8,10 @@ across training (causal), decode (non-causal), masked, and cached paths.
 
 import pytest
 import torch
+from helpers import tiny_modern_config
 
 from model.attention_utils import probe_gqa_sdpa_support, reset_gqa_probe_cache
 from model.modern_gpt import ModernGPT, ModernGPTConfig, _gqa_grouped_sdpa
-from helpers import tiny_modern_config
 
 # ---------------------------------------------------------------------------
 #  _gqa_grouped_sdpa unit tests

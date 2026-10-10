@@ -14,18 +14,18 @@ from pathlib import Path
 
 import pytest
 
+from training.trainer_base import BaseTrainer
 from utils.experiment import (
     ExperimentRecorder,
     collect_env,
     load_metrics,
     summarize_experiment,
 )
-from training.trainer_base import BaseTrainer
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_recorder(exp_dir, **kwargs):
     """Build an ExperimentRecorder with a default hyperparam config."""
@@ -46,6 +46,7 @@ def _read_manifest(exp_dir):
 # ---------------------------------------------------------------------------
 # collect_env
 # ---------------------------------------------------------------------------
+
 
 def test_collect_env_has_required_fields():
     env = collect_env()
@@ -69,6 +70,7 @@ def test_collect_env_git_missing_degrades_to_unknown(monkeypatch):
 # ---------------------------------------------------------------------------
 # ExperimentRecorder: per-event jsonl writing
 # ---------------------------------------------------------------------------
+
 
 def test_record_step_writes_train_event(tmp_path):
     rec = _make_recorder(tmp_path)
@@ -191,6 +193,7 @@ def test_metrics_jsonl_records_fifty_step_run(tmp_path):
 # ExperimentRecorder: manifest
 # ---------------------------------------------------------------------------
 
+
 def test_write_manifest_is_idempotent(tmp_path):
     rec = _make_recorder(tmp_path)
     rec.record_step(1, loss=1.0)
@@ -219,9 +222,7 @@ def test_write_manifest_merges_extras_across_calls(tmp_path):
     """Extras passed to earlier write_manifest calls must survive later rewrites
     (startup -> save_checkpoint -> finalize all rewrite the same file)."""
     rec = _make_recorder(tmp_path)
-    rec.write_manifest(
-        artifacts={"out_dir": str(tmp_path), "checkpoints": ["ckpt_001.pt"]}
-    )
+    rec.write_manifest(artifacts={"out_dir": str(tmp_path), "checkpoints": ["ckpt_001.pt"]})
     rec.write_manifest(
         final_metrics={
             "best_val_loss": 3.0,
@@ -255,6 +256,7 @@ def test_finalize_status_transitions(tmp_path, status):
 # ---------------------------------------------------------------------------
 # ExperimentRecorder: resume semantics
 # ---------------------------------------------------------------------------
+
 
 def test_resume_appends_to_existing_jsonl(tmp_path):
     rec1 = _make_recorder(tmp_path)
@@ -295,19 +297,14 @@ def test_default_overwrites_existing_jsonl(tmp_path):
 # load_metrics / summarize_experiment
 # ---------------------------------------------------------------------------
 
+
 def test_load_metrics_tolerates_truncated_last_line(tmp_path):
     """Crash protection: a partially-written final line must be dropped."""
     path = tmp_path / "metrics.jsonl"
     good = [
-        json.dumps(
-            {"ts": "2026-01-01T00:00:00", "step": 1, "type": "train", "loss": 4.0}
-        ),
-        json.dumps(
-            {"ts": "2026-01-01T00:00:01", "step": 2, "type": "train", "loss": 3.5}
-        ),
-        json.dumps(
-            {"ts": "2026-01-01T00:00:02", "step": 2, "type": "eval", "val_loss": 3.4}
-        ),
+        json.dumps({"ts": "2026-01-01T00:00:00", "step": 1, "type": "train", "loss": 4.0}),
+        json.dumps({"ts": "2026-01-01T00:00:01", "step": 2, "type": "train", "loss": 3.5}),
+        json.dumps({"ts": "2026-01-01T00:00:02", "step": 2, "type": "eval", "val_loss": 3.4}),
     ]
     truncated = '{"ts": "2026-01-01T00:00:03", "step": 3, "type": "train", "loss": 3.2'
     path.write_text("\n".join(good) + "\n" + truncated, encoding="utf-8")
@@ -380,6 +377,7 @@ def test_summarize_experiment_from_fake_dir(tmp_path):
 # Write-failure degradation (FR1: OSError must not interrupt training)
 # ---------------------------------------------------------------------------
 
+
 def test_record_write_failure_warns_and_does_not_raise(tmp_path, monkeypatch, caplog):
     """When opening metrics.jsonl raises OSError, recording must degrade to a
     console warning instead of raising."""
@@ -393,9 +391,7 @@ def test_record_write_failure_warns_and_does_not_raise(tmp_path, monkeypatch, ca
     monkeypatch.setattr(builtins, "open", failing_open)
 
     with caplog.at_level(logging.WARNING):
-        rec = ExperimentRecorder(
-            exp_dir=str(tmp_path), exp_id="exp1", config={"seed": 1}
-        )
+        rec = ExperimentRecorder(exp_dir=str(tmp_path), exp_id="exp1", config={"seed": 1})
         rec.record_step(1, loss=1.0)
         rec.record_eval(1, val_loss=2.0)
         rec.record_event("loss_spike", 1, z_score=3.0)
@@ -408,6 +404,7 @@ def test_record_write_failure_warns_and_does_not_raise(tmp_path, monkeypatch, ca
 # ---------------------------------------------------------------------------
 # BaseTrainer integration (lightweight)
 # ---------------------------------------------------------------------------
+
 
 class DummyTrainer(BaseTrainer):
     """Minimal concrete trainer: all template hooks keep their pass defaults."""
@@ -458,9 +455,7 @@ def test_base_trainer_exp_id_override(tmp_path):
     try:
         assert trainer.recorder is not None
         exp_dir = out_dir / "experiments" / "custom_exp"
-        manifest = json.loads(
-            (exp_dir / "manifest.json").read_text(encoding="utf-8")
-        )
+        manifest = json.loads((exp_dir / "manifest.json").read_text(encoding="utf-8"))
         assert manifest["exp_id"] == "custom_exp"
     finally:
         trainer.cleanup()

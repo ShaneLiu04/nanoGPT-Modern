@@ -194,8 +194,7 @@ def _make_pretrain_trainer(tmp_path, out_name="out", **overrides):
     return args, PretrainTrainer(args)
 
 
-def _shard_dataset(bin_path, shuffle_idx_path, rank, world, resume_offset=0,
-                   shuffle_buffer=None):
+def _shard_dataset(bin_path, shuffle_idx_path, rank, world, resume_offset=0, shuffle_buffer=None):
     """MemmapDataset with the new shard params (T010 contract)."""
     from data.openwebtext import MemmapDataset
 
@@ -311,9 +310,7 @@ class TestMemmapSharding:
 
         sets = []
         for r in range(3):
-            ds = _shard_dataset(
-                bin_path, None, r, 3, shuffle_buffer=1
-            )
+            ds = _shard_dataset(bin_path, None, r, 3, shuffle_buffer=1)
             ids = _chunk_ids(_consume_samples(ds))
             assert ids[0] == r  # stride visible: first sample of rank r
             sets.append(set(ids))
@@ -333,14 +330,10 @@ class TestMemmapSharding:
         data_dir, bin_path = _write_shard_data(tmp_path, with_shuffle=True)
         shuffle_path = os.path.join(data_dir, "train.bin.shuffle.idx")
 
-        full = _chunk_ids(
-            _consume_samples(_shard_dataset(bin_path, shuffle_path, 1, 3))
-        )
+        full = _chunk_ids(_consume_samples(_shard_dataset(bin_path, shuffle_path, 1, 3)))
         k = 2
         offset_ids = _chunk_ids(
-            _consume_samples(
-                _shard_dataset(bin_path, shuffle_path, 1, 3, resume_offset=k)
-            )
+            _consume_samples(_shard_dataset(bin_path, shuffle_path, 1, 3, resume_offset=k))
         )
         assert offset_ids[0] == full[k]
 
@@ -380,9 +373,7 @@ class TestMemmapSharding:
                 shuffle_idx_path=shuffle_path,
             )
         )
-        shard_off = _consume_samples(
-            _shard_dataset(bin_path, shuffle_path, 0, 1, resume_offset=2)
-        )
+        shard_off = _consume_samples(_shard_dataset(bin_path, shuffle_path, 0, 1, resume_offset=2))
         assert _chunk_ids(default_off) == _chunk_ids(shard_off)
         for a, b in zip(default_off, shard_off):
             assert torch.equal(a, b)
@@ -432,9 +423,7 @@ class TestResumeShardConsistency:
     distributed=False) rather than post-construction monkeypatching.
     """
 
-    def test_resume_world_size_mismatch_warns_and_resets(
-        self, tmp_path, monkeypatch
-    ):
+    def test_resume_world_size_mismatch_warns_and_resets(self, tmp_path, monkeypatch):
         """Saved world_size=1, resumed with world_size=2.
 
         Contract: RuntimeWarning mentioning world_size AND
@@ -533,8 +522,7 @@ class TestResumeShardConsistency:
             mismatch = [
                 w
                 for w in caught
-                if issubclass(w.category, RuntimeWarning)
-                and "world_size" in str(w.message)
+                if issubclass(w.category, RuntimeWarning) and "world_size" in str(w.message)
             ]
             assert not mismatch
             assert trainer_c.resume_offset == saved_offset
@@ -608,9 +596,7 @@ class TestNoSyncAccum:
             self._stub_all_reduce(monkeypatch)
             # nn.Module stores a plain bound method in __dict__; the
             # train loop's hasattr/attribute lookup sees it.
-            monkeypatch.setattr(
-                trainer.model, "no_sync", rec.no_sync, raising=False
-            )
+            monkeypatch.setattr(trainer.model, "no_sync", rec.no_sync, raising=False)
 
             trainer.train()
 
@@ -619,9 +605,7 @@ class TestNoSyncAccum:
         finally:
             trainer.cleanup()
 
-    def test_no_sync_absent_when_accum_1_or_nondistributed(
-        self, tmp_path, monkeypatch
-    ):
+    def test_no_sync_absent_when_accum_1_or_nondistributed(self, tmp_path, monkeypatch):
         """Forward pin: no no_sync when accum=1 or when not distributed.
 
         accum=1 has no non-final micro-step; accum=2 without
@@ -646,9 +630,7 @@ class TestNoSyncAccum:
             monkeypatch.setattr(t1, "distributed", True)
             monkeypatch.setattr(t1, "world_size", 1)
             self._stub_all_reduce(monkeypatch)
-            monkeypatch.setattr(
-                t1.model, "no_sync", rec1.no_sync, raising=False
-            )
+            monkeypatch.setattr(t1.model, "no_sync", rec1.no_sync, raising=False)
             t1.train()
             assert rec1.enters == 0
         finally:
@@ -668,9 +650,7 @@ class TestNoSyncAccum:
         )
         rec2 = _NoSyncRecorder()
         try:
-            monkeypatch.setattr(
-                t2.model, "no_sync", rec2.no_sync, raising=False
-            )
+            monkeypatch.setattr(t2.model, "no_sync", rec2.no_sync, raising=False)
             t2.train()
             assert rec2.enters == 0
         finally:
@@ -714,9 +694,7 @@ class TestBuildDataSharding:
             assert trainer.train_loader.dataset.shard_world_size == 3
             # Eval loaders are unsharded (every rank sees the same data).
             assert trainer.val_loader.dataset.shard_world_size == 1
-            assert (
-                trainer.train_eval_loader.dataset.shard_world_size == 1
-            )
+            assert trainer.train_eval_loader.dataset.shard_world_size == 1
         finally:
             trainer.cleanup()
 

@@ -2,10 +2,10 @@
 
 import pytest
 import torch
-
-from model.modern_gpt import ModernGPT, ModernGPTConfig
-from model.attention_utils import reset_gqa_probe_cache
 from helpers import tiny_modern_config
+
+from model.attention_utils import reset_gqa_probe_cache
+from model.modern_gpt import ModernGPT
 from training.trainer_base import set_seed
 
 
