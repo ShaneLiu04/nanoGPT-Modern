@@ -13,6 +13,13 @@ Training ablation on a tiny model (for CI/smoke)::
     python run_ablations.py --mode train \
         --data_dir data/openwebtext_test \
         --max_iters 100 --n_layer 2 --n_head 2 --n_embd 64
+
+.. deprecated:: v0.5.0
+    This legacy ablation runner is deprecated.  Use the component
+    ablation orchestrator ``run_component_ablations.py`` (console
+    script ``nanogpt-ablations``) instead; it supersedes this script
+    with group checkpoint discovery, architecture validation and
+    resume support.
 """
 
 import os

@@ -15,7 +15,7 @@ Examples
         --data_dir data/openwebtext --split val
 
     # With downstream tasks via a pre-exported HF checkpoint
-    python export_to_hf.py --checkpoint out/pretrain/best_ckpt.pt --out_dir hf/nanogpt-modern
+    python tools/export/export_to_hf.py --checkpoint out/pretrain/best_ckpt.pt --out_dir hf/nanogpt-modern
     python evaluation/eval_benchmark.py \
         --checkpoint out/pretrain/best_ckpt.pt \
         --hf_dir hf/nanogpt-modern \

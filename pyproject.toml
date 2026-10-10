@@ -58,9 +58,9 @@ nanogpt-train-dpo = "training.train_dpo:main"
 nanogpt-train-iterative-grpo = "training.iterative_grpo:main"
 nanogpt-generate = "inference.generate:main"
 nanogpt-eval-alignment = "evaluation.eval_alignment:main"
-nanogpt-export-gguf = "export_gguf:main"
-nanogpt-export-hf = "export_to_hf:main"
-nanogpt-load-hf = "load_from_hf:main"
+nanogpt-export-gguf = "tools.export.export_gguf:main"
+nanogpt-export-hf = "tools.export.export_to_hf:main"
+nanogpt-load-hf = "tools.export.load_from_hf:main"
 # Hydra / OmegaConf entry points (M23)
 nanogpt-train-pretrain-hydra = "training.train_pretrain_hydra:main"
 nanogpt-train-sft-hydra = "training.train_sft_hydra:main"
@@ -80,7 +80,7 @@ module = [
     "model.modern_gpt",
     "model.quantization",
     "inference.generate_utils",
-    "export_to_onnx",
+    "tools.export.export_to_onnx",
     "evaluation.needle_in_haystack",
     "evaluation.eval_win_rate",
     "inference.visualize_attention",
@@ -93,7 +93,7 @@ target-version = ["py39"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["model*", "data*", "training*", "inference*", "evaluation*", "rewards*", "utils*", "config*"]
+include = ["model*", "data*", "training*", "inference*", "evaluation*", "rewards*", "utils*", "config*", "tools*"]
 
 [tool.mypy]
 python_version = "3.11"
