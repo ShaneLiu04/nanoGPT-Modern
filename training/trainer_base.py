@@ -17,25 +17,28 @@ import warnings
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from functools import partial
+
 import numpy as np
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-
 from model.baseline_gpt import (
     BaselineGPT,
     BaselineGPTConfig,
+)
+from model.baseline_gpt import (
     Block as BaselineBlock,
 )
-from model.modern_gpt import ModernGPT, ModernGPTConfig, Block as ModernBlock
+from model.modern_gpt import Block as ModernBlock
+from model.modern_gpt import ModernGPT, ModernGPTConfig
 from utils.checkpoint import (
     build_checkpoint,
-    write_checkpoint,
-    stage_to_cpu,
-    load_checkpoint,
     get_rng_state,
+    load_checkpoint,
     set_rng_state,
+    stage_to_cpu,
+    write_checkpoint,
 )
 from utils.config import to_dict
 from utils.experiment import ExperimentRecorder
@@ -143,9 +146,7 @@ def infer_device(device_arg, local_rank):
     return device_arg
 
 
-def load_model_from_checkpoint(
-    path, device="cpu", model_type="auto", strict=True, eval_mode=False
-):
+def load_model_from_checkpoint(path, device="cpu", model_type="auto", strict=True, eval_mode=False):
     """Load a BaselineGPT or ModernGPT checkpoint and return (model, ckpt_extra).
 
     Parameters
@@ -312,12 +313,8 @@ class CheckpointManager:
             model_src = model_src._orig_mod
 
         # Inject model_type into the config dict so reloaders know which class to build.
-        config_data = (
-            self.config.to_dict() if hasattr(self.config, "to_dict") else self.config
-        )
-        model_type = (
-            "baseline" if type(model_src).__name__ == "BaselineGPT" else "modern"
-        )
+        config_data = self.config.to_dict() if hasattr(self.config, "to_dict") else self.config
+        model_type = "baseline" if type(model_src).__name__ == "BaselineGPT" else "modern"
         if isinstance(config_data, dict):
             config_data = dict(config_data)
             config_data["model_type"] = model_type
@@ -352,9 +349,7 @@ class CheckpointManager:
             scheduler=self.scheduler,
             ema_shadow=ema_shadow if ema_shadow is not None else self.ema_shadow,
             rng_state=rng_state if rng_state is not None else get_rng_state(),
-            resume_offset=(
-                resume_offset if resume_offset is not None else self.resume_offset
-            ),
+            resume_offset=(resume_offset if resume_offset is not None else self.resume_offset),
             **extra_kwargs,
         )
         # Deep-copy the payload to CPU storage on the caller thread so
@@ -395,9 +390,9 @@ class CheckpointManager:
             write_checkpoint(checkpoint, out_dir, filename)
         except Exception:
             warnings.warn(
-                f"async checkpoint write failed for {filename}; "
-                "retrying synchronously",
+                f"async checkpoint write failed for {filename}; " "retrying synchronously",
                 RuntimeWarning,
+                stacklevel=2,
             )
             try:
                 write_checkpoint(checkpoint, out_dir, filename)
@@ -405,6 +400,7 @@ class CheckpointManager:
                 warnings.warn(
                     f"synchronous checkpoint retry failed for {filename}",
                     RuntimeWarning,
+                    stacklevel=2,
                 )
 
     def flush(self):
@@ -465,8 +461,8 @@ class BaseTrainer(ABC):
 
     def __init__(self, args):
         self.args = args
-        self.rank, self.local_rank, self.world_size, self.distributed = (
-            setup_distributed(backend=getattr(args, "backend", "nccl"))
+        self.rank, self.local_rank, self.world_size, self.distributed = setup_distributed(
+            backend=getattr(args, "backend", "nccl")
         )
         self.master_process = self.rank <= 0
         self.device = infer_device(args.device, self.local_rank)
@@ -571,6 +567,7 @@ class BaseTrainer(ABC):
                 f"ExperimentRecorder setup failed ({exc}); "
                 "continuing without structured metrics.",
                 RuntimeWarning,
+                stacklevel=2,
             )
             self.recorder = None
 
@@ -590,9 +587,9 @@ class BaseTrainer(ABC):
             self.spike_detector = LossSpikeDetector()
         except Exception as exc:
             warnings.warn(
-                f"LossSpikeDetector setup failed ({exc}); "
-                "continuing without spike detection.",
+                f"LossSpikeDetector setup failed ({exc}); " "continuing without spike detection.",
                 RuntimeWarning,
+                stacklevel=2,
             )
             self.spike_detector = None
         try:
@@ -602,6 +599,7 @@ class BaseTrainer(ABC):
                 f"GradientNormMonitor setup failed ({exc}); "
                 "continuing without grad-norm monitoring.",
                 RuntimeWarning,
+                stacklevel=2,
             )
             self.grad_monitor = None
 
@@ -628,6 +626,7 @@ class BaseTrainer(ABC):
                         f"GradientNormMonitor.compute failed ({exc}); "
                         "grad_norm omitted for this step.",
                         RuntimeWarning,
+                        stacklevel=2,
                     )
                     grad_norm = None
 
@@ -657,6 +656,7 @@ class BaseTrainer(ABC):
                     f"LossSpikeDetector.update failed ({exc}); "
                     "spike detection skipped for this step.",
                     RuntimeWarning,
+                    stacklevel=2,
                 )
 
         # --- record path ---
@@ -669,16 +669,12 @@ class BaseTrainer(ABC):
             if tokens_per_sec is not None:
                 fields["tokens_per_sec"] = tokens_per_sec
             if torch.cuda.is_available():
-                fields["mem_gb"] = round(
-                    torch.cuda.max_memory_allocated() / 1024**3, 3
-                )
+                fields["mem_gb"] = round(torch.cuda.max_memory_allocated() / 1024**3, 3)
             self.recorder.record_step(step, **fields)
 
     def setup_amp(self, use_bf16=True):
         """Initialize mixed precision context and GradScaler."""
-        self.ctx, self.scaler, self.amp_dtype = build_amp_context(
-            self.device, use_bf16=use_bf16
-        )
+        self.ctx, self.scaler, self.amp_dtype = build_amp_context(self.device, use_bf16=use_bf16)
 
     def build_logger(self, project_name, run_name, config=None):
         """Create a Logger (only on master process)."""
@@ -712,8 +708,10 @@ class BaseTrainer(ABC):
             if getattr(self.args, "fsdp", False):
                 from torch.distributed.fsdp import (
                     FullyShardedDataParallel as FSDP,
-                    ShardingStrategy,
+                )
+                from torch.distributed.fsdp import (
                     MixedPrecision,
+                    ShardingStrategy,
                 )
                 from torch.distributed.fsdp.wrap import (
                     transformer_auto_wrap_policy,
@@ -727,10 +725,7 @@ class BaseTrainer(ABC):
                 mp_policy = MixedPrecision(
                     param_dtype=(
                         torch.bfloat16
-                        if (
-                            torch.cuda.is_available()
-                            and torch.cuda.is_bf16_supported()
-                        )
+                        if (torch.cuda.is_available() and torch.cuda.is_bf16_supported())
                         else torch.float16
                     ),
                     reduce_dtype=torch.float32,
@@ -751,11 +746,7 @@ class BaseTrainer(ABC):
                         getattr(self.args, "fsdp_sharding_strategy", "full")
                     ],
                     mixed_precision=mp_policy,
-                    device_id=(
-                        torch.cuda.current_device()
-                        if torch.cuda.is_available()
-                        else None
-                    ),
+                    device_id=(torch.cuda.current_device() if torch.cuda.is_available() else None),
                     auto_wrap_policy=auto_wrap_policy,
                     use_orig_params=True,
                 )
@@ -802,15 +793,15 @@ class BaseTrainer(ABC):
             and getattr(self, "_fsdp_module", None) is not None
         ):
             from torch.distributed.fsdp import (
-                FullyShardedDataParallel as FSDP,
-                StateDictType,
                 FullStateDictConfig,
+                StateDictType,
+            )
+            from torch.distributed.fsdp import (
+                FullyShardedDataParallel as FSDP,
             )
 
             cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-            with FSDP.state_dict_type(
-                self._fsdp_module, StateDictType.FULL_STATE_DICT, cfg
-            ):
+            with FSDP.state_dict_type(self._fsdp_module, StateDictType.FULL_STATE_DICT, cfg):
                 return self._fsdp_module.state_dict()
         module = getattr(self, "raw_model", None)
         if module is None:
@@ -828,12 +819,12 @@ class BaseTrainer(ABC):
         ):
             from torch.distributed.fsdp import (
                 FullyShardedDataParallel as FSDP,
+            )
+            from torch.distributed.fsdp import (
                 StateDictType,
             )
 
-            with FSDP.state_dict_type(
-                self._fsdp_module, StateDictType.FULL_STATE_DICT
-            ):
+            with FSDP.state_dict_type(self._fsdp_module, StateDictType.FULL_STATE_DICT):
                 self._fsdp_module.load_state_dict(state_dict)
             return
         module = model
@@ -896,16 +887,12 @@ class BaseTrainer(ABC):
 
     def save_checkpoint(self, filename, step, best_metric):
         if self.ckpt_manager is None:
-            raise RuntimeError(
-                "configure_checkpointing() must be called before save_checkpoint()"
-            )
+            raise RuntimeError("configure_checkpointing() must be called before save_checkpoint()")
         return self.ckpt_manager.save(filename, step, best_metric)
 
     def load_checkpoint(self, path, strict=True):
         if self.ckpt_manager is None:
-            raise RuntimeError(
-                "configure_checkpointing() must be called before load_checkpoint()"
-            )
+            raise RuntimeError("configure_checkpointing() must be called before load_checkpoint()")
         return self.ckpt_manager.load(path, strict=strict)
 
     def finalize_recorder(self, status="completed", final_metrics=None):
@@ -951,4 +938,5 @@ def maybe_warn_dropout(model):
             "(e.g. GRPO), eval-mode and train-mode dropout masks will differ, "
             "biasing the ratio. Set dropout=0.0 for reliable RL training.",
             UserWarning,
+            stacklevel=2,
         )

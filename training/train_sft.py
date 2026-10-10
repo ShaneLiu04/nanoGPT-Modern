@@ -5,34 +5,33 @@ Uses the shared BaseTrainer infrastructure: AMP, GradScaler, gradient
 accumulation, LR scheduler, and full-state checkpointing/resume.
 """
 
+import argparse
 import os
 import time
-import argparse
 
 import numpy as np
+import tiktoken
 import torch
 from torch.utils.data import DataLoader
 
-
 from data.arithmetic import (
-    generate_easy,
-    generate_medium,
-    generate_hard,
     ArithmeticDataset,
     collate_fn,
+    generate_easy,
+    generate_hard,
+    generate_medium,
 )
-from model.attention_utils import set_attention_backend, print_attention_backend
+from model.attention_utils import print_attention_backend, set_attention_backend
 from training.args import add_common_trainer_args
 from training.trainer_base import (
     BaseTrainer,
     enable_tf32,
     load_model_from_checkpoint,
-    maybe_warn_dropout,
     make_worker_init_fn,
+    maybe_warn_dropout,
 )
-from utils.lr_scheduler import LRScheduler
 from utils.config import parse_args_with_config, to_dict
-import tiktoken
+from utils.lr_scheduler import LRScheduler
 
 # FR8a: TF32 fast path for A100/H100 (all trainers, previously pretrain-only).
 enable_tf32()
@@ -41,9 +40,7 @@ enable_tf32()
 def get_args():
     parser = argparse.ArgumentParser()
     add_common_trainer_args(parser)
-    parser.add_argument(
-        "--init_from", type=str, required=True, help="Path to pretrain checkpoint"
-    )
+    parser.add_argument("--init_from", type=str, required=True, help="Path to pretrain checkpoint")
     parser.add_argument("--out_dir", type=str, default="out/sft")
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--max_length", type=int, default=256)
@@ -146,9 +143,7 @@ class SFTTrainer(BaseTrainer):
         if args.resume:
             self.model, _ = load_model_from_checkpoint(args.resume, device=self.device)
         else:
-            self.model, _ = load_model_from_checkpoint(
-                args.init_from, device=self.device
-            )
+            self.model, _ = load_model_from_checkpoint(args.init_from, device=self.device)
         self.model = self.model.to(self.device)
         self.wrap_distributed(self.model)
         maybe_warn_dropout(self.raw_model)
@@ -236,9 +231,7 @@ class SFTTrainer(BaseTrainer):
                         if self.scaler is not None and self.scaler.is_enabled():
                             self.scaler.unscale_(self.optimizer)
                         self._step_grad_norm = float(
-                            torch.nn.utils.clip_grad_norm_(
-                                self.model.parameters(), args.grad_clip
-                            )
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), args.grad_clip)
                         )
 
                     if self.scaler is not None and self.scaler.is_enabled():
@@ -291,9 +284,7 @@ class SFTTrainer(BaseTrainer):
                 self.global_step += 1
 
         if self.master_process:
-            self.save_checkpoint(
-                f"final_{args.variant}.pt", self.global_step, self.best_val_loss
-            )
+            self.save_checkpoint(f"final_{args.variant}.pt", self.global_step, self.best_val_loss)
             self.finalize_recorder(
                 "completed",
                 {"best_val_loss": self.best_val_loss, "steps": self.global_step},

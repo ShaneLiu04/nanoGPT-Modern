@@ -13,19 +13,18 @@ Improvements over the naive implementation
 * Full distributed-training, checkpointing, and resume support via BaseTrainer.
 """
 
-import os
-import time
-import random
 import argparse
-
-import numpy as np
-import torch
-
-
+import os
+import random
+import time
 from collections import defaultdict
 
-from data.arithmetic import generate_easy, generate_medium, generate_hard
-from model.attention_utils import set_attention_backend, print_attention_backend
+import numpy as np
+import tiktoken
+import torch
+
+from data.arithmetic import generate_easy, generate_hard, generate_medium
+from model.attention_utils import print_attention_backend, set_attention_backend
 from rewards.rule_reward import compute_reward_batch
 from training.args import add_common_trainer_args
 from training.trainer_base import (
@@ -34,10 +33,9 @@ from training.trainer_base import (
     load_model_from_checkpoint,
     maybe_warn_dropout,
 )
+from utils.config import parse_args_with_config, to_dict
 from utils.lr_scheduler import LRScheduler
 from utils.rl_utils import compute_kl_divergence, compute_token_logprobs
-from utils.config import parse_args_with_config, to_dict
-import tiktoken
 
 # FR8a: TF32 fast path for A100/H100 (all trainers, previously pretrain-only).
 enable_tf32()
@@ -46,9 +44,7 @@ enable_tf32()
 def get_args():
     parser = argparse.ArgumentParser()
     add_common_trainer_args(parser)
-    parser.add_argument(
-        "--init_from", type=str, required=True, help="SFT checkpoint path"
-    )
+    parser.add_argument("--init_from", type=str, required=True, help="SFT checkpoint path")
     parser.add_argument(
         "--ref_from",
         type=str,
@@ -60,9 +56,7 @@ def get_args():
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--min_lr", type=float, default=1e-6)
     parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument(
-        "--beta", type=float, default=0.04, help="KL penalty coefficient"
-    )
+    parser.add_argument("--beta", type=float, default=0.04, help="KL penalty coefficient")
     parser.add_argument(
         "--adv_norm",
         type=str,
@@ -136,26 +130,14 @@ class GRPOTrainer(BaseTrainer):
         rank_offset = self.rank * 1000 if self.rank > 0 else 0
         pd = getattr(args, "prompt_diversity", 1)
         train_data = (
-            generate_easy(
-                args.num_train, seed=args.seed + rank_offset, prompt_diversity=pd
-            )
-            + generate_medium(
-                args.num_train, seed=args.seed + 1 + rank_offset, prompt_diversity=pd
-            )
-            + generate_hard(
-                args.num_train, seed=args.seed + 2 + rank_offset, prompt_diversity=pd
-            )
+            generate_easy(args.num_train, seed=args.seed + rank_offset, prompt_diversity=pd)
+            + generate_medium(args.num_train, seed=args.seed + 1 + rank_offset, prompt_diversity=pd)
+            + generate_hard(args.num_train, seed=args.seed + 2 + rank_offset, prompt_diversity=pd)
         )
         val_data = (
-            generate_easy(
-                args.num_val, seed=args.seed + 100 + rank_offset, prompt_diversity=pd
-            )
-            + generate_medium(
-                args.num_val, seed=args.seed + 101 + rank_offset, prompt_diversity=pd
-            )
-            + generate_hard(
-                args.num_val, seed=args.seed + 102 + rank_offset, prompt_diversity=pd
-            )
+            generate_easy(args.num_val, seed=args.seed + 100 + rank_offset, prompt_diversity=pd)
+            + generate_medium(args.num_val, seed=args.seed + 101 + rank_offset, prompt_diversity=pd)
+            + generate_hard(args.num_val, seed=args.seed + 102 + rank_offset, prompt_diversity=pd)
         )
         self.train_data = train_data
         self.val_data = val_data
@@ -165,9 +147,7 @@ class GRPOTrainer(BaseTrainer):
         if args.resume:
             self.policy, _ = load_model_from_checkpoint(args.resume, device=self.device)
         else:
-            self.policy, _ = load_model_from_checkpoint(
-                args.init_from, device=self.device
-            )
+            self.policy, _ = load_model_from_checkpoint(args.init_from, device=self.device)
         self.policy = self.policy.to(self.device)
         maybe_warn_dropout(self.policy)
 
@@ -258,7 +238,7 @@ class GRPOTrainer(BaseTrainer):
         response_ids = [None] * len(prompt_tokens_list)
         model.eval()
         with torch.no_grad():
-            for length, items in by_length.items():
+            for _length, items in by_length.items():
                 for start in range(0, len(items), gen_batch_size):
                     batch_items = items[start : start + gen_batch_size]
                     idx = torch.tensor(
@@ -316,9 +296,7 @@ class GRPOTrainer(BaseTrainer):
         policy model.
         """
         with torch.no_grad():
-            return self._batch_logprobs_impl(
-                ref_model, sequences, prompt_lens, response_lens
-            )
+            return self._batch_logprobs_impl(ref_model, sequences, prompt_lens, response_lens)
 
     def _batch_logprobs_impl(self, model, sequences, prompt_lens, response_lens):
         """Shared implementation for policy/ref log-prob computation."""
@@ -331,9 +309,7 @@ class GRPOTrainer(BaseTrainer):
         max_len = max(len(s) for s in sequences)
         pad_id = self.eot_token
 
-        input_ids = torch.full(
-            (B, max_len), pad_id, dtype=torch.long, device=self.device
-        )
+        input_ids = torch.full((B, max_len), pad_id, dtype=torch.long, device=self.device)
         targets = torch.full((B, max_len), pad_id, dtype=torch.long, device=self.device)
         attention_mask = torch.zeros((B, max_len), dtype=torch.bool, device=self.device)
         response_mask = torch.zeros((B, max_len), dtype=torch.bool, device=self.device)
@@ -343,12 +319,8 @@ class GRPOTrainer(BaseTrainer):
             if L < 2:
                 seq = seq + [pad_id]
                 L = len(seq)
-            input_ids[i, : L - 1] = torch.tensor(
-                seq[:-1], dtype=torch.long, device=self.device
-            )
-            targets[i, : L - 1] = torch.tensor(
-                seq[1:], dtype=torch.long, device=self.device
-            )
+            input_ids[i, : L - 1] = torch.tensor(seq[:-1], dtype=torch.long, device=self.device)
+            targets[i, : L - 1] = torch.tensor(seq[1:], dtype=torch.long, device=self.device)
             attention_mask[i, : L - 1] = True
             p_len = prompt_lens[i]
             r_len = response_lens[i]
@@ -407,7 +379,7 @@ class GRPOTrainer(BaseTrainer):
         all_response_lens = []
 
         with torch.no_grad():
-            for g in range(group_size):
+            for _ in range(group_size):
                 responses, response_tokens_list = self._generate_responses_from_tokens(
                     self.raw_model,
                     prompt_tokens,
@@ -512,9 +484,7 @@ class GRPOTrainer(BaseTrainer):
             mean_r = rewards_t.mean(dim=0, keepdim=True)
             adv = rewards_t - mean_r
         else:
-            raise ValueError(
-                f"adv_norm must be one of 'group', 'batch', 'none'; got {adv_norm!r}"
-            )
+            raise ValueError(f"adv_norm must be one of 'group', 'batch', 'none'; got {adv_norm!r}")
         if adv_clip > 0.0:
             adv = torch.clamp(adv, -adv_clip, adv_clip)
         return adv
@@ -560,12 +530,8 @@ class GRPOTrainer(BaseTrainer):
 
         # Reshape back to [G, B, T].
         T = new_logprobs.size(1)
-        old_logp = (
-            rollout["old_logprobs"].detach().to(device).view(group_size, batch_size, T)
-        )
-        ref_logp = (
-            rollout["ref_logprobs"].detach().to(device).view(group_size, batch_size, T)
-        )
+        old_logp = rollout["old_logprobs"].detach().to(device).view(group_size, batch_size, T)
+        ref_logp = rollout["ref_logprobs"].detach().to(device).view(group_size, batch_size, T)
         new_logp = new_logprobs.view(group_size, batch_size, T)
         mask = masks.view(group_size, batch_size, T)
         adv = advantages.unsqueeze(-1)  # [G, B, 1]
@@ -588,9 +554,7 @@ class GRPOTrainer(BaseTrainer):
         # Per-component metrics (token-averaged).
         with torch.no_grad():
             policy_loss = (pg_loss * mask.float()).sum() / total_tokens.clamp_min(1)
-            kl_loss = compute_kl_divergence(
-                ref_logp, new_logp, mask=mask, reduction="mean"
-            )
+            kl_loss = compute_kl_divergence(ref_logp, new_logp, mask=mask, reduction="mean")
 
         metrics = {
             "policy_loss": policy_loss.item(),
@@ -637,9 +601,7 @@ class GRPOTrainer(BaseTrainer):
                     if self.scaler is not None and self.scaler.is_enabled():
                         self.scaler.unscale_(self.optimizer)
                     self._step_grad_norm = float(
-                        torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(), args.grad_clip
-                        )
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), args.grad_clip)
                     )
 
                 if self.scaler is not None and self.scaler.is_enabled():

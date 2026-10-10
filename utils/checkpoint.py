@@ -7,6 +7,7 @@ with older checkpoints that only store the minimal fields.
 """
 
 import os
+
 import torch
 
 
@@ -239,13 +240,12 @@ def load_checkpoint(path, model, optimizer=None, device="cpu", strict=True, load
 def get_rng_state():
     """Capture the RNG state of torch, numpy, and Python's random module."""
     import random
+
     import numpy as np
 
     return {
         "torch": torch.get_rng_state(),
-        "torch_cuda": (
-            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
-        ),
+        "torch_cuda": (torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []),
         "numpy": np.random.get_state(),
         "random": random.getstate(),
     }
@@ -254,6 +254,7 @@ def get_rng_state():
 def set_rng_state(rng_state):
     """Restore RNG state from a bundle produced by ``get_rng_state``."""
     import random
+
     import numpy as np
 
     if "torch" in rng_state:
@@ -272,9 +273,7 @@ def set_rng_state(rng_state):
         random.setstate(rng_state["random"])
 
 
-def save_checkpoint_raw(
-    state_dict, optimizer, iter_num, best_val_loss, config, out_dir, filename
-):
+def save_checkpoint_raw(state_dict, optimizer, iter_num, best_val_loss, config, out_dir, filename):
     """Backward-compatible wrapper that accepts a raw state_dict.
 
     Prefer :func:`save_checkpoint`; this wrapper exists for legacy callers

@@ -7,8 +7,6 @@ both the policy model and the reference model.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
 import torch
 import torch.nn.functional as F
 
@@ -16,7 +14,7 @@ import torch.nn.functional as F
 def compute_sequence_logprob(
     logits: torch.Tensor,
     tokens: torch.Tensor,
-    mask: Optional[torch.Tensor] = None,
+    mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Compute the average log-probability of a sequence under a model.
 
@@ -52,7 +50,7 @@ def compute_dpo_loss(
     ref_rejected_logp: torch.Tensor,
     beta: float = 0.1,
     label_smoothing: float = 0.0,
-) -> Tuple[torch.Tensor, dict]:
+) -> tuple[torch.Tensor, dict]:
     """Compute the DPO loss (Bradley-Terry preference model).
 
     Loss = -log σ(β * (chosen_margin - rejected_margin))
@@ -99,7 +97,7 @@ def compute_ipo_loss(
     ref_chosen_logp: torch.Tensor,
     ref_rejected_logp: torch.Tensor,
     beta: float = 0.1,
-) -> Tuple[torch.Tensor, dict]:
+) -> tuple[torch.Tensor, dict]:
     """Compute the IPO loss (Identity Preference Optimization).
 
     Unlike DPO, IPO does not rely on the Bradley-Terry model and optimizes a
@@ -127,8 +125,8 @@ def compute_kto_loss(
     ref_logp: torch.Tensor,
     is_desirable: torch.Tensor,
     beta: float = 0.1,
-    kl_reference: Optional[float] = None,
-) -> Tuple[torch.Tensor, dict]:
+    kl_reference: float | None = None,
+) -> tuple[torch.Tensor, dict]:
     """Compute a simplified KTO-style loss.
 
     Parameters

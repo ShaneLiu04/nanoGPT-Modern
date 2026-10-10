@@ -20,7 +20,7 @@ import platform
 import subprocess
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def collect_env() -> Dict[str, Any]:
+def collect_env() -> dict[str, Any]:
     """Snapshot the execution environment for the experiment manifest.
 
     Returns a dict with GPU name/VRAM/compute-capability, torch/CUDA/Python
@@ -43,7 +43,7 @@ def collect_env() -> Dict[str, Any]:
     """
     import torch
 
-    env: Dict[str, Any] = {
+    env: dict[str, Any] = {
         "torch": torch.__version__,
         "cuda": torch.version.cuda or "none",
         "python": sys.version.split()[0],
@@ -75,16 +75,16 @@ def collect_env() -> Dict[str, Any]:
     return env
 
 
-def load_metrics(path: str) -> List[Dict[str, Any]]:
+def load_metrics(path: str) -> list[dict[str, Any]]:
     """Parse a ``metrics.jsonl`` file into a list of event dicts.
 
     A partially-written final line (crash protection) is dropped; malformed
     lines anywhere earlier raise ``ValueError``.
     """
-    events: List[Dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
     if not os.path.exists(path):
         return events
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         lines = f.read().splitlines()
     non_empty = [(i, line) for i, line in enumerate(lines) if line.strip()]
     for idx, (pos, line) in enumerate(non_empty):
@@ -93,21 +93,21 @@ def load_metrics(path: str) -> List[Dict[str, Any]]:
         except json.JSONDecodeError:
             if idx == len(non_empty) - 1:
                 break  # truncated tail from a crashed run
-            raise ValueError(f"Malformed metrics line {pos + 1} in {path}")
+            raise ValueError(f"Malformed metrics line {pos + 1} in {path}") from None
     return events
 
 
-def summarize_experiment(exp_dir: str) -> Dict[str, Any]:
+def summarize_experiment(exp_dir: str) -> dict[str, Any]:
     """Summarize a finished experiment directory.
 
     Prefers ``final_metrics`` from the manifest (authoritative), falling back
     to values computed from the recorded events.
     """
     exp_dir = str(exp_dir)
-    manifest: Dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
     manifest_path = os.path.join(exp_dir, _MANIFEST_FILENAME)
     if os.path.exists(manifest_path):
-        with open(manifest_path, "r", encoding="utf-8") as f:
+        with open(manifest_path, encoding="utf-8") as f:
             manifest = json.load(f)
 
     events = load_metrics(os.path.join(exp_dir, _METRICS_FILENAME))
@@ -115,7 +115,7 @@ def summarize_experiment(exp_dir: str) -> Dict[str, Any]:
     trains = [e for e in events if e.get("type") == "train"]
 
     final_metrics = dict(manifest.get("final_metrics") or {})
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         "exp_id": manifest.get("exp_id", os.path.basename(exp_dir)),
         "status": manifest.get("status"),
         "num_steps_recorded": len(trains),
@@ -161,26 +161,26 @@ class ExperimentRecorder:
         self,
         exp_dir: str,
         exp_id: str,
-        config: Optional[Dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
         resume: bool = False,
     ) -> None:
         self.exp_dir = str(exp_dir)
         self.exp_id = exp_id
-        self.config: Dict[str, Any] = dict(config) if config else {}
+        self.config: dict[str, Any] = dict(config) if config else {}
         self.metrics_path = os.path.join(self.exp_dir, _METRICS_FILENAME)
         self.manifest_path = os.path.join(self.exp_dir, _MANIFEST_FILENAME)
 
         self._env = collect_env()
-        self._extra: Dict[str, Any] = {}
+        self._extra: dict[str, Any] = {}
         self._status = "running"
         self._start_ts = _now_iso()
-        self._end_ts: Optional[str] = None
+        self._end_ts: str | None = None
         self._resume_count = 0
 
         # Carry over state when resuming a previous run of the same exp_id.
         if resume and os.path.exists(self.manifest_path):
             try:
-                with open(self.manifest_path, "r", encoding="utf-8") as f:
+                with open(self.manifest_path, encoding="utf-8") as f:
                     previous = json.load(f)
                 self._start_ts = previous.get("start_ts", self._start_ts)
                 self._resume_count = int(previous.get("resume_count", 0)) + 1
@@ -197,9 +197,7 @@ class ExperimentRecorder:
         try:
             os.makedirs(self.exp_dir, exist_ok=True)
         except OSError:
-            logger.warning(
-                "[ExperimentRecorder] Cannot create experiment dir %s", self.exp_dir
-            )
+            logger.warning("[ExperimentRecorder] Cannot create experiment dir %s", self.exp_dir)
 
         if not resume:
             try:
@@ -218,7 +216,7 @@ class ExperimentRecorder:
     # metrics.jsonl
     # ------------------------------------------------------------------
 
-    def record(self, event: Dict[str, Any]) -> None:
+    def record(self, event: dict[str, Any]) -> None:
         """Append one event line; ``ts`` is filled in when missing."""
         event = dict(event)
         event.setdefault("ts", _now_iso())
@@ -251,7 +249,7 @@ class ExperimentRecorder:
     def write_manifest(self, **extra: Any) -> str:
         """Rewrite ``manifest.json`` (idempotent); extras are merged across calls."""
         self._extra.update(extra)
-        manifest: Dict[str, Any] = {
+        manifest: dict[str, Any] = {
             "exp_id": self.exp_id,
             "status": self._status,
             "git_commit": self._env.get("git_commit", "unknown"),
@@ -281,7 +279,7 @@ class ExperimentRecorder:
         """True once finalize() has moved the run out of 'running' status."""
         return self._status != "running"
 
-    def wall_time(self) -> Optional[float]:
+    def wall_time(self) -> float | None:
         """Seconds elapsed since the (original, resume-preserving) start."""
         try:
             start = datetime.fromisoformat(self._start_ts)
@@ -289,12 +287,10 @@ class ExperimentRecorder:
         except (ValueError, TypeError):
             return None
 
-    def finalize(self, status: str, final_metrics: Dict[str, Any]) -> str:
+    def finalize(self, status: str, final_metrics: dict[str, Any]) -> str:
         """Mark the experiment finished and persist final metrics."""
         if status not in _TERMINAL_STATUSES:
-            raise ValueError(
-                f"status must be one of {_TERMINAL_STATUSES}, got '{status}'"
-            )
+            raise ValueError(f"status must be one of {_TERMINAL_STATUSES}, got '{status}'")
         self._status = status
         self._end_ts = _now_iso()
         return self.write_manifest(final_metrics=dict(final_metrics))

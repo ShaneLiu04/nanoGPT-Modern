@@ -9,7 +9,7 @@ unchanged; validation is only applied when explicitly requested via
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -58,8 +58,8 @@ class ModernGPTModelConfig(ModelConfig):
     Validates the GQA invariant ``n_head % n_kv_head == 0``.
     """
 
-    n_kv_head: Optional[int] = None
-    intermediate_size: Optional[int] = None
+    n_kv_head: int | None = None
+    intermediate_size: int | None = None
     norm_position: Literal["pre", "post"] = "pre"
     num_experts: int = 1
     position_encoding: Literal["rope", "learned"] = "rope"
@@ -69,7 +69,7 @@ class ModernGPTModelConfig(ModelConfig):
     attn_temperature: float = 1.0
     rmsnorm_eps: float = 1e-6
     rope_theta: float = 10000.0
-    rope_scaling: Optional[dict] = None
+    rope_scaling: dict | None = None
     moe_aux_loss_factor: float = 0.01
     moe_capacity_factor: float = 1.25
     use_flash_attn: bool = False
@@ -78,14 +78,14 @@ class ModernGPTModelConfig(ModelConfig):
     ring_block_size_kv: int = 64
     n_future: int = 0
     mtp_weight: float = 1.0
-    sliding_window_size: Optional[int] = None
+    sliding_window_size: int | None = None
     use_paged_kv_cache: bool = False
     kv_cache_block_size: int = 16
     gqa_broadcast: Literal["auto", "raw", "grouped", "repeat"] = "auto"
 
     @field_validator("n_kv_head")
     @classmethod
-    def _default_kv_head(cls, v: Optional[int], info) -> int:
+    def _default_kv_head(cls, v: int | None, info) -> int:
         """Default to n_head when not provided."""
         if v is None:
             n_head = info.data.get("n_head", 8)
@@ -107,9 +107,7 @@ class ModernGPTModelConfig(ModelConfig):
                 f"n_head ({self.n_head}) must be divisible by n_kv_head ({self.n_kv_head})"
             )
         if self.n_kv_head > self.n_head:
-            raise ValueError(
-                f"n_kv_head ({self.n_kv_head}) cannot exceed n_head ({self.n_head})"
-            )
+            raise ValueError(f"n_kv_head ({self.n_kv_head}) cannot exceed n_head ({self.n_head})")
         return self
 
     @model_validator(mode="after")
@@ -122,8 +120,7 @@ class ModernGPTModelConfig(ModelConfig):
             )
         if self.ffn_variant == "gelu" and self.num_experts > 1:
             raise ValueError(
-                "ffn_variant='gelu' 不支持 MoE，请使用 ffn_variant='swiglu' "
-                "或 num_experts=1"
+                "ffn_variant='gelu' 不支持 MoE，请使用 ffn_variant='swiglu' " "或 num_experts=1"
             )
         return self
 
@@ -136,9 +133,7 @@ class ModernGPTModelConfig(ModelConfig):
             else:
                 raw = int(8 / 3 * self.n_embd)
                 multiple_of = 128
-                self.intermediate_size = (
-                    (raw + multiple_of - 1) // multiple_of
-                ) * multiple_of
+                self.intermediate_size = ((raw + multiple_of - 1) // multiple_of) * multiple_of
         return self
 
 
@@ -187,7 +182,7 @@ class DataConfig(BaseModel):
 
     data_dir: str = "data/openwebtext"
     num_workers: int = 4
-    shuffle_buffer: Optional[int] = None
+    shuffle_buffer: int | None = None
     use_packing: bool = False
 
 
@@ -207,16 +202,8 @@ class FullConfig(BaseModel):
     @model_validator(mode="after")
     def _model_type_matches(self) -> FullConfig:
         """Ensure model type matches the instantiated model config."""
-        if self.model_type == "baseline" and not isinstance(
-            self.model, BaselineGPTModelConfig
-        ):
-            raise ValueError(
-                "model_type='baseline' but model config is not BaselineGPTModelConfig"
-            )
-        if self.model_type == "modern" and not isinstance(
-            self.model, ModernGPTModelConfig
-        ):
-            raise ValueError(
-                "model_type='modern' but model config is not ModernGPTModelConfig"
-            )
+        if self.model_type == "baseline" and not isinstance(self.model, BaselineGPTModelConfig):
+            raise ValueError("model_type='baseline' but model config is not BaselineGPTModelConfig")
+        if self.model_type == "modern" and not isinstance(self.model, ModernGPTModelConfig):
+            raise ValueError("model_type='modern' but model config is not ModernGPTModelConfig")
         return self

@@ -29,10 +29,10 @@ _PydanticModels = None
 try:
     from utils.config_models import (
         BaselineGPTModelConfig,
-        ModernGPTModelConfig,
-        TrainingConfig,
         DataConfig,
         FullConfig,
+        ModernGPTModelConfig,
+        TrainingConfig,
     )
 
     _PydanticModels = {

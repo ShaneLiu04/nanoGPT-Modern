@@ -6,31 +6,30 @@ GradScaler, gradient accumulation, LR scheduler, EMA, checkpointing, and
 resumable training.
 """
 
+import argparse
 import os
 import time
-import argparse
 import warnings
 from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
 
-
-from model.attention_utils import set_attention_backend, print_attention_backend
+from data.openwebtext import default_num_workers, get_dataloader
+from model.attention_utils import print_attention_backend, set_attention_backend
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
-from data.openwebtext import default_num_workers, get_dataloader
 from training.args import add_common_trainer_args
 from training.trainer_base import (
     BaseTrainer,
     enable_tf32,
-    load_model_from_checkpoint,
     get_rng_state,
+    load_model_from_checkpoint,
     make_worker_init_fn,
 )
-from utils.lr_scheduler import LRScheduler
-from utils.config import parse_args_with_config
 from utils.checkpoint import set_rng_state
+from utils.config import parse_args_with_config
+from utils.lr_scheduler import LRScheduler
 
 # FR8a: TF32 fast path for A100/H100 (previously set inline in train()).
 enable_tf32()
@@ -39,9 +38,7 @@ enable_tf32()
 def get_args():
     parser = argparse.ArgumentParser()
     add_common_trainer_args(parser)
-    parser.add_argument(
-        "--model", type=str, default="modern", choices=["baseline", "modern"]
-    )
+    parser.add_argument("--model", type=str, default="modern", choices=["baseline", "modern"])
     parser.add_argument("--data_dir", type=str, default="data/openwebtext")
     parser.add_argument("--out_dir", type=str, default="out/pretrain")
     parser.add_argument("--batch_size", type=int, default=12)
@@ -189,15 +186,11 @@ class PretrainTrainer(BaseTrainer):
         if not eval_batch_size:
             eval_batch_size = 2 * args.batch_size
         resume_offset = getattr(self, "resume_offset", 0)
-        worker_init = (
-            make_worker_init_fn(args.seed, self.rank) if num_workers > 0 else None
-        )
+        worker_init = make_worker_init_fn(args.seed, self.rank) if num_workers > 0 else None
         # Prefer the persisted global shuffle index so chunk order (and
         # therefore resume_offset semantics) is deterministic across runs.
         train_shuffle_idx = os.path.join(args.data_dir, "train.bin.shuffle.idx")
-        shuffle_idx_path = (
-            train_shuffle_idx if os.path.exists(train_shuffle_idx) else None
-        )
+        shuffle_idx_path = train_shuffle_idx if os.path.exists(train_shuffle_idx) else None
         # FR9a: DDP data parallelism — each rank consumes a mutually
         # exclusive strided slice of the global shuffled train stream
         # (rank r takes positions r, r+W, r+2W, ...).  Only the train
@@ -353,10 +346,7 @@ class PretrainTrainer(BaseTrainer):
             self.resume_offset = int(offset)
             self.early_stop_counter = int(extra.get("early_stop_counter", 0))
             saved_world_size = extra.get("world_size")
-            if (
-                saved_world_size is not None
-                and int(saved_world_size) != max(self.world_size, 1)
-            ):
+            if saved_world_size is not None and int(saved_world_size) != max(self.world_size, 1):
                 warnings.warn(
                     f"Checkpoint was saved with world_size={saved_world_size} but "
                     f"this run has world_size={max(self.world_size, 1)}; "
@@ -364,6 +354,7 @@ class PretrainTrainer(BaseTrainer):
                     "saved offset cannot be interpreted under a different "
                     "shard layout. Restarting from this rank's shard head.",
                     RuntimeWarning,
+                    stacklevel=2,
                 )
                 # The saved offset is meaningless under a different shard
                 # layout — restart from the head of this rank's shard
@@ -583,9 +574,7 @@ class PretrainTrainer(BaseTrainer):
             # Accumulate the window loss as a device tensor; the single
             # all_reduce + .item() sync is deferred to the accumulation
             # boundary below (was: per-micro-step sync).
-            loss_accum = (
-                loss.detach() if loss_accum is None else loss_accum + loss.detach()
-            )
+            loss_accum = loss.detach() if loss_accum is None else loss_accum + loss.detach()
             running_tokens += args.batch_size * args.block_size
 
             if micro_step % accum_steps == 0:
@@ -602,9 +591,7 @@ class PretrainTrainer(BaseTrainer):
                     if self.scaler is not None and self.scaler.is_enabled():
                         self.scaler.unscale_(self.optimizer)
                     self._step_grad_norm = float(
-                        torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(), args.grad_clip
-                        )
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), args.grad_clip)
                     )
 
                 if self.scaler is not None and self.scaler.is_enabled():
@@ -622,9 +609,7 @@ class PretrainTrainer(BaseTrainer):
                 t1 = time.time()
                 dt = t1 - t0
                 t0 = t1
-                tokens_per_sec = (
-                    running_tokens / dt / max(self.world_size, 1)
-                )
+                tokens_per_sec = running_tokens / dt / max(self.world_size, 1)
                 msg = (
                     f"iter {self.iter_num}: loss {lossf:.4f}, lr {lr:.2e}, "
                     f"tok/s {tokens_per_sec:.2f}"
@@ -658,9 +643,7 @@ class PretrainTrainer(BaseTrainer):
         # side effects stay master-only.
         losses = self.estimate_loss()
         if self.master_process:
-            print(
-                f"final: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
-            )
+            print(f"final: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
             self.log_scalars({"val/loss": losses["val"]}, self.iter_num)
             self._save_checkpoint("latest_ckpt.pt")
             if losses["val"] < self.best_val_loss:
