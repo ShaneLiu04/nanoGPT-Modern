@@ -85,12 +85,27 @@ def _eval_node(node):
 #   >1 -> N templates, deterministically chosen (deterministic subset)
 PROMPT_TEMPLATES = [
     "Solve: {expr}\nWrap your final answer in <answer>...</answer>.",
-    "Question: Compute {expr}.\nPlease think step by step and write your final answer inside <answer>...</answer>.",
-    "What is the result of {expr}?\nShow your reasoning, then put the final number in <answer>...</answer>.",
-    "Evaluate the expression: {expr}\nEnd your response with <answer>...</answer> containing the result.",
-    "Problem: {expr}\nWork through the calculation carefully. Enclose the final answer in <answer>...</answer>.",
+    (
+        "Question: Compute {expr}.\nPlease think step by step and write "
+        "your final answer inside <answer>...</answer>."
+    ),
+    (
+        "What is the result of {expr}?\nShow your reasoning, then put "
+        "the final number in <answer>...</answer>."
+    ),
+    (
+        "Evaluate the expression: {expr}\nEnd your response with "
+        "<answer>...</answer> containing the result."
+    ),
+    (
+        "Problem: {expr}\nWork through the calculation carefully. "
+        "Enclose the final answer in <answer>...</answer>."
+    ),
     "Calculate: {expr}\nReason briefly and wrap the answer in <answer>...</answer>.",
-    "Please solve the following arithmetic problem:\n{expr}\nFinal answer must be written as <answer>...</answer>.",
+    (
+        "Please solve the following arithmetic problem:\n{expr}\n"
+        "Final answer must be written as <answer>...</answer>."
+    ),
     "Math: {expr} = ?\nThink step by step. The answer goes in <answer>...</answer>.",
     "Find the value of {expr}.\nShow your work. Put only the final value in <answer>...</answer>.",
     "Solve the problem below and box your answer with <answer>...</answer>.\n{expr}",
@@ -117,9 +132,7 @@ def select_prompt_templates(diversity: int = 1):
     return PROMPT_TEMPLATES[:diversity]
 
 
-def format_prompt(
-    expr: str, diversity: int = 1, rng: Optional[random.Random] = None
-) -> str:
+def format_prompt(expr: str, diversity: int = 1, rng: Optional[random.Random] = None) -> str:
     """Format an arithmetic expression into a prompt using diverse templates.
 
     Parameters
@@ -457,9 +470,7 @@ def collate_fn(batch, pad_token_id=50256):
         lab = b["labels"]
         pad_len = max_len - len(inp)
         if pad_len > 0:
-            inp = torch.cat(
-                [inp, torch.full((pad_len,), pad_token_id, dtype=torch.long)]
-            )
+            inp = torch.cat([inp, torch.full((pad_len,), pad_token_id, dtype=torch.long)])
             lab = torch.cat([lab, torch.full((pad_len,), -1, dtype=torch.long)])
         input_ids.append(inp)
         labels.append(lab)
@@ -482,9 +493,7 @@ def collate_fn(batch, pad_token_id=50256):
 def _test_cot_generation():
     data = generate_cot_problems(num_samples=5, seed=42, difficulty="easy")
     assert len(data) == 5
-    assert all(
-        "prompt" in item and "reasoning" in item and "answer" in item for item in data
-    )
+    assert all("prompt" in item and "reasoning" in item and "answer" in item for item in data)
     print("generate_cot_problems smoke test passed")
 
 

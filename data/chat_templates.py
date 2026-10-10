@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import dataclasses
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -42,21 +42,21 @@ class ChatTemplate(ABC):
     """Abstract base class for chat templates."""
 
     @abstractmethod
-    def apply_chat_template(self, messages: List[Dict[str, str]]) -> str:
+    def apply_chat_template(self, messages: list[dict[str, str]]) -> str:
         """Convert a list of messages into a single formatted string."""
         raise NotImplementedError
 
     @abstractmethod
-    def get_stop_strings(self) -> List[str]:
+    def get_stop_strings(self) -> list[str]:
         """Return the list of strings that terminate the assistant turn."""
         raise NotImplementedError
 
     def build_kv_cache_prefix(
         self,
         model: nn.Module,
-        system_message: Optional[Dict[str, str]] = None,
+        system_message: dict[str, str] | None = None,
         device: str = "cuda",
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """Pre-compute the KV cache for a fixed system prompt.
 
         If the model supports ``use_cache=True``, this runs a forward pass over
@@ -84,7 +84,7 @@ class ChatTemplate(ABC):
         return past_kvs
 
     @classmethod
-    def from_name(cls, name: str) -> "ChatTemplate":
+    def from_name(cls, name: str) -> ChatTemplate:
         """Factory: return the template instance for ``name``."""
         registry = {
             "chatml": ChatMLTemplate,
@@ -92,9 +92,7 @@ class ChatTemplate(ABC):
             "gemma": GemmaTemplate,
         }
         if name.lower() not in registry:
-            raise ValueError(
-                f"Unknown chat template: {name}. Available: {list(registry.keys())}"
-            )
+            raise ValueError(f"Unknown chat template: {name}. Available: {list(registry.keys())}")
         return registry[name.lower()]()  # type: ignore[abstract]
 
 
@@ -116,7 +114,7 @@ class ChatMLTemplate(ChatTemplate):
     IM_START = "<|im_start|>"
     IM_END = "<|im_end|>"
 
-    def apply_chat_template(self, messages: List[Dict[str, str]]) -> str:
+    def apply_chat_template(self, messages: list[dict[str, str]]) -> str:
         parts = []
         for msg in messages:
             role = msg.get("role", "user")
@@ -127,15 +125,15 @@ class ChatMLTemplate(ChatTemplate):
             parts.append(f"{self.IM_START}assistant\n")
         return "\n".join(parts)
 
-    def get_stop_strings(self) -> List[str]:
+    def get_stop_strings(self) -> list[str]:
         return [self.IM_END]
 
     def build_kv_cache_prefix(
         self,
         model: nn.Module,
-        system_message: Optional[Dict[str, str]] = None,
+        system_message: dict[str, str] | None = None,
         device: str = "cuda",
-    ) -> Optional[Any]:
+    ) -> Any | None:
         if system_message is None:
             return None
         text = self.apply_chat_template([system_message])
@@ -171,7 +169,7 @@ class Llama2Template(ChatTemplate):
     INST_START = "[INST]"
     INST_END = "[/INST]"
 
-    def apply_chat_template(self, messages: List[Dict[str, str]]) -> str:
+    def apply_chat_template(self, messages: list[dict[str, str]]) -> str:
         parts = []
         system_text = ""
         user_assistant_pairs = []
@@ -195,7 +193,10 @@ class Llama2Template(ChatTemplate):
 
         for user, assistant in user_assistant_pairs:
             if system_text:
-                inst = f"{self.INST_START} {self.SYS_START}\n{system_text}\n{self.SYS_END}\n\n{user} {self.INST_END}"
+                inst = (
+                    f"{self.INST_START} {self.SYS_START}\n{system_text}\n"
+                    f"{self.SYS_END}\n\n{user} {self.INST_END}"
+                )
                 system_text = ""  # only on first turn
             else:
                 inst = f"{self.INST_START} {user} {self.INST_END}"
@@ -208,7 +209,7 @@ class Llama2Template(ChatTemplate):
             pass  # already open
         return "".join(parts)
 
-    def get_stop_strings(self) -> List[str]:
+    def get_stop_strings(self) -> list[str]:
         return [self.INST_END]
 
 
@@ -226,7 +227,7 @@ class GemmaTemplate(ChatTemplate):
     START_TURN = "<start_of_turn>"
     END_TURN = "<end_of_turn>"
 
-    def apply_chat_template(self, messages: List[Dict[str, str]]) -> str:
+    def apply_chat_template(self, messages: list[dict[str, str]]) -> str:
         parts = []
         for msg in messages:
             role = msg.get("role", "user")
@@ -239,13 +240,11 @@ class GemmaTemplate(ChatTemplate):
             parts.append(f"{self.START_TURN}model\n")
         return "\n".join(parts)
 
-    def get_stop_strings(self) -> List[str]:
+    def get_stop_strings(self) -> list[str]:
         return [self.END_TURN]
 
 
-def apply_chat_template(
-    messages: List[Dict[str, str]], template: str = "chatml"
-) -> str:
+def apply_chat_template(messages: list[dict[str, str]], template: str = "chatml") -> str:
     """Convenience function: format messages with a named template.
 
     Parameters
@@ -268,7 +267,7 @@ def inject_system_prompt_kv_cache(
     system_prompt: str,
     template: str = "chatml",
     device: str = "cuda",
-) -> Optional[Any]:
+) -> Any | None:
     """Pre-compute KV cache for a system prompt so it can be reused across turns.
 
     Returns

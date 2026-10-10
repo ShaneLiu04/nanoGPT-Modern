@@ -12,10 +12,10 @@ import json
 import os
 import warnings
 from collections import defaultdict
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from collections.abc import Sequence
 
 
-def _char_ngrams(text: str, n: int) -> Set[str]:
+def _char_ngrams(text: str, n: int) -> set[str]:
     """Return the set of character n-grams."""
     if len(text) < n:
         return {text} if text else set()
@@ -24,7 +24,7 @@ def _char_ngrams(text: str, n: int) -> Set[str]:
 
 def _stable_hash(value: str, seed: int) -> int:
     """Return a deterministic 32-bit integer hash."""
-    digest = hashlib.sha1(f"{seed}:{value}".encode("utf-8")).digest()
+    digest = hashlib.sha1(f"{seed}:{value}".encode()).digest()
     return int.from_bytes(digest[:4], "little")
 
 
@@ -51,15 +51,15 @@ class MinHash:
         self.ngram_size = ngram_size
         self._seeds = [seed + i for i in range(num_hashes)]
 
-    def ngrams(self, text: str) -> Set[str]:
+    def ngrams(self, text: str) -> set[str]:
         return _char_ngrams(text, self.ngram_size)
 
-    def signature(self, text: str) -> Tuple[int, ...]:
+    def signature(self, text: str) -> tuple[int, ...]:
         """Return the MinHash signature as a tuple of ints."""
         ngrams = self.ngrams(text)
         if not ngrams:
             return tuple([0] * self.num_hashes)
-        sig: List[int] = []
+        sig: list[int] = []
         for s in self._seeds:
             min_val = min(_stable_hash(ng, s) for ng in ngrams)
             sig.append(min_val)
@@ -78,21 +78,19 @@ class LocalitySensitiveHashing:
             raise ValueError("num_bands and rows_per_band must be positive")
         self.num_bands = num_bands
         self.rows_per_band = rows_per_band
-        self._buckets: List[Dict[int, Set[int]]] = [
-            defaultdict(set) for _ in range(num_bands)
-        ]
+        self._buckets: list[dict[int, set[int]]] = [defaultdict(set) for _ in range(num_bands)]
 
     @property
     def num_hashes(self) -> int:
         return self.num_bands * self.rows_per_band
 
-    def fit(self, signatures: Sequence[Tuple[int, ...]]) -> "LocalitySensitiveHashing":
+    def fit(self, signatures: Sequence[tuple[int, ...]]) -> LocalitySensitiveHashing:
         """Index a batch of signatures and return self."""
         for idx, sig in enumerate(signatures):
             self.add(sig, idx)
         return self
 
-    def add(self, signature: Tuple[int, ...], idx: int) -> None:
+    def add(self, signature: tuple[int, ...], idx: int) -> None:
         """Index a single signature."""
         if len(signature) != self.num_hashes:
             raise ValueError(
@@ -105,9 +103,9 @@ class LocalitySensitiveHashing:
             bucket = hash(band)
             self._buckets[band_idx][bucket].add(idx)
 
-    def query(self, signature: Tuple[int, ...]) -> Set[int]:
+    def query(self, signature: tuple[int, ...]) -> set[int]:
         """Return candidate indices for a signature."""
-        candidates: Set[int] = set()
+        candidates: set[int] = set()
         for band_idx in range(self.num_bands):
             start = band_idx * self.rows_per_band
             band = signature[start : start + self.rows_per_band]
@@ -116,7 +114,7 @@ class LocalitySensitiveHashing:
         return candidates
 
 
-def _jaccard(a: Set[str], b: Set[str]) -> float:
+def _jaccard(a: set[str], b: set[str]) -> float:
     if not a and not b:
         return 1.0
     inter = len(a & b)
@@ -162,7 +160,7 @@ class MinHashDeduplicator:
         num_bands: int = 8,
         rows_per_band: int = 16,
         incremental: bool = False,
-        signature_path: Optional[str] = None,
+        signature_path: str | None = None,
     ):
         if not 0.0 < threshold <= 1.0:
             raise ValueError("threshold must be in (0, 1]")
@@ -175,22 +173,18 @@ class MinHashDeduplicator:
         self.rows_per_band = rows_per_band
         self._minhash = MinHash(num_hashes, ngram_size)
         self._lsh = LocalitySensitiveHashing(num_bands, rows_per_band)
-        self._duplicates: Optional[Set[int]] = None
-        self._size: Optional[int] = None
+        self._duplicates: set[int] | None = None
+        self._size: int | None = None
         self._incremental = incremental
         self._signature_path = signature_path
-        self._all_signatures: List[Tuple[int, ...]] = []
-        self._all_ngrams: List[Set[str]] = []
+        self._all_signatures: list[tuple[int, ...]] = []
+        self._all_ngrams: list[set[str]] = []
         self._cumulative_size = 0
 
-        if (
-            incremental
-            and signature_path is not None
-            and os.path.exists(signature_path)
-        ):
+        if incremental and signature_path is not None and os.path.exists(signature_path):
             self.load_signatures(signature_path)
 
-    def fit(self, texts: Sequence[str]) -> "MinHashDeduplicator":
+    def fit(self, texts: Sequence[str]) -> MinHashDeduplicator:
         """Compute signatures, build LSH index, and find duplicates.
 
         In incremental mode, new signatures are appended to the existing
@@ -207,7 +201,7 @@ class MinHashDeduplicator:
             self._all_ngrams = []
             self._cumulative_size = 0
 
-        duplicate: Set[int] = set()
+        duplicate: set[int] = set()
 
         for i, sig in enumerate(new_signatures):
             abs_idx = self._cumulative_size + i
@@ -221,10 +215,7 @@ class MinHashDeduplicator:
                 else:
                     # Compare against an earlier new signature.
                     prev = j - self._cumulative_size
-                    if (
-                        prev < i
-                        and _jaccard(new_ngrams[i], new_ngrams[prev]) >= self.threshold
-                    ):
+                    if prev < i and _jaccard(new_ngrams[i], new_ngrams[prev]) >= self.threshold:
                         duplicate.add(i)
                         break
             if i not in duplicate:
@@ -237,7 +228,7 @@ class MinHashDeduplicator:
         self._duplicates = duplicate
         return self
 
-    def duplicate_mask(self, texts: Optional[Sequence[str]] = None) -> List[bool]:
+    def duplicate_mask(self, texts: Sequence[str] | None = None) -> list[bool]:
         """Return a list where ``True`` means "keep" and ``False" means "drop".
 
         If ``texts`` is provided, re-fit on it; otherwise use the result from the
@@ -249,20 +240,20 @@ class MinHashDeduplicator:
             raise RuntimeError("fit() must be called before duplicate_mask()")
         return [i not in self._duplicates for i in range(self._expected_size(texts))]
 
-    def _expected_size(self, texts: Optional[Sequence[str]]) -> int:
+    def _expected_size(self, texts: Sequence[str] | None) -> int:
         if texts is not None:
             return len(texts)
         if self._size is None:
             raise RuntimeError("fit() must be called before duplicate_mask()")
         return self._size
 
-    def duplicate_indices(self) -> Set[int]:
+    def duplicate_indices(self) -> set[int]:
         """Return indices of documents marked as duplicates."""
         if self._duplicates is None:
             raise RuntimeError("fit() must be called first")
         return self._duplicates.copy()
 
-    def save_signatures(self, path: Optional[str] = None) -> None:
+    def save_signatures(self, path: str | None = None) -> None:
         """Persist all signatures and n-grams to *path*.
 
         Parameters
@@ -287,7 +278,7 @@ class MinHashDeduplicator:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f)
 
-    def load_signatures(self, path: Optional[str] = None) -> None:
+    def load_signatures(self, path: str | None = None) -> None:
         """Load signatures and n-grams from *path* and rebuild the LSH index.
 
         Parameters
@@ -299,7 +290,7 @@ class MinHashDeduplicator:
         path = path or self._signature_path
         if path is None or not os.path.exists(path):
             raise FileNotFoundError(f"Signature file not found: {path}")
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         for key in (
             "num_hashes",
@@ -312,7 +303,8 @@ class MinHashDeduplicator:
             expected = getattr(self, key)
             if stored is not None and stored != expected:
                 warnings.warn(
-                    f"Parameter mismatch for {key}: expected {expected}, got {stored}"
+                    f"Parameter mismatch for {key}: expected {expected}, got {stored}",
+                    stacklevel=2,
                 )
         self._cumulative_size = data.get("cumulative_size", 0)
         self._all_signatures = [tuple(sig) for sig in data["signatures"]]
@@ -347,7 +339,7 @@ class StreamingDuplicateDetector:
         self.threshold = threshold
         self._minhash = MinHash(num_hashes, ngram_size)
         self._lsh = LocalitySensitiveHashing(num_bands, rows_per_band)
-        self._ngrams: List[Set[str]] = []
+        self._ngrams: list[set[str]] = []
         self._seen = 0
 
     def is_duplicate(self, text: str) -> bool:

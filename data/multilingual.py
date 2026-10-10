@@ -11,7 +11,8 @@ import json
 import re
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Any
 
 import numpy as np
 from torch.utils.data import IterableDataset
@@ -25,10 +26,10 @@ class TokenizerBackend(ABC):
     """Abstract tokeniser backend."""
 
     @abstractmethod
-    def encode(self, text: str) -> List[int]: ...
+    def encode(self, text: str) -> list[int]: ...
 
     @abstractmethod
-    def decode(self, tokens: List[int]) -> str: ...
+    def decode(self, tokens: list[int]) -> str: ...
 
     @property
     @abstractmethod
@@ -43,10 +44,10 @@ class TiktokenBackend(TokenizerBackend):
 
         self._enc = tiktoken.get_encoding(encoding_name)
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         return self._enc.encode(text)
 
-    def decode(self, tokens: List[int]) -> str:
+    def decode(self, tokens: list[int]) -> str:
         return self._enc.decode(tokens)
 
     @property
@@ -62,10 +63,10 @@ class SentencePieceBackend(TokenizerBackend):
 
         self._sp = spm.SentencePieceProcessor(model_file=model_path)
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         return self._sp.encode(text, out_type=int)
 
-    def decode(self, tokens: List[int]) -> str:
+    def decode(self, tokens: list[int]) -> str:
         return self._sp.decode(tokens)
 
     @property
@@ -89,7 +90,7 @@ class MultilingualTokenizer:
     def __init__(
         self,
         backend: str = "tiktoken",
-        model_path: Optional[str] = None,
+        model_path: str | None = None,
         encoding_name: str = "gpt2",
     ):
         backend = backend.lower()
@@ -102,10 +103,10 @@ class MultilingualTokenizer:
         else:
             raise ValueError(f"Unsupported backend: {backend}")
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         return self._backend.encode(text)
 
-    def decode(self, tokens: List[int]) -> str:
+    def decode(self, tokens: list[int]) -> str:
         return self._backend.decode(tokens)
 
     @property
@@ -133,7 +134,10 @@ class LanguageDetector:
             self._detect = detect
             self._langdetect_available = True
         except Exception as exc:
-            warnings.warn(f"langdetect unavailable ({exc}); using heuristic fallback.")
+            warnings.warn(
+                f"langdetect unavailable ({exc}); using heuristic fallback.",
+                stacklevel=2,
+            )
 
     def detect(self, text: str) -> str:
         """Return a 2-letter ISO language code (e.g. ``"en"``, ``"zh"``)."""
@@ -146,7 +150,7 @@ class LanguageDetector:
 
     def _heuristic_detect(self, text: str) -> str:
         # Count characters in major language blocks.
-        counts: Dict[str, int] = {
+        counts: dict[str, int] = {
             "en": len(re.findall(r"[a-zA-Z]", text)),
             "zh": len(re.findall(r"[\u4e00-\u9fff]", text)),
             "ja": len(re.findall(r"[\u3040-\u309f\u30a0-\u30ff]", text)),
@@ -197,7 +201,7 @@ class MultilingualDataset(IterableDataset):
         sources: Mapping[str, Iterable[Any]],
         weights: Mapping[str, float],
         temperature: float = 1.0,
-        total_examples: Optional[int] = None,
+        total_examples: int | None = None,
         seed: int = 0,
         stop_on_exhaustion: bool = False,
     ):
@@ -244,7 +248,7 @@ class MultilingualDataset(IterableDataset):
             self._yielded = yielded
             yield example
 
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         return {
             "yielded": self._yielded,
             "total": self._total,
@@ -252,7 +256,7 @@ class MultilingualDataset(IterableDataset):
             "rng_state": self._rng.bit_generator.state,
         }
 
-    def load_state_dict(self, state: Dict[str, Any]) -> None:
+    def load_state_dict(self, state: dict[str, Any]) -> None:
         self._yielded = int(state.get("yielded", 0))
         self._total = state.get("total", self._total)
         rng_state = state.get("rng_state")
@@ -260,7 +264,7 @@ class MultilingualDataset(IterableDataset):
             self._rng.bit_generator.state = rng_state
 
 
-def load_multilingual_config(path: str) -> Dict[str, Any]:
+def load_multilingual_config(path: str) -> dict[str, Any]:
     """Load a multilingual mixture config JSON.
 
     Example::
@@ -271,7 +275,7 @@ def load_multilingual_config(path: str) -> Dict[str, Any]:
           "seed": 42
         }
     """
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
     if "languages" not in cfg:
         raise ValueError("multilingual config must contain 'languages'")

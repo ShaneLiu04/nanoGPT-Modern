@@ -7,8 +7,9 @@ Includes AST-based syntax filtering and language-group sampling.
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Dict, Iterator, Mapping, Optional, Sequence, Union
+from typing import Any
 
 import torch
 from torch.utils.data import IterableDataset
@@ -31,7 +32,7 @@ def _is_valid_javascript(source: str) -> bool:
     """Heuristic JS syntax check (falls back to brace balance)."""
     braces = {"{": 0, "[": 0, "(": 0}
     closers = {"}": "{", "]": "[", ")": "("}
-    in_string: Optional[str] = None
+    in_string: str | None = None
     for ch in source:
         if in_string is None:
             if ch in "\"'":
@@ -43,9 +44,7 @@ def _is_valid_javascript(source: str) -> bool:
                 if braces[closers[ch]] < 0:
                     return False
         else:
-            if ch == in_string and (
-                len(source) == 1 or source[source.index(ch) - 1] != "\\"
-            ):
+            if ch == in_string and (len(source) == 1 or source[source.index(ch) - 1] != "\\"):
                 in_string = None
     return all(v == 0 for v in braces.values())
 
@@ -55,7 +54,7 @@ def _is_valid_cpp(source: str) -> bool:
     return _is_valid_javascript(source)  # brace balance is identical
 
 
-_AST_FILTERS: Dict[str, Any] = {
+_AST_FILTERS: dict[str, Any] = {
     "python": _is_valid_python,
     "js": _is_valid_javascript,
     "javascript": _is_valid_javascript,
@@ -69,7 +68,7 @@ _AST_FILTERS: Dict[str, Any] = {
 # Local file loader
 # ---------------------------------------------------------------------------
 
-_EXTENSION_MAP: Dict[str, str] = {
+_EXTENSION_MAP: dict[str, str] = {
     ".py": "python",
     ".js": "js",
     ".ts": "js",
@@ -88,16 +87,16 @@ _EXTENSION_MAP: Dict[str, str] = {
 }
 
 
-def _detect_language(path: Union[str, Path]) -> str:
+def _detect_language(path: str | Path) -> str:
     ext = Path(path).suffix.lower()
     return _EXTENSION_MAP.get(ext, "unknown")
 
 
 def _read_local_files(
-    root: Union[str, Path],
-    languages: Optional[Sequence[str]] = None,
-    max_files: Optional[int] = None,
-) -> Iterator[Dict[str, Any]]:
+    root: str | Path,
+    languages: Sequence[str] | None = None,
+    max_files: int | None = None,
+) -> Iterator[dict[str, Any]]:
     """Yield code examples from a local directory tree."""
     root = Path(root)
     if not root.exists():
@@ -135,14 +134,14 @@ def _read_local_files(
 def _load_hf_stack(
     language: str,
     split: str = "train",
-    max_files: Optional[int] = None,
+    max_files: int | None = None,
     streaming: bool = True,
-) -> Iterator[Dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     """Yield examples from ``bigcode/the-stack`` via ``datasets``."""
     try:
         from datasets import load_dataset  # type: ignore[import-untyped]
     except Exception as exc:
-        raise ImportError(f"datasets library is required for HF loading: {exc}")
+        raise ImportError(f"datasets library is required for HF loading: {exc}") from exc
 
     ds = load_dataset(
         "bigcode/the-stack",
@@ -209,10 +208,10 @@ class CodeDataset(IterableDataset):
         self,
         source: str = "local",
         path_or_language: str = ".",
-        languages: Optional[Sequence[str]] = None,
-        tokenizer: Optional[Any] = None,
+        languages: Sequence[str] | None = None,
+        tokenizer: Any | None = None,
         max_length: int = 1024,
-        max_files: Optional[int] = None,
+        max_files: int | None = None,
         split: str = "train",
         ast_filter: bool = True,
     ):
@@ -225,7 +224,7 @@ class CodeDataset(IterableDataset):
         self.split = split
         self.ast_filter = ast_filter
 
-    def __iter__(self) -> Iterator[Dict[str, Any]]:
+    def __iter__(self) -> Iterator[dict[str, Any]]:
         if self.source == "local":
             raw = _read_local_files(
                 self.path_or_language,
@@ -261,10 +260,10 @@ class CodeDataset(IterableDataset):
                 example["labels"] = labels
             yield example
 
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         return {}
 
-    def load_state_dict(self, state: Dict[str, Any]) -> None:
+    def load_state_dict(self, state: dict[str, Any]) -> None:
         pass
 
 
@@ -282,7 +281,7 @@ class GroupedCodeSampler:
         weights: Mapping[str, float],
         temperature: float = 1.0,
         seed: int = 42,
-        total_examples: Optional[int] = None,
+        total_examples: int | None = None,
     ):
         self.datasets = dict(datasets)
         self.weights = dict(weights)
@@ -290,7 +289,7 @@ class GroupedCodeSampler:
         self.seed = seed
         self.total_examples = total_examples
 
-    def __iter__(self) -> Iterator[Dict[str, Any]]:
+    def __iter__(self) -> Iterator[dict[str, Any]]:
         # Lazy import to avoid circular dependency.
         from data.mixer import MixedIterableDataset
 
@@ -331,9 +330,7 @@ def _test_grouped_sampler():
         py_file.write_text("x = 1", encoding="utf-8")
         js_file = Path(tmpdir) / "b.js"
         js_file.write_text("var x = 1;", encoding="utf-8")
-        ds_py = CodeDataset(
-            source="local", path_or_language=tmpdir, languages=["python"]
-        )
+        ds_py = CodeDataset(source="local", path_or_language=tmpdir, languages=["python"])
         ds_js = CodeDataset(source="local", path_or_language=tmpdir, languages=["js"])
         sampler = GroupedCodeSampler(
             datasets={"python": ds_py, "js": ds_js},

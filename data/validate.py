@@ -3,9 +3,10 @@
 Checks: token range, vocabulary coverage, EOT frequency, decoded samples.
 """
 
+import argparse
 import os
 import sys
-import argparse
+
 import numpy as np
 
 
@@ -15,9 +16,7 @@ def get_args():
     p.add_argument("--vocab_size", type=int, default=50257)
     p.add_argument("--eot_token", type=int, default=50256)
     p.add_argument("--num_samples", type=int, default=5)
-    p.add_argument(
-        "--seed", type=int, default=0, help="Random seed for decoded samples"
-    )
+    p.add_argument("--seed", type=int, default=0, help="Random seed for decoded samples")
     p.add_argument(
         "--histogram_tokens",
         type=int,
@@ -61,7 +60,8 @@ def main():
     in_range = max_tok < args.vocab_size
     print(f"Token range:     {min_tok} - {max_tok}")
     print(
-        f"Vocab check:     {'OK' if in_range else 'FAIL - tokens exceed vocab_size=' + str(args.vocab_size)}"
+        f"Vocab check:     "
+        f"{'OK' if in_range else 'FAIL - tokens exceed vocab_size=' + str(args.vocab_size)}"
     )
     print()
 
@@ -89,7 +89,7 @@ def main():
 
         tokenizer = tiktoken.get_encoding("gpt2")
         print(f"Random samples ({args.num_samples}):")
-        for i in range(args.num_samples):
+        for _ in range(args.num_samples):
             start = rng.integers(0, max(total - 200, 1))
             segment = data[start : start + 100]
             text = tokenizer.decode(segment.tolist())

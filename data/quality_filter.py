@@ -12,7 +12,7 @@ import math
 import random
 import warnings
 from collections import Counter
-from typing import Any, Dict, Optional
+from typing import Any
 
 from data.filter import QualityFilter
 
@@ -52,12 +52,12 @@ class QualityScoreFilter(QualityFilter):
 
     def __init__(
         self,
-        fasttext_model_path: Optional[str] = None,
+        fasttext_model_path: str | None = None,
         fasttext_weight: float = 0.5,
         length_range: tuple[int, int] = (100, 100_000),
         repetition_n: int = 10,
         repetition_max_ratio: float = 0.3,
-        weights: Optional[Dict[str, float]] = None,
+        weights: dict[str, float] | None = None,
     ):
         if not 0.0 <= fasttext_weight <= 1.0:
             raise ValueError("fasttext_weight must be in [0, 1]")
@@ -73,7 +73,7 @@ class QualityScoreFilter(QualityFilter):
             raise ValueError("weights must sum to a positive value")
         self._weights = {k: v / total for k, v in self._weights.items()}
 
-        self._fasttext_model: Optional[Any] = None
+        self._fasttext_model: Any | None = None
         self._fasttext_available = False
         if fasttext_model_path is not None:
             try:
@@ -84,7 +84,8 @@ class QualityScoreFilter(QualityFilter):
             except Exception as exc:
                 warnings.warn(
                     f"FastText quality model unavailable ({exc}). "
-                    "Falling back to rule-only scoring."
+                    "Falling back to rule-only scoring.",
+                    stacklevel=2,
                 )
 
     # ------------------------------------------------------------------

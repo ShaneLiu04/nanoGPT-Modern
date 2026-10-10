@@ -8,13 +8,9 @@ from __future__ import annotations
 
 import json
 import warnings
+from collections.abc import Iterable, Iterator, Mapping
 from typing import (
     Any,
-    Dict,
-    Iterable,
-    Iterator,
-    Mapping,
-    Optional,
 )
 
 import numpy as np
@@ -51,7 +47,7 @@ class MixtureStrategy:
         """Sample a source name according to the mixture probabilities."""
         return rng.choice(self.names, p=self.probabilities)
 
-    def as_dict(self) -> Dict[str, float]:
+    def as_dict(self) -> dict[str, float]:
         """Return the final sampling probabilities as a dict."""
         return dict(zip(self.names, self.probabilities.tolist()))
 
@@ -87,7 +83,7 @@ class MixedIterableDataset:
         sources: Mapping[str, Iterable[Any]],
         weights: Mapping[str, float],
         temperature: float = 1.0,
-        total_examples: Optional[int] = None,
+        total_examples: int | None = None,
         seed: int = 0,
         stop_on_exhaustion: bool = False,
     ):
@@ -95,7 +91,7 @@ class MixedIterableDataset:
         if set(sources.keys()) != set(self.strategy.names):
             raise ValueError("keys of sources and weights must match")
         self._sources = dict(sources)
-        self._iterators: Dict[str, Iterator[Any]] = {}
+        self._iterators: dict[str, Iterator[Any]] = {}
         self._total = total_examples
         self._rng = np.random.default_rng(seed)
         self._stop_on_exhaustion = stop_on_exhaustion
@@ -127,7 +123,7 @@ class MixedIterableDataset:
             self._yielded = yielded
             yield example
 
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         """Return a serializable state for resuming.
 
         The RNG state is captured so that resuming reproduces the same mixture
@@ -140,7 +136,7 @@ class MixedIterableDataset:
             "rng_state": self._rng.bit_generator.state,
         }
 
-    def load_state_dict(self, state: Dict[str, Any]) -> None:
+    def load_state_dict(self, state: dict[str, Any]) -> None:
         """Restore the iterator state from a checkpoint."""
         self._yielded = int(state.get("yielded", 0))
         self._total = state.get("total", self._total)
@@ -181,7 +177,9 @@ def mix_datasets(
             )
     except Exception as exc:  # pragma: no cover
         warnings.warn(
-            f"Could not use datasets.interleave_datasets ({exc}); falling back to MixedIterableDataset."
+            f"Could not use datasets.interleave_datasets ({exc}); "
+            "falling back to MixedIterableDataset.",
+            stacklevel=2,
         )
 
     return MixedIterableDataset(
@@ -192,7 +190,7 @@ def mix_datasets(
     )
 
 
-def load_mixture_config(path: str) -> Dict[str, Any]:
+def load_mixture_config(path: str) -> dict[str, Any]:
     """Load a mixture config JSON such as::
 
     {
@@ -201,7 +199,7 @@ def load_mixture_config(path: str) -> Dict[str, Any]:
       "seed": 42
     }
     """
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
     if "weights" not in cfg:
         raise ValueError("mixture config must contain 'weights'")

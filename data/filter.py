@@ -15,7 +15,8 @@ import re
 import warnings
 from abc import ABC, abstractmethod
 from collections import Counter
-from typing import Any, Dict, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 
 class QualityFilter(ABC):
@@ -39,8 +40,8 @@ class LengthFilter(QualityFilter):
 
     def __init__(
         self,
-        min_chars: Optional[int] = None,
-        max_chars: Optional[int] = None,
+        min_chars: int | None = None,
+        max_chars: int | None = None,
     ):
         if min_chars is not None and min_chars < 0:
             raise ValueError("min_chars must be >= 0")
@@ -103,8 +104,8 @@ class RegexFilter(QualityFilter):
 
     def __init__(
         self,
-        require: Optional[str] = None,
-        reject: Optional[str] = None,
+        require: str | None = None,
+        reject: str | None = None,
         flags: int = re.IGNORECASE,
     ):
         self.require = re.compile(require, flags) if require is not None else None
@@ -145,12 +146,12 @@ class FastTextQualityFilter(QualityFilter):
         self,
         model_path: str,
         threshold: float = 0.5,
-        label: Optional[str] = None,
+        label: str | None = None,
     ):
         self.model_path = model_path
         self.threshold = threshold
         self.label = label
-        self._model: Optional[Any] = None
+        self._model: Any | None = None
         self._available = True
         try:
             import fasttext  # type: ignore[import-untyped]
@@ -160,7 +161,8 @@ class FastTextQualityFilter(QualityFilter):
             self._available = False
             warnings.warn(
                 f"FastTextQualityFilter disabled: could not load {model_path} ({exc}). "
-                "All documents will pass this filter."
+                "All documents will pass this filter.",
+                stacklevel=2,
             )
 
     def __call__(self, text: str) -> bool:
@@ -197,9 +199,9 @@ class CompositeFilter(QualityFilter):
     def describe(self) -> str:
         return f"CompositeFilter([{', '.join(f.describe() for f in self.filters)}])"
 
-    def stats(self, texts: Sequence[str]) -> Dict[str, int]:
+    def stats(self, texts: Sequence[str]) -> dict[str, int]:
         """Return how many documents each individual filter rejects."""
-        rejected: Dict[str, int] = {f.describe(): 0 for f in self.filters}
+        rejected: dict[str, int] = {f.describe(): 0 for f in self.filters}
         for text in texts:
             for f in self.filters:
                 if not f(text):

@@ -5,9 +5,10 @@ Expects ~1M docs, ~1.13B tokens total.
 import os
 import random
 import warnings
+
 import numpy as np
 import torch
-from torch.utils.data import IterableDataset, DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 
 
 def get_openwebtext_dataset(
@@ -33,10 +34,9 @@ def get_openwebtext_dataset(
                 "Rank sharding is not implemented for PackingDataset; "
                 "all ranks will consume the same packed samples.",
                 RuntimeWarning,
+                stacklevel=2,
             )
-        return PackingDataset(
-            bin_path, block_size=block_size, resume_offset=resume_offset
-        )
+        return PackingDataset(bin_path, block_size=block_size, resume_offset=resume_offset)
     return MemmapDataset(
         bin_path,
         block_size=block_size,
@@ -53,7 +53,7 @@ def _detect_dtype_from_index(bin_path):
     idx_path = bin_path.replace(".bin", ".idx")
     dtype = np.uint16  # default for backward compat
     if os.path.exists(idx_path):
-        with open(idx_path, "r") as f:
+        with open(idx_path) as f:
             for line in f:
                 if line.startswith("dtype="):
                     name = line.strip().split("=")[1]
@@ -67,7 +67,7 @@ def _detect_eot_from_index(bin_path):
     """Read the EOT token id recorded in the index file."""
     idx_path = bin_path.replace(".bin", ".idx")
     if os.path.exists(idx_path):
-        with open(idx_path, "r") as f:
+        with open(idx_path) as f:
             for line in f:
                 if line.startswith("eot_token="):
                     return int(line.strip().split("=")[1])
@@ -79,7 +79,7 @@ def _detect_block_size_from_index(bin_path):
     idx_path = bin_path.replace(".bin", ".idx")
     block_size = 1024
     if os.path.exists(idx_path):
-        with open(idx_path, "r") as f:
+        with open(idx_path) as f:
             for line in f:
                 if line.startswith("block_size="):
                     block_size = int(line.strip().split("=")[1])
@@ -148,11 +148,13 @@ class MemmapDataset(IterableDataset):
                     self._shuffle_idx = np.load(f)
                 if len(self._shuffle_idx) != self.length:
                     warnings.warn(
-                        f"Shuffle index length mismatch: {len(self._shuffle_idx)} != {self.length}"
+                        f"Shuffle index length mismatch: "
+                        f"{len(self._shuffle_idx)} != {self.length}",
+                        stacklevel=2,
                     )
                     self._shuffle_idx = None
             else:
-                warnings.warn(f"Shuffle index not found: {shuffle_idx_path}")
+                warnings.warn(f"Shuffle index not found: {shuffle_idx_path}", stacklevel=2)
 
     def _rank_positions(self):
         """Global chunk positions owned by this rank's virtual stream."""
@@ -182,9 +184,7 @@ class MemmapDataset(IterableDataset):
             per_worker = (local_length - self.resume_offset) // worker_info.num_workers
             start = self.resume_offset + worker_info.id * per_worker
             end = (
-                start + per_worker
-                if worker_info.id < worker_info.num_workers - 1
-                else local_length
+                start + per_worker if worker_info.id < worker_info.num_workers - 1 else local_length
             )
 
         if self._shuffle_idx is not None:
@@ -197,9 +197,7 @@ class MemmapDataset(IterableDataset):
         # Apply chunk-level shuffle only when no global shuffle index is available.
         if self._shuffle_idx is None:
             buffer_size = (
-                self.shuffle_buffer
-                if self.shuffle_buffer is not None
-                else min(10000, end - start)
+                self.shuffle_buffer if self.shuffle_buffer is not None else min(10000, end - start)
             )
             buffer_size = max(1, buffer_size)
             for buf_start in range(0, len(indices), buffer_size):
@@ -211,9 +209,7 @@ class MemmapDataset(IterableDataset):
         for i in indices:
             if i < 0 or i >= self.length:
                 continue
-            chunk = self.data[
-                i * (self.block_size + 1) : (i + 1) * (self.block_size + 1)
-            ]
+            chunk = self.data[i * (self.block_size + 1) : (i + 1) * (self.block_size + 1)]
             chunk_i64 = chunk.astype(np.int64)
             x = torch.from_numpy(chunk_i64[:-1])
             y = torch.from_numpy(chunk_i64[1:])
@@ -340,14 +336,10 @@ class PackingDataset(IterableDataset):
     positions with no in-document context.
     """
 
-    def __init__(
-        self, bin_path, block_size=1024, eot_token=None, resume_offset=0, shuffle=True
-    ):
+    def __init__(self, bin_path, block_size=1024, eot_token=None, resume_offset=0, shuffle=True):
         super().__init__()
         self.block_size = block_size
-        self.eot_token = (
-            eot_token if eot_token is not None else _detect_eot_from_index(bin_path)
-        )
+        self.eot_token = eot_token if eot_token is not None else _detect_eot_from_index(bin_path)
         self.resume_offset = resume_offset
         self.shuffle = shuffle
         dtype = _detect_dtype_from_index(bin_path)

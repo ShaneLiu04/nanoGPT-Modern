@@ -20,9 +20,9 @@ Both modes:
     loading.
 """
 
+import argparse
 import os
 import sys
-import argparse
 from pathlib import Path
 
 import numpy as np
@@ -84,9 +84,7 @@ def get_args(argv=None):
         action="store_true",
         help="Use streaming mode instead of cached map mode",
     )
-    parser.add_argument(
-        "--eot_token", type=int, default=50256, help="GPT-2 EOT token id"
-    )
+    parser.add_argument("--eot_token", type=int, default=50256, help="GPT-2 EOT token id")
 
     # Data-quality pipeline options
     parser.add_argument(
@@ -155,9 +153,7 @@ def get_args(argv=None):
     parser.add_argument(
         "--dedup_num_hashes", type=int, default=128, help="MinHash signature length"
     )
-    parser.add_argument(
-        "--dedup_num_bands", type=int, default=8, help="Number of LSH bands"
-    )
+    parser.add_argument("--dedup_num_bands", type=int, default=8, help="Number of LSH bands")
     parser.add_argument(
         "--dedup_rows_per_band",
         type=int,
@@ -187,9 +183,9 @@ def _build_quality_filter(args):
     from data.filter import (
         CompositeFilter,
         LengthFilter,
+        QualityFilter,
         RegexFilter,
         RepetitionFilter,
-        QualityFilter,
     )
 
     try:
@@ -258,23 +254,18 @@ def _build_dedup(args, streaming: bool = False):
 def _load_mixed_dataset(args, streaming: bool = False):
     """Load a single dataset or a mixture configured by ``args.mixture_config``."""
     from datasets import load_dataset  # type: ignore[import-untyped]
+
     from data.mixer import load_mixture_config, mix_datasets
 
     if getattr(args, "data_files", None):
         import glob as _glob
 
         patterns = [p.strip() for p in args.data_files.split(",") if p.strip()]
-        files = sorted(
-            f for pattern in patterns for f in _glob.glob(pattern)
-        )
+        files = sorted(f for pattern in patterns for f in _glob.glob(pattern))
         if not files:
-            raise FileNotFoundError(
-                f"--data_files matched no files: {args.data_files!r}"
-            )
+            raise FileNotFoundError(f"--data_files matched no files: {args.data_files!r}")
         print(f"Loading {len(files)} local data file(s)...")
-        return load_dataset(
-            "parquet", data_files=files, split="train", streaming=streaming
-        )
+        return load_dataset("parquet", data_files=files, split="train", streaming=streaming)
 
     if args.mixture_config is None:
         name = "openwebtext"
@@ -318,9 +309,7 @@ def _select_dtype(vocab_size):
     return np.uint16 if vocab_size <= 65535 else np.uint32
 
 
-def _concatenate_shards_to_bin(
-    shard_dir, output_dir, split, dtype, chunk_tokens=10_000_000
-):
+def _concatenate_shards_to_bin(shard_dir, output_dir, split, dtype, chunk_tokens=10_000_000):
     """Stream all shard files into a single ``{split}.bin`` without loading it all into RAM."""
     import glob
 
@@ -370,9 +359,7 @@ class _ShardWriter:
         while offset < n:
             room = self.shard_size - self._used
             take = min(room, n - offset)
-            self._buffer[self._used : self._used + take] = tokens[
-                offset : offset + take
-            ]
+            self._buffer[self._used : self._used + take] = tokens[offset : offset + take]
             self._used += take
             offset += take
             self._total_tokens += take
@@ -402,9 +389,7 @@ class _ShardWriter:
             data.tofile(main_path)
             print(f"Saved {self._used:,} tokens to {main_path}")
 
-        shard_path = os.path.join(
-            self.shard_dir, f"{self.split}_{self._shard_idx:05d}.bin"
-        )
+        shard_path = os.path.join(self.shard_dir, f"{self.split}_{self._shard_idx:05d}.bin")
         data.tofile(shard_path)
         print(f"  shard {self._shard_idx:05d}: {self._used:,} tokens -> {shard_path}")
 
@@ -442,13 +427,9 @@ def _load_streaming_dataset(split):
 
     print(f"Loading OpenWebText ({split}) via streaming...")
     try:
-        return load_dataset(
-            "openwebtext", split=split, streaming=True, trust_remote_code=True
-        )
+        return load_dataset("openwebtext", split=split, streaming=True, trust_remote_code=True)
     except Exception:
-        print(
-            "Failed to load openwebtext via streaming; trying Skylion007/openwebtext subset..."
-        )
+        print("Failed to load openwebtext via streaming; trying Skylion007/openwebtext subset...")
         return load_dataset(
             "Skylion007/openwebtext",
             split=split,
@@ -462,9 +443,7 @@ def _prepare_map_mode(args, tokenizer, dtype):
     quality_filter = _build_quality_filter(args)
     dedup = _build_dedup(args, streaming=False)
 
-    print(
-        f"Loading source dataset ({args.split}) into local cache for map-mode tokenization..."
-    )
+    print(f"Loading source dataset ({args.split}) into local cache for map-mode tokenization...")
     ds = _load_mixed_dataset(args, streaming=False)
 
     max_docs = resolve_max_docs(args.split, args.max_docs, args.full)
@@ -549,13 +528,9 @@ def _prepare_streaming_mode(args, tokenizer, dtype):
 
     max_docs = resolve_max_docs(args.split, args.max_docs, args.full)
     if max_docs is not None:
-        print(
-            f"Target: up to {max_docs:,} documents, shards of ~{args.shard_size:,} tokens"
-        )
+        print(f"Target: up to {max_docs:,} documents, shards of ~{args.shard_size:,} tokens")
     else:
-        print(
-            f"Target: FULL split (no doc limit), shards of ~{args.shard_size:,} tokens"
-        )
+        print(f"Target: FULL split (no doc limit), shards of ~{args.shard_size:,} tokens")
 
     writer = _ShardWriter(
         output_dir=args.output_dir,
@@ -635,7 +610,8 @@ def main():
     writer.write_index()
 
     print(
-        f"\nDone. Docs: {meta['num_docs']:,}, tokens: {meta['total_tokens']:,}, shards: {meta['n_shards']}",
+        f"\nDone. Docs: {meta['num_docs']:,}, tokens: {meta['total_tokens']:,}, "
+        f"shards: {meta['n_shards']}",
         flush=True,
     )
 
