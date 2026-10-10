@@ -26,7 +26,7 @@
 | T022 | FR8c EMA foreach 批量更新 + micro-step 去 all_reduce/.item() 同步 + 异步 checkpoint（staged+线程，保持原子性，失败回退同步） | T009 | passing | 2026-10-09 完成；异步 ckpt 原子性回退已独立验证（B10 串行排队 + E5 失败回退用例） |
 | T010 | FR9a DDP 数据 rank 分片（互斥切片 + resume_offset 分片语义）+ no_sync/static_graph/gradient_as_bucket_view | T009 | passing | 2026-10-09 完成；跨步切片零丢弃（优于 DistributedSampler padding/drop）；static_graph+no_sync 兼容性待 GPU 冒烟验证 |
 | T011 | FR9b FSDP 补齐：auto_wrap_policy/use_orig_params/compile 顺序/FSDP checkpoint 修复（死代码接线或 DCP）+ 分布式 round-trip 测试 | T008,T010 | passing | 2026-10-09 完成；FULL_STATE_DICT 真实 gather 是 CUDA-only，CPU 侧以「真构造 + stub 路由」分层覆盖，GPU 冒烟待迁移演练 |
-| T012 | FR6 MoE 向量化重写（方案 B）：参数改单张量 `Parameter[E,H,C]`（gate/up/down 各一）+ load/save 翻译 hook（磁盘格式不变）、定容 padded bmm `[E,cap,C]` 零 Python 循环（cap 语义与现行 int 截断对齐，容量丢弃 token 输出 0）、compile 兼容；验收 loss atol=1e-5 + ≥2x 基准对比 | - | pending | kernel 级，TDD；旧 ckpt 双向兼容为设计锁定项（B1） |
+| T012 | FR6 MoE 向量化重写（方案 B）：参数改单张量 `Parameter[E,H,C]`（gate/up/down 各一）+ load/save 翻译 hook（磁盘格式不变）、定容 padded bmm `[E,cap,C]` 零 Python 循环（cap 语义与现行 int 截断对齐，容量丢弃 token 输出 0）、compile 兼容；验收 loss atol=1e-5 + ≥2x 基准对比 | - | passing | 2026-10-10 完成；实测 17.9x（137.1→7.7 ms/step @ E=4,H=688,C=256,N=512 CPU 中位），等价 diff ~3e-8 |
 | T013 | FR5 KV decode 去 cat（方案 B）：`KVCacheManager` 新增 `layout="append"` 追加式预分配缓冲 + `get_cache()` 返回 `[:pos]` 视图直喂 SDPA（零拷贝）、int8 惰性反量化切片、滑窗 mask 向量化；`pos ≥ max_cache_len` 切 ring 驱逐语义回退路径（`evicted` 标记，B5）；flash wrapper 仅可选分支（包存在才启用）；验收输出逐位一致 + ≥1.5x | T005 | pending | kernel 级；append vs 旧 cat 路径逐 token 等价测试先行 |
 | T014 | FR7a 连续批处理 iteration-level 重构：槽位回收/prefill 插入/**左对齐 padding**（右侧 pad 不参与 KV 写入）/RoPE 位置按各序列真实长度/**PrefixCache 与 _init_decode_compile 删除**（设计决策：不留死代码）/批量采样张量化（`[B]` 温度张量，消灭逐序列 Python 循环） | T006,T013 | pending | ~300 行调度器重写；必须保留/继承 T006 的 temperature=0 greedy 语义，验收补 greedy 确定性断言；**T005 定向新发现**：`generate_batch` 解码首步将 prompt 尾 token 重复喂入（KV 已含整个 prompt）——off-by-one 独立缺陷，重构时一并修复 |
 | T015 | FR7b api_server 接线新调度器（asyncio.to_thread/线程安全队列）+ 补齐或删除 --continuous_batching 声称 | T014 | pending | |
@@ -204,3 +204,17 @@
 - 顺手修复：srs.md FR2 期望行为「100 步冒烟」→「50 步」（与 FR2-AC1 统一，Minor 表述瑕疵）
 - 累计轮次：3（FAIL/FAIL/PASS）
 - 审查代理：sdd-gate-reviewer
+
+### 2026-10-10 T012 会话记录（FR6 MoE 向量化重写·方案 B）
+
+- 基准预检先行（防不可达阈值烧进契约）：本机 CPU @ E=4,H=688,C=256——旧实现（每 forward torch.stack 全专家权重 + Python 逐专家循环 + expand+bmm）fwd+bwd 137-406 ms/step；新 padded-bmm 参考 7.7-15 ms/step（**17.9-27.6x**），≥2x 阈值余量充足。旧路径慢的根因是 bmm 对 stride-0 expand 批次维回退到逐元素复制
+- 等价性预检：真实 Linear 尺度权重（uniform ±1/sqrt(fan_in)）下新旧实现 diff ~3.4e-8（atol=1e-5 安全）；randn(0,1) 权重会放大 float32 累加顺序差异到 1e-2 级（等价断言勿用 randn 权重）——Red 测试据此统一用 Linear 尺度权重
+- Red（12 用例，tests/test_moe_vectorized.py）：文件内自带忠实旧实现参考 `_reference_moe_forward`（stack+循环+int 截断）；pin 用例 9 个（等价/int 截断/丢集/旧 ckpt 加载/旧键保存 round-trip/dense 路径/aux/cap=0 边界）全部首跑即 PASS（现行实现即参考）；结构/静态/基准 3 个按预期 FAIL（Red）；compile 用例 Windows triton 缺失 skip。Red 报告偏离：`torch._dynamo.utils.CompileCounter` 在 2.5.1 不存在，改用 `counters["stats"]["unique_graphs"]`
+- Green（model/modern_gpt.py，仅 SwiGLU + 一处 init）：
+  - 参数：MoE 分支 `gate_w/up_w: Parameter[E,H,C]`、`down_w: Parameter[E,C,H]` 替代 3×ModuleList；init normal(0,0.02) 对齐 `_init_weights` 对 Linear 的处理
+  - 兼容 hook：`_register_load_state_dict_pre_hook` 旧键 dim=0 拼接→gate_w；`register_state_dict_post_hook` 反向拆分（新 ckpt 落盘仍是旧键格式，B1 双向兼容成立——save 永远写旧键，load 永远读旧键）
+  - forward：stable sort 分桶（原 token 序保持）+ 段内 slots<cap 截断（与旧 `idx[:capacity]` 逐位一致，已独立验证 keep 集合相等）+ padded `[E,cap,C]` 一次 index_put_ + 三次静态形状 bmm + gather 回写 ×router_probs；cap 用 `int()` 截断（design 原文 ceil 笔误，以「与现行对齐」为准，测试锁定防 ceil 漂移）；cap=0 时空张量路径自然成立
+  - 顺手修复：ModernGPT 深度缩放 init 条件补 `endswith("down_w")`——否则 MoE down 投影丢失 GPT-2 深度缩放（旧参数名 `down_proj.{e}.weight` endswith 匹配、新名不匹配的潜伏 init 语义变化）
+- 回归：新文件 11 PASS + 1 SKIP（compile）；全量 **481 passed / 3 skipped**（基线 470p/2s + 11 新 pass + 1 新 skip），90s 零回归
+- 基准记录（FR6-AC2，写入实验记录）：E=4, H=688, C=256, N=512, fwd+bwd, CPU 中位/10 次——旧 137.13 ms/step → 新 7.65 ms/step，**17.92x**（≥2x 达标）；N=1024 时 27.56x
+- 遗留：compile recompile 计数用例在无 triton 平台 skip，GPU 冒烟时验证（迁移演练覆盖项）
