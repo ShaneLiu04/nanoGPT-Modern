@@ -249,12 +249,15 @@ class ContinuousBatchScheduler:
             if len(keep) != len(self._slots):
                 if keep != list(range(len(keep))):
                     idx = torch.tensor(keep, dtype=torch.long, device=self.device)
+                    k_buf = self._k_buf
+                    v_buf = self._v_buf
+                    assert k_buf is not None and v_buf is not None
                     for li in range(self._n_layer):
                         # Fancy indexing copies, so writing the prefix
                         # back in place is aliasing-safe.  The buffer keeps
                         # its full batch_size row count.
-                        self._k_buf[li][: len(keep)] = self._k_buf[li][idx]
-                        self._v_buf[li][: len(keep)] = self._v_buf[li][idx]
+                        k_buf[li][: len(keep)] = k_buf[li][idx]
+                        v_buf[li][: len(keep)] = v_buf[li][idx]
                 self._slots = [self._slots[i] for i in keep]
 
             # 2. Back-fill empty slots at the iteration boundary (new
@@ -352,7 +355,10 @@ class ContinuousBatchScheduler:
         attn = torch.zeros((P, max_pl), dtype=torch.bool, device=self.device)
         for j, s in enumerate(slots):
             pl = s.prompt_len
-            input_ids[j, :pl] = s.request.prompt_ids[0, :pl].to(self.device)
+            pids = s.request.prompt_ids
+            # __post_init__ normalises prompt_ids to a [1, T] tensor
+            assert isinstance(pids, torch.Tensor)
+            input_ids[j, :pl] = pids[0, :pl].to(self.device)
             attn[j, :pl] = True
 
         with torch.no_grad():
@@ -361,16 +367,15 @@ class ContinuousBatchScheduler:
             )
 
         # Write only each row's real prefix: pad positions never enter KV.
+        k_buf = self._k_buf
+        v_buf = self._v_buf
+        assert k_buf is not None and v_buf is not None
         for li in range(self._n_layer):
             k_new, v_new = raw_kvs[li]
             for j, i in enumerate(rows):
                 pl = slots[j].prompt_len
-                self._k_buf[li][i, :, :pl] = k_new[j, :, :pl].to(
-                    self._k_buf[li].dtype
-                )
-                self._v_buf[li][i, :, :pl] = v_new[j, :, :pl].to(
-                    self._v_buf[li].dtype
-                )
+                k_buf[li][i, :, :pl] = k_new[j, :, :pl].to(k_buf[li].dtype)
+                v_buf[li][i, :, :pl] = v_new[j, :, :pl].to(v_buf[li].dtype)
 
         for i in rows:
             s = self._slots[i]
@@ -408,10 +413,13 @@ class ContinuousBatchScheduler:
             < lens_t.unsqueeze(1)
         )  # [D, max_len] bool: True at each row's real prefix
 
+        k_buf = self._k_buf
+        v_buf = self._v_buf
+        assert k_buf is not None and v_buf is not None
         past = [
             (
-                self._k_buf[li][:D, :, :max_len, :],
-                self._v_buf[li][:D, :, :max_len, :],
+                k_buf[li][:D, :, :max_len, :],
+                v_buf[li][:D, :, :max_len, :],
             )
             for li in range(self._n_layer)
         ]
@@ -429,10 +437,10 @@ class ContinuousBatchScheduler:
         # vectorized indexed assignment per layer (no per-row loop).
         for li in range(self._n_layer):
             k_new, v_new = new_kvs[li]  # [D, n_kv_head, 1, head_dim]
-            self._k_buf[li][
+            k_buf[li][
                 torch.arange(D, device=self.device), :, lens_t
             ] = k_new[:, :, 0]
-            self._v_buf[li][
+            v_buf[li][
                 torch.arange(D, device=self.device), :, lens_t
             ] = v_new[:, :, 0]
         for i in rows:

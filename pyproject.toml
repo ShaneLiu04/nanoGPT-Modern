@@ -89,7 +89,13 @@ module = [
 ]
 disable_error_code = ["union-attr", "operator", "arg-type", "misc", "return-value", "assignment"]
 [tool.black]
+line-length = 100
 target-version = ["py39"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+select = ["E", "F", "I", "B", "UP"]
 
 [tool.setuptools.packages.find]
 where = ["."]
