@@ -31,7 +31,7 @@
 | T014 | FR7a 连续批处理 iteration-level 重构：槽位回收/prefill 插入/**左对齐 padding**（右侧 pad 不参与 KV 写入）/RoPE 位置按各序列真实长度/**PrefixCache 与 _init_decode_compile 删除**（设计决策：不留死代码）/批量采样张量化（`[B]` 温度张量，消灭逐序列 Python 循环） | T006,T013 | passing | ~300 行调度器重写；必须保留/继承 T006 的 temperature=0 greedy 语义，验收补 greedy 确定性断言；**T005 定向新发现**：`generate_batch` 解码首步将 prompt 尾 token 重复喂入（KV 已含整个 prompt）——off-by-one 独立缺陷，重构时一并修复 |
 | T015 | FR7b api_server 接线新调度器（asyncio.to_thread/线程安全队列）+ 补齐或删除 --continuous_batching 声称 | T014 | passing | |
 | T016 | FR10 根目录收编：导出 4 脚本 → tools/、profile 2 脚本 → tools/、编排脚本处置（[project.scripts] 与测试路径同步）、删除死文件（run_inference_ablation.py/generate_experiment_log.py/logs_prepare*.txt） | - | passing | 删除前全库引用检查 |
-| T017 | FR11a training/args.py 公共 flag 提取（23 个重复 flag，~350 行净删） | - | pending | 可与 A 阶段并行提前 |
+| T017 | FR11a training/args.py 公共 flag 提取（23 个重复 flag，~350 行净删） | - | passing | 可与 A 阶段并行提前 |
 | T018 | FR11b load_model 统一到 load_model_from_checkpoint（7 份拷贝收敛）+ tests/conftest.py tiny fixture + test_bugfixes.py 拆分 | T017 | pending | |
 | T019 | FR12 接口统一（breaking）：BaselineGPT 3-tuple 返回、no-op 参数显式化、调用点全量同步、反射 hack 清理、CHANGELOG | T013,T014 | pending | v0.5.0 大版本 |
 | T020 | FR13 lint/测试基建：black line-length=100 统一 + ruff 配置 + mypy 版本对齐 + test_kv_cache_benchmark 相对断言/perf marker + 文档数字刷新 | T017,T018 | pending | 一次性格式化对齐 |
@@ -326,3 +326,31 @@
 - 白名单「恰等」断言（== 而非 ⊆）：比 srs AC3「仅剩入口必要性文件」更强，防未来脚本再散落根目录
 - export 脚本 bootstrap 用 `_os`/`_sys` 别名避免与脚本内既有 `import os` 语义纠缠；插入点统一锚定 `from model.` 首次出现（各脚本 import 区格式不一，docstring 内 "import" 文本会干扰按行锚定）
 - test_gguf_export.py subprocess 路径改 "tools/export/export_gguf.py"（保持 cwd=repo-root 既有假设，最小改动）
+
+### 2026-10-10 T017 会话记录（FR11a training/args.py 公共 flag 提取）
+
+**调研（explore 子代理全量对比 5 训练脚本 argparse）：**
+- 5 个非 hydra 训练脚本共 185 个 add_argument；≥2 脚本出现的 flag 共 33 个：**20 个定义完全一致**（其中 13 个连 help 字节级一致）+ 13 个 default/required 有差异（out_dir/batch_size/learning_rate/min_lr/weight_decay/eval_interval 等脚本特定 default，**有意差异须保留**）
+- 5 个 `*_hydra.py` 变体无 argparse（@hydra.main + config/hydra YAML）→ 无需迁移，符合 design「改后 grep 复核无遗漏」
+- `--ckpt_interval` 现状仅 train_pretrain 有（FR3 交付），design 要求 5 脚本统一注入 → Red 核心断言
+- **关键坑**：`--init_from` 在 4 脚本 required=True 但 train_pretrain 没有 → 不能进公共组（注入 required flag 会破坏 PT CLI）；GR 系 5 flag（group_size/num_steps/max_prompt_len/max_response_len/eps）注入 PT/SFT/DP 无害（BaseTrainer 全 getattr 兜底消费）
+- 现有回归守卫：test_monitoring_integration（5 脚本 no_metrics/no_monitoring）、test_ablation_switches（pretrain 4 消融 flag）、test_hydra_config（pretrain ~40 字段列举式快照——列举式故新增 flag 不破坏）
+
+**Red（39 用例 test_common_args.py：22 Red + 17 pin）：**
+- args.py 模块存在/纯组装（inspect 源码无 parse_args）/20 flag default+type+choices+store_true；5 脚本参数化暴露公共 flag；ckpt_interval 5 脚本注入（4 Red）；--help 块提取器（正则 `^\s+-{1,2}\w` 分块）断言公共 flag help 跨 5 脚本一致（help 差异 + 缺 flag 双 Red）；脚本特定 default/专属 flag pin（17 pin 锁定现状正确行为）；去重静态断言：公共 flag 零重声明（9 flag ban 列表）+ 5 脚本 add_argument 总数 ≤115（现状 185）+ 5 脚本均调用 add_common_trainer_args
+- 修正一处设计缺陷：跨模块 help 一致比较原依赖参数化测试执行顺序（全局 mod_blocks 收集）→ 改为单一非参数化测试内循环收集再逐对比较
+
+**Green：**
+- 新建 `training/args.py`（132 行）：`add_common_trainer_args(parser)` 收敛 **20 个公共 flag**（19 个「≥2 脚本定义完全一致」+ ckpt_interval 统一注入），统一 help 文本（取现有最详细版，无 help 的补简短描述），LR_SCHEDULE/ATTN_BACKEND choices 常量共享
+- 5 脚本改造（括号配对扫描器脚本）：删除 79 个重复 add_argument（PT 15/SFT 14/GR 19/DP 14/IG 17），`parser = argparse.ArgumentParser()` 后插 `add_common_trainer_args(parser)`，import 插在 trainer_base import 旁
+- 净变化：training/ **-258/+194**（5 脚本 -268、args.py +132）≈ 净删 74 行 + 重复面收敛；设计估「~350 行净删」口径含 T018 load_model 7 份拷贝与 hydra 变体（后者实测无 argparse），实际重复定义 79 处 × 平均 2-3 行 ≈ 200 行消除
+- design「23 个公共 flag」为估算数（只点名 11 个）；实测口径 20 个（init_from 因 PT required 语义剔除，差异 default 的 13 个保留脚本特定）——会话记录即口径说明
+
+**验证：**
+- 目标 39/39 全绿；全量 **569 passed / 3 skipped**（~101s；530 基线 + 39 新增）零破坏——hydra 等价快照/monitoring CLI/消融 flag 守卫全过
+- FR11-AC1（测试等量通过）：569 ≥ 338 基线 + 新增全过 ✓
+
+**关键决策：**
+- 公共组以「定义完全一致」为入选标准，default 有差异的 13 个留脚本（AC「公共 flag 默认值/类型/--help 快照一致」反向要求公共组 default 必须相同）
+- ckpt_interval 语义沿用 B2 边界（0 = 跟随 eval_interval），trainer_base 消费端已有 getattr 兜底，新注入脚本零接线成本
+- iterative_grpo main() 不调 set_attention_backend（4 个 hydra 变体有）→ 注入 attn_backend flag 后暂不消费，无害；行为修复归 FR8/T019 范畴，记遗留
