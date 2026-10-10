@@ -1,4 +1,5 @@
-"""Tests for FR4 (AR-v0.4.0-experiments / T005): run_component_ablations orchestration. Red phase: run_component_ablations.py does not exist yet.
+"""Tests for FR4 (AR-v0.4.0-experiments / T005): run_component_ablations
+orchestration. Red phase: run_component_ablations.py does not exist yet.
 
 Contract under test (repo-root ``run_component_ablations.py``, sibling of
 ``run_ablations.py``):
@@ -41,7 +42,6 @@ import pytest
 
 import run_component_ablations as rca
 
-
 # ---------------------------------------------------------------------------
 # Expected fixed matrix (design.md §6.1 / srs FR4)
 # ---------------------------------------------------------------------------
@@ -60,12 +60,20 @@ EXPECTED_GROUPS = {
     "baseline": ["--model", "baseline"],
     "modern-full": ["--model", "modern", "--n_kv_head", "2"],
     "no-rope": [
-        "--model", "modern", "--n_kv_head", "2",
-        "--position_encoding", "learned",
+        "--model",
+        "modern",
+        "--n_kv_head",
+        "2",
+        "--position_encoding",
+        "learned",
     ],
     "no-swiglu": [
-        "--model", "modern", "--n_kv_head", "2",
-        "--ffn_variant", "gelu",
+        "--model",
+        "modern",
+        "--n_kv_head",
+        "2",
+        "--ffn_variant",
+        "gelu",
     ],
     "mha": ["--model", "modern", "--n_kv_head", "8"],
     "moe": ["--model", "modern", "--n_kv_head", "2", "--num_experts", "4"],
@@ -89,6 +97,7 @@ ROW_KEYS = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _write_tiny_config(tmp_path):
     """Write a tiny flat YAML config (all keys count_group_params needs).
@@ -126,9 +135,7 @@ def _write_manifest(exp_dir, status="completed", final_metrics=None):
     manifest = {"exp_id": exp_dir.name, "status": status}
     if final_metrics is not None:
         manifest["final_metrics"] = final_metrics
-    (exp_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2), encoding="utf-8"
-    )
+    (exp_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return exp_dir
 
 
@@ -152,7 +159,7 @@ def _fake_subprocess(monkeypatch, fail_groups=(), returncode=1):
         cmd = list(cmd)
         calls.append(cmd)
         exp_id = cmd[cmd.index("--exp_id") + 1]
-        name = exp_id[len("ablation-"):]
+        name = exp_id[len("ablation-") :]
         rc = returncode if name in fail_groups else 0
         return SimpleNamespace(returncode=rc)
 
@@ -165,7 +172,7 @@ def _called_group_names(calls):
     names = []
     for cmd in calls:
         exp_id = cmd[cmd.index("--exp_id") + 1]
-        names.append(exp_id[len("ablation-"):])
+        names.append(exp_id[len("ablation-") :])
     return names
 
 
@@ -188,10 +195,8 @@ def _fake_all_groups_completed(out_root, best_by_group=None):
         _write_metrics(
             exp_dir,
             [
-                {"type": "train", "step": 10, "loss": 3.5,
-                 "tokens_per_sec": 100.0, "mem_gb": 1.0},
-                {"type": "train", "step": 20, "loss": 3.4,
-                 "tokens_per_sec": 200.0, "mem_gb": 2.0},
+                {"type": "train", "step": 10, "loss": 3.5, "tokens_per_sec": 100.0, "mem_gb": 1.0},
+                {"type": "train", "step": 20, "loss": 3.4, "tokens_per_sec": 200.0, "mem_gb": 2.0},
                 {"type": "eval", "step": 20, "val_loss": best},
             ],
         )
@@ -201,31 +206,32 @@ def _fake_all_groups_completed(out_root, best_by_group=None):
 # 1. Fixed ablation matrix
 # ---------------------------------------------------------------------------
 
+
 def test_ablation_matrix_has_seven_groups_in_fixed_order():
     assert rca.GROUP_ORDER == EXPECTED_ORDER
     assert len(rca.ABLATION_GROUPS) == 7
     assert list(rca.ABLATION_GROUPS.keys()) == EXPECTED_ORDER
     for name, flags in EXPECTED_GROUPS.items():
-        assert rca.ABLATION_GROUPS[name] == flags, (
-            f"group {name!r} flags mismatch"
-        )
+        assert rca.ABLATION_GROUPS[name] == flags, f"group {name!r} flags mismatch"
 
 
 def test_ablation_matrix_no_rope_and_variants_flags():
     # Spot-check the semantically important flag combos.
     assert "--position_encoding" in rca.ABLATION_GROUPS["no-rope"]
-    assert rca.ABLATION_GROUPS["no-rope"][
-        rca.ABLATION_GROUPS["no-rope"].index("--position_encoding") + 1
-    ] == "learned"
-    assert rca.ABLATION_GROUPS["no-swiglu"][
-        rca.ABLATION_GROUPS["no-swiglu"].index("--ffn_variant") + 1
-    ] == "gelu"
-    assert rca.ABLATION_GROUPS["mha"][
-        rca.ABLATION_GROUPS["mha"].index("--n_kv_head") + 1
-    ] == "8"
-    assert rca.ABLATION_GROUPS["moe"][
-        rca.ABLATION_GROUPS["moe"].index("--num_experts") + 1
-    ] == "4"
+    assert (
+        rca.ABLATION_GROUPS["no-rope"][
+            rca.ABLATION_GROUPS["no-rope"].index("--position_encoding") + 1
+        ]
+        == "learned"
+    )
+    assert (
+        rca.ABLATION_GROUPS["no-swiglu"][
+            rca.ABLATION_GROUPS["no-swiglu"].index("--ffn_variant") + 1
+        ]
+        == "gelu"
+    )
+    assert rca.ABLATION_GROUPS["mha"][rca.ABLATION_GROUPS["mha"].index("--n_kv_head") + 1] == "8"
+    assert rca.ABLATION_GROUPS["moe"][rca.ABLATION_GROUPS["moe"].index("--num_experts") + 1] == "4"
     assert "--qk_norm" in rca.ABLATION_GROUPS["qk-norm"]
 
 
@@ -233,15 +239,12 @@ def test_ablation_matrix_no_rope_and_variants_flags():
 # 2. Directory helpers
 # ---------------------------------------------------------------------------
 
+
 def test_group_out_dir_and_group_exp_dir_layout():
     assert rca.group_out_dir("out", "moe") == "out/ablation-moe"
-    assert rca.group_exp_dir("out", "moe") == (
-        "out/ablation-moe/experiments/ablation-moe"
-    )
+    assert rca.group_exp_dir("out", "moe") == ("out/ablation-moe/experiments/ablation-moe")
     out_root = "some/root"
-    assert rca.group_out_dir(out_root, "no-rope") == (
-        f"{out_root}/ablation-no-rope"
-    )
+    assert rca.group_out_dir(out_root, "no-rope") == (f"{out_root}/ablation-no-rope")
     assert rca.group_exp_dir(out_root, "no-rope") == (
         f"{out_root}/ablation-no-rope/experiments/ablation-no-rope"
     )
@@ -250,6 +253,7 @@ def test_group_out_dir_and_group_exp_dir_layout():
 # ---------------------------------------------------------------------------
 # 3. get_args
 # ---------------------------------------------------------------------------
+
 
 def test_get_args_defaults():
     args = rca.get_args([])
@@ -263,14 +267,21 @@ def test_get_args_defaults():
 
 def test_get_args_explicit_overrides(tmp_path):
     cfg = _write_tiny_config(tmp_path)
-    args = rca.get_args([
-        "--stage", "train",
-        "--groups", "baseline,moe",
-        "--config", str(cfg),
-        "--max_iters", "50",
-        "--fail_fast",
-        "--out_root", str(tmp_path),
-    ])
+    args = rca.get_args(
+        [
+            "--stage",
+            "train",
+            "--groups",
+            "baseline,moe",
+            "--config",
+            str(cfg),
+            "--max_iters",
+            "50",
+            "--fail_fast",
+            "--out_root",
+            str(tmp_path),
+        ]
+    )
     assert args.stage == "train"
     assert args.groups == "baseline,moe"
     assert args.config == str(cfg)
@@ -282,6 +293,7 @@ def test_get_args_explicit_overrides(tmp_path):
 # ---------------------------------------------------------------------------
 # 4. is_group_completed
 # ---------------------------------------------------------------------------
+
 
 def test_is_group_completed_missing_dir_is_false(tmp_path):
     assert rca.is_group_completed(str(tmp_path / "does-not-exist")) is False
@@ -295,9 +307,7 @@ def test_is_group_completed_running_status_is_false(tmp_path):
 def test_is_group_completed_missing_status_key_is_false(tmp_path):
     exp_dir = tmp_path / "exp"
     exp_dir.mkdir(parents=True)
-    (exp_dir / "manifest.json").write_text(
-        json.dumps({"exp_id": "exp"}), encoding="utf-8"
-    )
+    (exp_dir / "manifest.json").write_text(json.dumps({"exp_id": "exp"}), encoding="utf-8")
     assert rca.is_group_completed(str(exp_dir)) is False
 
 
@@ -309,9 +319,7 @@ def test_is_group_completed_completed_status_is_true(tmp_path):
 def test_is_group_completed_corrupt_json_is_false(tmp_path):
     exp_dir = tmp_path / "exp"
     exp_dir.mkdir(parents=True)
-    (exp_dir / "manifest.json").write_text(
-        "{ not valid json !!", encoding="utf-8"
-    )
+    (exp_dir / "manifest.json").write_text("{ not valid json !!", encoding="utf-8")
     assert rca.is_group_completed(str(exp_dir)) is False
 
 
@@ -319,19 +327,25 @@ def test_is_group_completed_corrupt_json_is_false(tmp_path):
 # 5. build_train_command
 # ---------------------------------------------------------------------------
 
+
 def test_build_train_command_full_contract():
     expected = [
-        sys.executable, "-m", "training.train_pretrain",
-        "--config", "config/pretrain.yaml",
-        "--out_dir", "out/ablation-qk-norm",
-        "--exp_id", "ablation-qk-norm",
-        "--model", "modern",
-        "--n_kv_head", "2",
+        sys.executable,
+        "-m",
+        "training.train_pretrain",
+        "--config",
+        "config/pretrain.yaml",
+        "--out_dir",
+        "out/ablation-qk-norm",
+        "--exp_id",
+        "ablation-qk-norm",
+        "--model",
+        "modern",
+        "--n_kv_head",
+        "2",
         "--qk_norm",
     ]
-    assert rca.build_train_command("qk-norm", "config/pretrain.yaml") == (
-        expected
-    )
+    assert rca.build_train_command("qk-norm", "config/pretrain.yaml") == (expected)
 
 
 def test_build_train_command_omits_max_iters_when_none():
@@ -349,9 +363,7 @@ def test_build_train_command_appends_max_iters_when_set():
 
 def test_build_train_command_group_flags_and_dirs(tmp_path):
     out_root = str(tmp_path)
-    cmd = rca.build_train_command(
-        "no-swiglu", str(out_root) + "/c.yaml", 50, out_root=out_root
-    )
+    cmd = rca.build_train_command("no-swiglu", str(out_root) + "/c.yaml", 50, out_root=out_root)
     assert cmd[0] == sys.executable
     assert cmd[1:3] == ["-m", "training.train_pretrain"]
     assert cmd[cmd.index("--ffn_variant") + 1] == "gelu"
@@ -364,21 +376,26 @@ def test_build_train_command_group_flags_and_dirs(tmp_path):
 # 6. run_train_stage: resume / subset / failure isolation / fail_fast
 # ---------------------------------------------------------------------------
 
+
 def test_run_train_stage_skips_completed_groups(tmp_path, monkeypatch):
     """FR4 core acceptance: completed groups are skipped, others trained."""
     cfg = _write_tiny_config(tmp_path)
     pre_completed = ["baseline", "moe"]
     for name in pre_completed:
-        _write_manifest(
-            Path(rca.group_exp_dir(str(tmp_path), name)), status="completed"
-        )
+        _write_manifest(Path(rca.group_exp_dir(str(tmp_path), name)), status="completed")
 
-    args = rca.get_args([
-        "--stage", "train",
-        "--out_root", str(tmp_path),
-        "--config", str(cfg),
-        "--max_iters", "50",
-    ])
+    args = rca.get_args(
+        [
+            "--stage",
+            "train",
+            "--out_root",
+            str(tmp_path),
+            "--config",
+            str(cfg),
+            "--max_iters",
+            "50",
+        ]
+    )
     calls = _fake_subprocess(monkeypatch)
     result = rca.run_train_stage(args)
 
@@ -389,14 +406,10 @@ def test_run_train_stage_skips_completed_groups(tmp_path, monkeypatch):
     assert result["fail_fast_triggered"] is False
 
     # Execution order follows GROUP_ORDER minus the skipped groups.
-    assert _called_group_names(calls) == [
-        n for n in EXPECTED_ORDER if n not in pre_completed
-    ]
+    assert _called_group_names(calls) == [n for n in EXPECTED_ORDER if n not in pre_completed]
 
     # No command targets a skipped group's out_dir.
-    skipped_dirs = {
-        Path(rca.group_out_dir(str(tmp_path), n)) for n in pre_completed
-    }
+    skipped_dirs = {Path(rca.group_out_dir(str(tmp_path), n)) for n in pre_completed}
     for cmd in calls:
         out_val = Path(cmd[cmd.index("--out_dir") + 1])
         assert out_val not in skipped_dirs
@@ -408,13 +421,19 @@ def test_run_train_stage_skips_completed_groups(tmp_path, monkeypatch):
 
 def test_run_train_stage_groups_subset_in_group_order(tmp_path, monkeypatch):
     cfg = _write_tiny_config(tmp_path)
-    args = rca.get_args([
-        "--stage", "train",
-        "--out_root", str(tmp_path),
-        "--config", str(cfg),
-        # deliberately out-of-order subset: execution must follow GROUP_ORDER
-        "--groups", "moe,baseline",
-    ])
+    args = rca.get_args(
+        [
+            "--stage",
+            "train",
+            "--out_root",
+            str(tmp_path),
+            "--config",
+            str(cfg),
+            # deliberately out-of-order subset: execution must follow GROUP_ORDER
+            "--groups",
+            "moe,baseline",
+        ]
+    )
     calls = _fake_subprocess(monkeypatch)
     result = rca.run_train_stage(args)
 
@@ -427,14 +446,17 @@ def test_run_train_stage_groups_subset_in_group_order(tmp_path, monkeypatch):
 def test_run_train_stage_single_failure_is_isolated(tmp_path, monkeypatch):
     """A failing group is recorded but does not stop the others."""
     cfg = _write_tiny_config(tmp_path)
-    args = rca.get_args([
-        "--stage", "train",
-        "--out_root", str(tmp_path),
-        "--config", str(cfg),
-    ])
-    calls = _fake_subprocess(
-        monkeypatch, fail_groups={"modern-full"}, returncode=1
+    args = rca.get_args(
+        [
+            "--stage",
+            "train",
+            "--out_root",
+            str(tmp_path),
+            "--config",
+            str(cfg),
+        ]
     )
+    calls = _fake_subprocess(monkeypatch, fail_groups={"modern-full"}, returncode=1)
     result = rca.run_train_stage(args)
 
     assert len(result["errors"]) == 1
@@ -453,15 +475,18 @@ def test_run_train_stage_single_failure_is_isolated(tmp_path, monkeypatch):
 
 def test_run_train_stage_fail_fast_stops_after_first_failure(tmp_path, monkeypatch):
     cfg = _write_tiny_config(tmp_path)
-    args = rca.get_args([
-        "--stage", "train",
-        "--out_root", str(tmp_path),
-        "--config", str(cfg),
-        "--fail_fast",
-    ])
-    calls = _fake_subprocess(
-        monkeypatch, fail_groups={"modern-full"}, returncode=1
+    args = rca.get_args(
+        [
+            "--stage",
+            "train",
+            "--out_root",
+            str(tmp_path),
+            "--config",
+            str(cfg),
+            "--fail_fast",
+        ]
     )
+    calls = _fake_subprocess(monkeypatch, fail_groups={"modern-full"}, returncode=1)
     result = rca.run_train_stage(args)
 
     assert result["fail_fast_triggered"] is True
@@ -476,6 +501,7 @@ def test_run_train_stage_fail_fast_stops_after_first_failure(tmp_path, monkeypat
 # ---------------------------------------------------------------------------
 # 7. count_group_params
 # ---------------------------------------------------------------------------
+
 
 def test_count_group_params_matrix(tmp_path):
     cfg = _write_tiny_config(tmp_path)
@@ -522,6 +548,7 @@ def test_count_group_params_qk_norm_group(tmp_path):
 # 8. summarize_groups / write_markdown_summary
 # ---------------------------------------------------------------------------
 
+
 def test_summarize_groups_full_matrix(tmp_path):
     cfg = _write_tiny_config(tmp_path)
     best = {name: 3.0 - 0.1 * i for i, name in enumerate(EXPECTED_ORDER)}
@@ -546,9 +573,7 @@ def test_summarize_groups_full_matrix(tmp_path):
         assert row["final_val_loss"] == pytest.approx(best[name] + 0.2)
         assert row["mean_tokens_per_sec"] == pytest.approx(150.0)
         assert row["peak_mem_gb"] == pytest.approx(2.0)
-        assert row["wall_time_s"] == pytest.approx(
-            60.0 + EXPECTED_ORDER.index(name)
-        )
+        assert row["wall_time_s"] == pytest.approx(60.0 + EXPECTED_ORDER.index(name))
         assert row["params_m"] > 0
         assert row["active_params_m"] > 0
 
@@ -556,19 +581,13 @@ def test_summarize_groups_full_matrix(tmp_path):
     assert rows["baseline"]["delta_vs_baseline_pct"] is None
     for name in EXPECTED_ORDER[1:]:
         expected_delta = (best[name] - base_best) / base_best * 100
-        assert rows[name]["delta_vs_baseline_pct"] == pytest.approx(
-            expected_delta
-        )
+        assert rows[name]["delta_vs_baseline_pct"] == pytest.approx(expected_delta)
 
     # params_m matches count_group_params (total/1e6, rounded to 3).
     p_base = rca.count_group_params("baseline", str(cfg))
-    assert rows["baseline"]["params_m"] == pytest.approx(
-        round(p_base["total_params"] / 1e6, 3)
-    )
+    assert rows["baseline"]["params_m"] == pytest.approx(round(p_base["total_params"] / 1e6, 3))
     # baseline and dense modern: active == total.
-    assert rows["modern-full"]["active_params_m"] == pytest.approx(
-        rows["modern-full"]["params_m"]
-    )
+    assert rows["modern-full"]["active_params_m"] == pytest.approx(rows["modern-full"]["params_m"])
     # moe: active (dense equivalent) < total (4 experts).
     assert rows["moe"]["active_params_m"] < rows["moe"]["params_m"]
 
@@ -589,9 +608,7 @@ def test_summarize_groups_full_matrix(tmp_path):
     # header + separator + 7 data rows
     assert len(table_lines) >= 9
     for name in EXPECTED_ORDER:
-        assert any(name in ln for ln in table_lines), (
-            f"markdown missing row for group {name!r}"
-        )
+        assert any(name in ln for ln in table_lines), f"markdown missing row for group {name!r}"
 
 
 def test_summarize_groups_missing_dirs_degrade_to_none(tmp_path):
@@ -608,10 +625,13 @@ def test_summarize_groups_missing_dirs_degrade_to_none(tmp_path):
             "wall_time_s": 60.0,
         },
     )
-    _write_metrics(exp_dir, [
-        {"type": "train", "step": 10, "tokens_per_sec": 100.0, "mem_gb": 1.0},
-        {"type": "eval", "step": 10, "val_loss": best},
-    ])
+    _write_metrics(
+        exp_dir,
+        [
+            {"type": "train", "step": 10, "tokens_per_sec": 100.0, "mem_gb": 1.0},
+            {"type": "eval", "step": 10, "val_loss": best},
+        ],
+    )
 
     summary = rca.summarize_groups(EXPECTED_ORDER, str(cfg), str(tmp_path))
 
@@ -695,9 +715,7 @@ def test_write_markdown_summary_is_pure_and_complete():
 
 
 def test_write_markdown_summary_includes_errors_section():
-    summary = _make_summary(
-        errors=[{"group": "moe", "returncode": 1, "command": ["python", "-m"]}]
-    )
+    summary = _make_summary(errors=[{"group": "moe", "returncode": 1, "command": ["python", "-m"]}])
     md = rca.write_markdown_summary(summary)
     low = md.lower()
     assert "error" in low
@@ -715,20 +733,25 @@ def test_write_markdown_summary_does_not_mutate_input():
 # 9. main smoke tests
 # ---------------------------------------------------------------------------
 
+
 def test_main_stage_train_returns_zero(tmp_path, monkeypatch):
     cfg = _write_tiny_config(tmp_path)
     for name in ("baseline", "moe"):
-        _write_manifest(
-            Path(rca.group_exp_dir(str(tmp_path), name)), status="completed"
-        )
+        _write_manifest(Path(rca.group_exp_dir(str(tmp_path), name)), status="completed")
     calls = _fake_subprocess(monkeypatch)
 
-    rc = rca.main([
-        "--stage", "train",
-        "--out_root", str(tmp_path),
-        "--config", str(cfg),
-        "--max_iters", "50",
-    ])
+    rc = rca.main(
+        [
+            "--stage",
+            "train",
+            "--out_root",
+            str(tmp_path),
+            "--config",
+            str(cfg),
+            "--max_iters",
+            "50",
+        ]
+    )
 
     assert rc == 0
     # 2 of 7 groups pre-completed -> only 5 trainings launched.
@@ -739,11 +762,16 @@ def test_main_stage_train_error_returns_one(tmp_path, monkeypatch):
     cfg = _write_tiny_config(tmp_path)
     _fake_subprocess(monkeypatch, fail_groups={"qk-norm"}, returncode=1)
 
-    rc = rca.main([
-        "--stage", "train",
-        "--out_root", str(tmp_path),
-        "--config", str(cfg),
-    ])
+    rc = rca.main(
+        [
+            "--stage",
+            "train",
+            "--out_root",
+            str(tmp_path),
+            "--config",
+            str(cfg),
+        ]
+    )
 
     assert rc == 1
 
@@ -752,11 +780,16 @@ def test_main_stage_summarize_returns_zero_and_writes_artifacts(tmp_path):
     cfg = _write_tiny_config(tmp_path)
     _fake_all_groups_completed(tmp_path)
 
-    rc = rca.main([
-        "--stage", "summarize",
-        "--out_root", str(tmp_path),
-        "--config", str(cfg),
-    ])
+    rc = rca.main(
+        [
+            "--stage",
+            "summarize",
+            "--out_root",
+            str(tmp_path),
+            "--config",
+            str(cfg),
+        ]
+    )
 
     assert rc == 0
     assert (Path(tmp_path) / "experiments" / "ablation-summary.json").is_file()
@@ -770,11 +803,16 @@ def test_main_stage_all_orchestrates_train_then_summarize(tmp_path, monkeypatch)
     _fake_all_groups_completed(tmp_path)
     calls = _fake_subprocess(monkeypatch)
 
-    rc = rca.main([
-        "--stage", "all",
-        "--out_root", str(tmp_path),
-        "--config", str(cfg),
-    ])
+    rc = rca.main(
+        [
+            "--stage",
+            "all",
+            "--out_root",
+            str(tmp_path),
+            "--config",
+            str(cfg),
+        ]
+    )
 
     assert rc == 0
     assert len(calls) == 0

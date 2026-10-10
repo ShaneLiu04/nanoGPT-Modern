@@ -94,7 +94,7 @@ def _get_args(modname, monkeypatch, argv):
 
 def test_training_args_module_exposes_add_common_trainer_args():
     args_mod = importlib.import_module("training.args")
-    assert callable(getattr(args_mod, "add_common_trainer_args"))
+    assert callable(args_mod.add_common_trainer_args)
 
 
 def test_add_common_trainer_args_is_pure_assembly():
@@ -125,7 +125,7 @@ def test_add_common_trainer_args_types_and_choices():
 
     argv = []
     for flag, value, _typ in TYPED_FLAGS:
-        argv.extend(["--%s" % flag, value])
+        argv.extend([f"--{flag}", value])
     ns = parser.parse_args(argv)
     for flag, value, typ in TYPED_FLAGS:
         got = getattr(ns, flag)
@@ -195,9 +195,7 @@ def test_common_help_text_lists_all_common_flags(modname, monkeypatch, capsys):
 
 def test_common_help_blocks_identical_across_trainers(monkeypatch, capsys):
     """The --help block of every common flag must match across scripts."""
-    all_blocks = {
-        m: _collect_help_blocks(m, monkeypatch, capsys) for m in TRAINER_MODULES
-    }
+    all_blocks = {m: _collect_help_blocks(m, monkeypatch, capsys) for m in TRAINER_MODULES}
     base = all_blocks[TRAINER_MODULES[0]]
     for flag in COMMON_FLAGS:
         for modname in TRAINER_MODULES[1:]:
@@ -243,9 +241,7 @@ def test_script_specific_defaults_preserved(monkeypatch):
     assert pt.eval_interval == 1000
     assert pt.model == "modern"
 
-    sft = _get_args(
-        "training.train_sft", monkeypatch, ["--init_from", "dummy.pt"]
-    )
+    sft = _get_args("training.train_sft", monkeypatch, ["--init_from", "dummy.pt"])
     assert sft.batch_size == 8
     assert sft.out_dir == "out/sft"
     assert sft.learning_rate == pytest.approx(3e-4)
@@ -331,7 +327,7 @@ def test_common_flags_not_redeclared_in_scripts():
     ]:
         src = (REPO_ROOT / "training" / name).read_text(encoding="utf-8")
         for flag in ban:
-            assert ('"%s"' % flag) not in src, (name, flag)
+            assert (f'"{flag}"') not in src, (name, flag)
 
 
 def test_total_add_argument_count_dropped():

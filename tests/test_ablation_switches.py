@@ -6,9 +6,9 @@ import sys
 
 import pytest
 import torch
+from helpers import tiny_modern_config
 
 from model.modern_gpt import ModernGPT, ModernGPTConfig
-from helpers import tiny_modern_config
 
 
 def _tiny_config(**overrides):
@@ -73,9 +73,7 @@ def test_config_learned_with_rope_scaling_raises_valueerror():
     cfg_rope = tiny_modern_config(n_embd=64, rope_scaling=scaling)
     assert cfg_rope.rope_scaling == scaling
     with pytest.raises(ValueError):
-        tiny_modern_config(
-            n_embd=64, position_encoding="learned", rope_scaling=scaling
-        )
+        tiny_modern_config(n_embd=64, position_encoding="learned", rope_scaling=scaling)
 
 
 def test_config_to_dict_includes_ablation_fields():
@@ -198,12 +196,8 @@ def test_learned_pe_context_exceeds_block_size_raises_valueerror():
     model_rope = ModernGPT(cfg_rope)
     model_rope.eval()
     with torch.no_grad():
-        _, _, raw_kvs_rope = model_rope(
-            idx_prefill, use_cache=True, start_pos=0
-        )
-        logits, _, _ = model_rope(
-            idx_next, past_kvs=raw_kvs_rope, use_cache=True, start_pos=30
-        )
+        _, _, raw_kvs_rope = model_rope(idx_prefill, use_cache=True, start_pos=0)
+        logits, _, _ = model_rope(idx_next, past_kvs=raw_kvs_rope, use_cache=True, start_pos=30)
     assert logits.shape == (1, 3, cfg_rope.vocab_size)
 
 

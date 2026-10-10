@@ -95,7 +95,17 @@ target-version = ["py39"]
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests conditionally import heavy/optional modules after availability or
+# sys.path setup, which trips module-import-not-at-top-of-file.
+"tests/*" = ["E402"]
+# BaseTrainer uses intentionally-empty optional hooks (subclasses override
+# only what they need); empty-method-without-abstract-decorator is by design.
+"training/trainer_base.py" = ["B027"]
 
 [tool.setuptools.packages.find]
 where = ["."]

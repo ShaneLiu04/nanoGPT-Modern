@@ -13,7 +13,7 @@ The total reward is the sum of the three components and lies in ``[0.0, 2.0]``.
 import math
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Optional
 
 # Regex for <answer>...</answer> blocks (non-greedy, dotall).
 _ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
@@ -171,7 +171,7 @@ def _accuracy_score(pred: Optional[float], ref: Optional[float]) -> float:
     return 0.0
 
 
-def compute_reward(response: str, reference: str) -> Tuple[float, float, float, float]:
+def compute_reward(response: str, reference: str) -> tuple[float, float, float, float]:
     """Compute fine-grained reward for a single response.
 
     Parameters
@@ -204,8 +204,8 @@ def compute_reward(response: str, reference: str) -> Tuple[float, float, float, 
 
 
 def compute_reward_batch(
-    responses: List[str], references: List[str]
-) -> Tuple[List[float], List[float], List[float], List[float]]:
+    responses: list[str], references: list[str]
+) -> tuple[list[float], list[float], list[float], list[float]]:
     """Batch version of :func:`compute_reward`.
 
     Returns

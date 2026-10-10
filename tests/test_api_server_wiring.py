@@ -81,11 +81,11 @@ httpx = pytest.importorskip("httpx")
 
 import torch
 from fastapi.testclient import TestClient
+from helpers import tiny_modern_config
 
 import api_server
 import inference.continuous_batching as cb
-from model.modern_gpt import ModernGPT, ModernGPTConfig
-from helpers import tiny_modern_config
+from model.modern_gpt import ModernGPT
 
 MAX_TOKENS = 8
 SEED = 1234
@@ -140,9 +140,9 @@ def _assert_completion_ok(resp, max_tokens=MAX_TOKENS):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     text = body["choices"][0]["text"]
-    assert isinstance(text, str) and text, (
-        f"choices[0].text must be a non-empty string, got {text!r}"
-    )
+    assert (
+        isinstance(text, str) and text
+    ), f"choices[0].text must be a non-empty string, got {text!r}"
     usage = body["usage"]
     assert usage["completion_tokens"] == max_tokens, usage
     assert usage["total_tokens"] == usage["prompt_tokens"] + max_tokens, usage
@@ -297,9 +297,9 @@ def test_flag_and_tothread_structure():
         "api_server.get_args() must define the --continuous_batching flag "
         "(the module docstring already claims it exists)"
     )
-    assert "--batch_size" in getargs_src, (
-        "api_server.get_args() must define --batch_size (int, default 4)"
-    )
+    assert (
+        "--batch_size" in getargs_src
+    ), "api_server.get_args() must define --batch_size (int, default 4)"
     module_src = inspect.getsource(api_server)
     assert "asyncio.to_thread" in module_src, (
         "api_server must run blocking generation inside asyncio.to_thread "
@@ -349,9 +349,9 @@ def test_chat_completions_both_modes(use_cb, server, monkeypatch):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     content = body["choices"][0]["message"]["content"]
-    assert isinstance(content, str) and content, (
-        f"choices[0].message.content must be non-empty, got {content!r}"
-    )
+    assert (
+        isinstance(content, str) and content
+    ), f"choices[0].message.content must be non-empty, got {content!r}"
     usage = body["usage"]
     assert usage["completion_tokens"] == MAX_TOKENS, usage
     assert body["choices"][0]["finish_reason"] in VALID_FINISH_REASONS, body
@@ -368,9 +368,7 @@ def test_chat_completions_both_modes(use_cb, server, monkeypatch):
 def test_concurrent_cb_mode(cb_stub):
     """CB on: 4 concurrent requests all complete with correct usage and
     each is dispatched through cb_state."""
-    responses = _gather_posts(
-        "/v1/completions", [_completion_body(p) for p in PROMPTS]
-    )
+    responses = _gather_posts("/v1/completions", [_completion_body(p) for p in PROMPTS])
     assert len(responses) == len(PROMPTS)
     for resp in responses:
         _assert_completion_ok(resp)
@@ -386,9 +384,7 @@ def test_concurrent_cb_mode(cb_stub):
 def test_concurrent_off_mode(server):
     """CB off: 4 concurrent requests all complete (generation must not
     block the event loop once moved into asyncio.to_thread)."""
-    responses = _gather_posts(
-        "/v1/completions", [_completion_body(p) for p in PROMPTS]
-    )
+    responses = _gather_posts("/v1/completions", [_completion_body(p) for p in PROMPTS])
     assert len(responses) == len(PROMPTS)
     for resp in responses:
         _assert_completion_ok(resp)
@@ -409,13 +405,11 @@ def test_health_and_503(server, monkeypatch):
     monkeypatch.setattr(api_server, "cb_state", None, raising=False)
     resp = client.post("/v1/completions", json=_completion_body("hello world"))
     assert resp.status_code == 503, (
-        f"model not loaded -> /v1/completions must return 503, "
-        f"got {resp.status_code}"
+        f"model not loaded -> /v1/completions must return 503, " f"got {resp.status_code}"
     )
     resp = client.post("/v1/chat/completions", json=_chat_body())
     assert resp.status_code == 503, (
-        f"model not loaded -> /v1/chat/completions must return 503, "
-        f"got {resp.status_code}"
+        f"model not loaded -> /v1/chat/completions must return 503, " f"got {resp.status_code}"
     )
 
 

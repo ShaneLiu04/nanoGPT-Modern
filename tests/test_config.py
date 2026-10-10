@@ -7,14 +7,13 @@ from pathlib import Path
 
 import pytest
 
-
 from utils.config import (
-    load_yaml_config,
-    parse_args_with_config,
     NestedNamespace,
     flatten,
-    unflatten,
+    load_yaml_config,
+    parse_args_with_config,
     to_dict,
+    unflatten,
     validate_keys,
 )
 
@@ -49,9 +48,7 @@ def test_parse_args_with_config_flat_yaml_and_cli_override():
         parser.add_argument("--batch_size", type=int, default=1)
         parser.add_argument("--learning_rate", type=float, default=1e-5)
 
-        args = parse_args_with_config(
-            parser, ["--config", str(path), "--batch_size", "16"]
-        )
+        args = parse_args_with_config(parser, ["--config", str(path), "--batch_size", "16"])
         assert args.batch_size == 16
         assert args.learning_rate == 0.001
 
@@ -59,9 +56,7 @@ def test_parse_args_with_config_flat_yaml_and_cli_override():
 def test_parse_args_with_config_nested_yaml():
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "cfg.yaml"
-        path.write_text(
-            "optimizer:\n  lr: 0.01\n  beta: 0.9\nseed: 7\n", encoding="utf-8"
-        )
+        path.write_text("optimizer:\n  lr: 0.01\n  beta: 0.9\nseed: 7\n", encoding="utf-8")
 
         parser = argparse.ArgumentParser()
         parser.add_argument("--seed", type=int, default=0)
@@ -76,9 +71,7 @@ def test_parse_args_with_config_nested_yaml():
 def test_parse_args_with_config_nested_cli_override():
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "cfg.yaml"
-        path.write_text(
-            "optimizer:\n  lr: 0.01\n  beta: 0.9\nseed: 7\n", encoding="utf-8"
-        )
+        path.write_text("optimizer:\n  lr: 0.01\n  beta: 0.9\nseed: 7\n", encoding="utf-8")
 
         parser = argparse.ArgumentParser()
         parser.add_argument("--seed", type=int, default=0)

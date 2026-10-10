@@ -2,11 +2,10 @@
 
 import pytest
 
-
 from model.attention_utils import (
-    set_attention_backend,
-    get_attention_backend_info,
     VALID_BACKENDS,
+    get_attention_backend_info,
+    set_attention_backend,
 )
 
 

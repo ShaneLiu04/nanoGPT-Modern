@@ -24,7 +24,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import torch
 
@@ -39,31 +39,37 @@ MANIFEST_FILENAME = "manifest.json"
 
 # Fixed 7-group component ablation matrix (design.md §6.1 / srs FR4).
 # Insertion order == execution order.
-ABLATION_GROUPS: Dict[str, List[str]] = {
+ABLATION_GROUPS: dict[str, list[str]] = {
     "baseline": ["--model", "baseline"],
     "modern-full": ["--model", "modern", "--n_kv_head", "2"],
     "no-rope": [
-        "--model", "modern", "--n_kv_head", "2",
-        "--position_encoding", "learned",
+        "--model",
+        "modern",
+        "--n_kv_head",
+        "2",
+        "--position_encoding",
+        "learned",
     ],
     "no-swiglu": [
-        "--model", "modern", "--n_kv_head", "2",
-        "--ffn_variant", "gelu",
+        "--model",
+        "modern",
+        "--n_kv_head",
+        "2",
+        "--ffn_variant",
+        "gelu",
     ],
     "mha": ["--model", "modern", "--n_kv_head", "8"],
     "moe": ["--model", "modern", "--n_kv_head", "2", "--num_experts", "4"],
     "qk-norm": ["--model", "modern", "--n_kv_head", "2", "--qk_norm"],
 }
-GROUP_ORDER: List[str] = list(ABLATION_GROUPS.keys())
+GROUP_ORDER: list[str] = list(ABLATION_GROUPS.keys())
 
 _INT_FLAG_KEYS = {"n_kv_head", "num_experts"}
 _BOOL_FLAGS = {"qk_norm"}
 
 
-def get_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run the fixed 7-group component ablation matrix."
-    )
+def get_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the fixed 7-group component ablation matrix.")
     parser.add_argument(
         "--stage",
         choices=["train", "summarize", "all"],
@@ -101,16 +107,14 @@ def get_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def select_groups(groups_arg: str) -> List[str]:
+def select_groups(groups_arg: str) -> list[str]:
     """Expand ``--groups`` ('all' or comma list) into ordered group names."""
     if groups_arg in (None, "", "all"):
         return list(GROUP_ORDER)
     wanted = [g.strip() for g in groups_arg.split(",") if g.strip()]
     unknown = [g for g in wanted if g not in ABLATION_GROUPS]
     if unknown:
-        raise ValueError(
-            f"Unknown group(s) {unknown}; valid groups: {GROUP_ORDER}"
-        )
+        raise ValueError(f"Unknown group(s) {unknown}; valid groups: {GROUP_ORDER}")
     return [g for g in GROUP_ORDER if g in wanted]
 
 
@@ -130,7 +134,7 @@ def is_group_completed(exp_dir: str) -> bool:
     if not manifest_path.is_file():
         return False
     try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
+        with open(manifest_path, encoding="utf-8") as f:
             manifest = json.load(f)
     except (json.JSONDecodeError, OSError):
         return False
@@ -143,7 +147,7 @@ def build_train_command(
     max_iters: Optional[int] = None,
     out_root: str = "out",
     resume_from: Optional[Any] = None,
-) -> List[str]:
+) -> list[str]:
     """Assemble the subprocess command for one group's training run.
 
     ``resume_from`` (path or path-like string to a group checkpoint)
@@ -151,10 +155,15 @@ def build_train_command(
     in-group checkpoint.
     """
     cmd = [
-        sys.executable, "-m", "training.train_pretrain",
-        "--config", str(config),
-        "--out_dir", group_out_dir(out_root, name),
-        "--exp_id", f"ablation-{name}",
+        sys.executable,
+        "-m",
+        "training.train_pretrain",
+        "--config",
+        str(config),
+        "--out_dir",
+        group_out_dir(out_root, name),
+        "--exp_id",
+        f"ablation-{name}",
         *ABLATION_GROUPS[name],
     ]
     if max_iters is not None:
@@ -166,16 +175,14 @@ def build_train_command(
 
 # Architecture fields compared against a group's resolved config overlay
 # when deciding whether a checkpoint belongs to the group (design §4.3.1).
-_ARCH_FIELD_DEFAULTS: Dict[str, Any] = {
+_ARCH_FIELD_DEFAULTS: dict[str, Any] = {
     "num_experts": 1,
     "position_encoding": "rope",
     "ffn_variant": "swiglu",
 }
 
 
-def find_group_checkpoint(
-    out_root: str, name: str
-) -> Optional[Tuple[Path, int, Dict[str, Any]]]:
+def find_group_checkpoint(out_root: str, name: str) -> Optional[tuple[Path, int, dict[str, Any]]]:
     """Probe ``{out_root}/ablation-{name}/latest_ckpt.pt``.
 
     Returns ``(ckpt_path, iter_num, ckpt_config_dict)`` when the file
@@ -195,7 +202,7 @@ def find_group_checkpoint(
     return ckpt_path, iter_num, ckpt_cfg
 
 
-def _arch_matches(ckpt_cfg: Dict[str, Any], overrides: Dict[str, Any]) -> bool:
+def _arch_matches(ckpt_cfg: dict[str, Any], overrides: dict[str, Any]) -> bool:
     """Compare architecture fields of a ckpt config vs a config overlay."""
     ckpt_model = str(ckpt_cfg.get("model_type", "modern"))
     flag_model = str(overrides.get("model", "modern"))
@@ -224,7 +231,7 @@ def _arch_matches(ckpt_cfg: Dict[str, Any], overrides: Dict[str, Any]) -> bool:
     return True
 
 
-def ckpt_matches_group(ckpt_cfg: Dict[str, Any], flags: List[str]) -> bool:
+def ckpt_matches_group(ckpt_cfg: dict[str, Any], flags: list[str]) -> bool:
     """True when the checkpoint's config matches the group's CLI flags.
 
     Compares ``model_type`` vs ``--model`` plus the architecture fields
@@ -234,9 +241,9 @@ def ckpt_matches_group(ckpt_cfg: Dict[str, Any], flags: List[str]) -> bool:
     return _arch_matches(dict(ckpt_cfg), _flags_to_overrides(list(flags)))
 
 
-def _group_overrides(args: argparse.Namespace, name: str) -> Dict[str, Any]:
+def _group_overrides(args: argparse.Namespace, name: str) -> dict[str, Any]:
     """Merged YAML + group-flag overlay used for checkpoint matching."""
-    merged: Dict[str, Any] = {}
+    merged: dict[str, Any] = {}
     try:
         merged = dict(load_yaml_config(args.config) or {})
     except Exception:
@@ -256,17 +263,13 @@ def start_group_watchdog(
     """
     try:
         metrics_path = os.path.join(group_exp_dir(out_root, name), "metrics.jsonl")
-        return MetricsHeartbeatWatchdog(
-            metrics_path, name, poll_interval=poll_interval
-        )
+        return MetricsHeartbeatWatchdog(metrics_path, name, poll_interval=poll_interval)
     except Exception as exc:
         print(f"[warn] watchdog setup failed for {name}: {exc}")
         return None
 
 
-def notify_failures(
-    errors: List[Dict[str, Any]], env: Optional[Dict[str, str]] = None
-) -> bool:
+def notify_failures(errors: list[dict[str, Any]], env: Optional[dict[str, str]] = None) -> bool:
     """Send a failure digest to the configured webhook (missing URL: skip)."""
     if not errors:
         return False
@@ -276,9 +279,7 @@ def notify_failures(
     return notify_webhook("\n".join(lines), env=env)
 
 
-def _run_with_watchdog(
-    cmd: List[str], out_root: str, name: str
-) -> subprocess.CompletedProcess:
+def _run_with_watchdog(cmd: list[str], out_root: str, name: str) -> subprocess.CompletedProcess:
     """Run one training subprocess under a heartbeat watchdog.
 
     The watchdog monitors the group's metrics.jsonl while the subprocess
@@ -298,7 +299,7 @@ def _run_with_watchdog(
             watchdog.stop()
 
 
-def run_train_stage(args: argparse.Namespace) -> Dict[str, Any]:
+def run_train_stage(args: argparse.Namespace) -> dict[str, Any]:
     """Train every selected, not-yet-completed group as a subprocess.
 
     Completed groups (manifest status == 'completed') are skipped for
@@ -308,10 +309,10 @@ def run_train_stage(args: argparse.Namespace) -> Dict[str, Any]:
     A failing group is recorded and normally does not stop the others
     (``--fail_fast`` stops after the first failure).
     """
-    completed: List[str] = []
-    skipped: List[str] = []
-    errors: List[Dict[str, Any]] = []
-    resumed_from_iter: Dict[str, Optional[int]] = {}
+    completed: list[str] = []
+    skipped: list[str] = []
+    errors: list[dict[str, Any]] = []
+    resumed_from_iter: dict[str, Optional[int]] = {}
     fail_fast_triggered = False
 
     for name in select_groups(args.groups):
@@ -370,9 +371,7 @@ def run_train_stage(args: argparse.Namespace) -> Dict[str, Any]:
                         "command": cmd,
                     }
                 )
-                print(
-                    f"[fail] {name}: exit code {result.returncode}"
-                )
+                print(f"[fail] {name}: exit code {result.returncode}")
                 if args.fail_fast:
                     fail_fast_triggered = True
                     break
@@ -384,9 +383,7 @@ def run_train_stage(args: argparse.Namespace) -> Dict[str, Any]:
                     "command": cmd,
                 }
             )
-            print(
-                f"[fail] {name}: exit code {result.returncode}"
-            )
+            print(f"[fail] {name}: exit code {result.returncode}")
             if args.fail_fast:
                 fail_fast_triggered = True
                 break
@@ -400,9 +397,9 @@ def run_train_stage(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
-def _flags_to_overrides(flags: List[str]) -> Dict[str, Any]:
+def _flags_to_overrides(flags: list[str]) -> dict[str, Any]:
     """Turn ``--key value`` / ``--flag`` CLI tokens into a config overlay."""
-    overrides: Dict[str, Any] = {}
+    overrides: dict[str, Any] = {}
     tokens = list(flags)
     i = 0
     while i < len(tokens):
@@ -420,7 +417,7 @@ def _flags_to_overrides(flags: List[str]) -> Dict[str, Any]:
     return overrides
 
 
-def _build_baseline_model(cfg: Dict[str, Any]) -> BaselineGPT:
+def _build_baseline_model(cfg: dict[str, Any]) -> BaselineGPT:
     config = BaselineGPTConfig(
         vocab_size=int(cfg.get("vocab_size", 50257)),
         block_size=int(cfg.get("block_size", 1024)),
@@ -433,7 +430,7 @@ def _build_baseline_model(cfg: Dict[str, Any]) -> BaselineGPT:
     return BaselineGPT(config)
 
 
-def _build_modern_model(cfg: Dict[str, Any]) -> ModernGPT:
+def _build_modern_model(cfg: dict[str, Any]) -> ModernGPT:
     config = ModernGPTConfig(
         vocab_size=int(cfg.get("vocab_size", 50257)),
         block_size=int(cfg.get("block_size", 1024)),
@@ -454,7 +451,7 @@ def _build_modern_model(cfg: Dict[str, Any]) -> ModernGPT:
     return ModernGPT(config)
 
 
-def count_group_params(name: str, config_path: str) -> Dict[str, int]:
+def count_group_params(name: str, config_path: str) -> dict[str, int]:
     """Parameter counts (total / active) for one group's architecture.
 
     The group's model is instantiated from the YAML base config overlaid
@@ -462,7 +459,7 @@ def count_group_params(name: str, config_path: str) -> Dict[str, int]:
     active count is the dense (``num_experts=1``) equivalent; for every
     other group active == total.
     """
-    cfg: Dict[str, Any] = dict(load_yaml_config(config_path) or {})
+    cfg: dict[str, Any] = dict(load_yaml_config(config_path) or {})
     cfg.update(_flags_to_overrides(ABLATION_GROUPS[name]))
 
     model_type = str(cfg.get("model", "modern"))
@@ -490,7 +487,7 @@ def _fmt(value: Any, spec: str = "g") -> str:
     return str(value)
 
 
-def write_markdown_summary(summary: Dict[str, Any]) -> str:
+def write_markdown_summary(summary: dict[str, Any]) -> str:
     """Render a summary dict as a Markdown table (pure function)."""
     lines = [
         "# Component Ablation Summary",
@@ -538,14 +535,13 @@ def write_markdown_summary(summary: Dict[str, Any]) -> str:
         for err in errors:
             command = " ".join(str(c) for c in err.get("command", []))
             lines.append(
-                f"* **{err.get('group')}** — exit code "
-                f"`{err.get('returncode')}` — `{command}`"
+                f"* **{err.get('group')}** — exit code " f"`{err.get('returncode')}` — `{command}`"
             )
 
     return "\n".join(lines) + "\n"
 
 
-def _write_summary_artifacts(summary: Dict[str, Any], out_root: str) -> None:
+def _write_summary_artifacts(summary: dict[str, Any], out_root: str) -> None:
     exp_root = Path(out_root) / "experiments"
     exp_root.mkdir(parents=True, exist_ok=True)
     with open(exp_root / "ablation-summary.json", "w", encoding="utf-8") as f:
@@ -555,10 +551,10 @@ def _write_summary_artifacts(summary: Dict[str, Any], out_root: str) -> None:
 
 
 def summarize_groups(
-    group_names: List[str],
+    group_names: list[str],
     config_path: str,
     out_root: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Aggregate per-group experiment summaries into one summary dict.
 
     Missing / incomplete experiment dirs degrade to None fields; parameter
@@ -566,23 +562,18 @@ def summarize_groups(
     artifacts under ``{out_root}/experiments/``.
     """
     experiment_summaries = {
-        name: summarize_experiment(group_exp_dir(out_root, name))
-        for name in group_names
+        name: summarize_experiment(group_exp_dir(out_root, name)) for name in group_names
     }
     baseline = experiment_summaries.get("baseline") or {}
     baseline_best = baseline.get("best_val_loss")
 
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for name in group_names:
         exp = experiment_summaries[name]
         params = count_group_params(name, config_path)
         best = exp.get("best_val_loss")
         delta = None
-        if (
-            name != "baseline"
-            and best is not None
-            and baseline_best is not None
-        ):
+        if name != "baseline" and best is not None and baseline_best is not None:
             delta = (best - baseline_best) / baseline_best * 100
         rows.append(
             {
@@ -599,7 +590,7 @@ def summarize_groups(
             }
         )
 
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         "generated_ts": datetime.now().astimezone().isoformat(),
         "config": str(config_path),
         "out_root": str(out_root),
@@ -610,7 +601,7 @@ def summarize_groups(
     return summary
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     args = get_args(argv)
     try:
         selected = select_groups(args.groups)
@@ -618,13 +609,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    train_result: Optional[Dict[str, Any]] = None
+    train_result: Optional[dict[str, Any]] = None
     if args.stage in ("train", "all"):
         train_result = run_train_stage(args)
         for err in train_result["errors"]:
-            print(
-                f"[fail] {err['group']}: exit code {err['returncode']}"
-            )
+            print(f"[fail] {err['group']}: exit code {err['returncode']}")
         if train_result["errors"]:
             notified = notify_failures(train_result["errors"])
             if notified:
@@ -634,9 +623,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         summary = summarize_groups(selected, args.config, args.out_root)
         if train_result is not None:
             summary["errors"] = list(train_result["errors"])
-            summary["resumed_from_iter"] = dict(
-                train_result.get("resumed_from_iter", {})
-            )
+            summary["resumed_from_iter"] = dict(train_result.get("resumed_from_iter", {}))
             _write_summary_artifacts(summary, args.out_root)
 
     errors = train_result["errors"] if train_result is not None else []

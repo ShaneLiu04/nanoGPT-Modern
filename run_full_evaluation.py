@@ -2,15 +2,15 @@
 Full evaluation matrix across all trained checkpoints.
 """
 
-import os
 import json
+import os
+
+import tiktoken
 import torch
 
-
-from data.arithmetic import generate_easy, generate_medium, generate_hard
+from data.arithmetic import generate_easy, generate_hard, generate_medium
 from rewards.rule_reward import compute_reward_batch
 from training.trainer_base import load_model_from_checkpoint
-import tiktoken
 
 
 def evaluate_model(model, data, tokenizer, device, max_response_len=20):
@@ -40,9 +40,7 @@ def evaluate_model(model, data, tokenizer, device, max_response_len=20):
             response_text = tokenizer.decode(response_ids)
             responses.append(response_text)
 
-    rewards, fmt_scores, proc_scores, acc_scores = compute_reward_batch(
-        responses, references
-    )
+    rewards, fmt_scores, proc_scores, acc_scores = compute_reward_batch(responses, references)
     total = len(data)
     accuracy = sum(acc_scores) / total
     avg_reward = sum(rewards) / total
@@ -92,15 +90,17 @@ def main():
         if not os.path.exists(path):
             print(f"  SKIP: {path} not found")
             continue
-        model, _ = load_model_from_checkpoint(
-            path, device=device, model_type=mtype, eval_mode=True
-        )
+        model, _ = load_model_from_checkpoint(path, device=device, model_type=mtype, eval_mode=True)
         model_results = {}
         for level, data in eval_data.items():
             res = evaluate_model(model, data, tokenizer, device, max_response_len=20)
             model_results[level] = res
             print(
-                f"  {level:8s}: acc={res['accuracy']:.3f}, reward={res['reward']:.3f}, fmt={res['format_pass_rate']:.3f}, proc={res['process_score']:.3f}, invalid={res['invalid_rate']:.3f}"
+                f"  {level:8s}: acc={res['accuracy']:.3f}, "
+                f"reward={res['reward']:.3f}, "
+                f"fmt={res['format_pass_rate']:.3f}, "
+                f"proc={res['process_score']:.3f}, "
+                f"invalid={res['invalid_rate']:.3f}"
             )
         all_results[name] = model_results
         del model

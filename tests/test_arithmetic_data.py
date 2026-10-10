@@ -6,7 +6,8 @@ import torch
 def test_arithmetic_dataset_pre_tokenize():
     """ArithmeticDataset must pre-tokenize samples and not call encode in __getitem__."""
     import tiktoken
-    from data.arithmetic import generate_easy, ArithmeticDataset
+
+    from data.arithmetic import ArithmeticDataset, generate_easy
 
     tokenizer = tiktoken.get_encoding("gpt2")
     data = generate_easy(num_samples=10, seed=42)
@@ -18,9 +19,7 @@ def test_arithmetic_dataset_pre_tokenize():
     assert "labels" in sample
     assert isinstance(sample["input_ids"], torch.Tensor)
     assert isinstance(sample["labels"], torch.Tensor)
-    assert (
-        len(sample["input_ids"]) + 1 == len(sample["labels"]) + 1
-    )  # input_ids is tokens[:-1]
+    assert len(sample["input_ids"]) + 1 == len(sample["labels"]) + 1  # input_ids is tokens[:-1]
     print("[OK] ArithmeticDataset pre-tokenization works")
 
 

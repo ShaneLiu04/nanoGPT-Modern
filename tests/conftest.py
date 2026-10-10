@@ -5,9 +5,8 @@ can also import them as plain functions; this conftest re-exports them
 as fixtures per the FR11 design.
 """
 
-import pytest
-
 import helpers as test_helpers
+import pytest
 
 
 @pytest.fixture
@@ -23,9 +22,5 @@ def tiny_model():
 
 
 def pytest_configure(config):
-    config.addinivalue_line(
-        "markers", "perf: performance benchmark (machine-dependent)."
-    )
-    config.addinivalue_line(
-        "markers", "slow: long-running test, excluded from quick runs."
-    )
+    config.addinivalue_line("markers", "perf: performance benchmark (machine-dependent).")
+    config.addinivalue_line("markers", "slow: long-running test, excluded from quick runs.")

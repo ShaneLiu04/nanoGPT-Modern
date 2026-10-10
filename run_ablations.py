@@ -22,26 +22,22 @@ Training ablation on a tiny model (for CI/smoke)::
     resume support.
 """
 
-import os
-import sys
-import json
-import subprocess
 import argparse
+import json
+import os
+import subprocess
+import sys
 
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--mode", type=str, default="inference", choices=["inference", "train"]
-    )
+    parser.add_argument("--mode", type=str, default="inference", choices=["inference", "train"])
     parser.add_argument("--checkpoint", type=str, default="out/pretrain/best_ckpt.pt")
     parser.add_argument("--data_dir", type=str, default="data/openwebtext_test")
     parser.add_argument("--out_json", type=str, default="out/ablations.json")
     parser.add_argument("--max_new_tokens", type=int, default=200)
     parser.add_argument("--num_samples", type=int, default=30)
-    parser.add_argument(
-        "--prompt", type=str, default="The future of artificial intelligence is"
-    )
+    parser.add_argument("--prompt", type=str, default="The future of artificial intelligence is")
     parser.add_argument("--max_iters", type=int, default=500)
     parser.add_argument("--n_layer", type=int, default=4)
     parser.add_argument("--n_head", type=int, default=4)
@@ -153,9 +149,7 @@ def train_ablations(args):
         for line in stdout.splitlines():
             if "val loss" in line.lower():
                 try:
-                    final_val = float(
-                        line.split("val loss")[-1].strip().rstrip(",").split()[0]
-                    )
+                    final_val = float(line.split("val loss")[-1].strip().rstrip(",").split()[0])
                 except Exception:
                     pass
         results.append(
