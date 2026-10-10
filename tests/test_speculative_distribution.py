@@ -3,11 +3,13 @@
 
 Target defects these tests must expose:
 
-1. ``temperature=0`` must be greedy (argmax) in all three sampling entries:
+1. ``temperature=0`` must be greedy (argmax) in all sampling entries:
    - model/modern_gpt.py ``generate`` ``_sample`` closure (~L1644)
    - inference/generate_utils.py ``_sample_logits`` (L20-43)
-   - inference/continuous_batching.py ``BatchGenerator._sample`` (L210-234)
-   Currently all three fall through to ``torch.multinomial`` at
+   - inference/generate_utils.py ``_sample_logits_batched`` (the batched
+     per-row sampler used by the continuous-batching scheduler; rows
+     with temperature 0 must be strict argmax)
+   Currently they can fall through to ``torch.multinomial`` at
    temperature=0, i.e. sampling is random.
 2. Speculative decoding with draft==target at temperature=0 must match direct
    greedy generation.
@@ -131,29 +133,46 @@ def test_generate_utils_temperature_zero_is_deterministic():
 
 
 def test_continuous_batching_sample_temperature_zero_is_greedy():
-    """continuous_batching.BatchGenerator._sample(temperature=0): repeated
-    calls on fixed logits must all return the argmax token.  Currently
-    temperature=0 skips the temperature branch and samples via multinomial →
-    random output."""
-    from inference.continuous_batching import BatchGenerator
+    """generate_utils._sample_logits(temperature=0): repeated calls on
+    fixed logits must all return the argmax token.  The continuous
+    batching scheduler samples through this helper (and its batched
+    sibling), so temperature=0 must never fall through to multinomial
+    (random output)."""
+    from inference.generate_utils import _sample_logits
 
-    model = _tiny_model(seed=31)
-    gen = BatchGenerator(model, device="cpu")
     torch.manual_seed(3)
     logits = torch.randn(1, 100)
     expected = logits.argmax(dim=-1).item()
 
     outs = [
-        gen._sample(logits, temperature=0.0, top_k=None, top_p=None).item()
+        _sample_logits(logits, temperature=0.0, top_k=None, top_p=None).item()
         for _ in range(16)
     ]
 
     assert all(o == outs[0] for o in outs), (
-        "BatchGenerator._sample(temperature=0) must be deterministic "
+        "_sample_logits(temperature=0) must be deterministic "
         "(argmax); repeated calls returned different tokens"
     )
     assert outs[0] == expected, (
-        "BatchGenerator._sample(temperature=0) must return the argmax token"
+        "_sample_logits(temperature=0) must return the argmax token"
+    )
+
+
+def test_sample_logits_batched_temperature_zero_is_greedy():
+    """generate_utils._sample_logits_batched(temperatures=0): every row
+    of a [3, V] logits batch with temperatures=[0, 0, 0] must return its
+    argmax token (greedy), independent of the RNG."""
+    from inference.generate_utils import _sample_logits_batched
+
+    torch.manual_seed(4)
+    logits = torch.randn(3, 100)
+    expected = logits.argmax(dim=-1)
+
+    out = _sample_logits_batched(logits, torch.zeros(3))
+
+    assert torch.equal(out, expected), (
+        "_sample_logits_batched rows with temperature=0 must be strict "
+        f"argmax (got {out.tolist()}, expected {expected.tolist()})"
     )
 
 
