@@ -27,6 +27,7 @@ from collections import defaultdict
 from data.arithmetic import generate_easy, generate_medium, generate_hard
 from model.attention_utils import set_attention_backend, print_attention_backend
 from rewards.rule_reward import compute_reward_batch
+from training.args import add_common_trainer_args
 from training.trainer_base import (
     BaseTrainer,
     enable_tf32,
@@ -44,6 +45,7 @@ enable_tf32()
 
 def get_args():
     parser = argparse.ArgumentParser()
+    add_common_trainer_args(parser)
     parser.add_argument(
         "--init_from", type=str, required=True, help="SFT checkpoint path"
     )
@@ -54,25 +56,13 @@ def get_args():
         help="Reference (frozen SFT) checkpoint path",
     )
     parser.add_argument("--out_dir", type=str, default="out/grpo")
-    parser.add_argument("--group_size", type=int, default=4)
-    parser.add_argument("--num_steps", type=int, default=1000)
     parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument(
-        "--gradient_accumulation_steps",
-        type=int,
-        default=1,
-        help="Number of group rollouts before one optimizer step",
-    )
-    parser.add_argument("--max_prompt_len", type=int, default=128)
-    parser.add_argument("--max_response_len", type=int, default=128)
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--min_lr", type=float, default=1e-6)
     parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument(
         "--beta", type=float, default=0.04, help="KL penalty coefficient"
     )
-    parser.add_argument("--eps", type=float, default=0.2, help="PPO clipping epsilon")
     parser.add_argument(
         "--adv_norm",
         type=str,
@@ -90,28 +80,10 @@ def get_args():
         help="Symmetric advantage clip magnitude (e.g. 3.0); " "0 disables clipping",
     )
     parser.add_argument(
-        "--lr_schedule",
-        type=str,
-        default="cosine",
-        choices=["cosine", "linear", "wsd", "constant"],
-    )
-    parser.add_argument(
-        "--keep_last_n",
-        type=int,
-        default=0,
-        help="Keep only the last N non-best checkpoints (0=keep all)",
-    )
-    parser.add_argument(
         "--allow_dropout",
         action="store_true",
         help="Allow dropout > 0 in GRPO (old/new logprob ratios will be biased)",
     )
-    parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument(
-        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
-    )
-    parser.add_argument("--backend", type=str, default="nccl")
-    parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--eval_interval", type=int, default=100)
     parser.add_argument(
         "--num_train",
@@ -131,33 +103,6 @@ def get_args():
         default=1,
         help="Prompt template diversity: 0=original only, "
         "1=all 12 templates, N=first N templates",
-    )
-    parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument(
-        "--exp_id",
-        type=str,
-        default=None,
-        help="Experiment ID for structured metrics (default: basename of --out_dir)",
-    )
-    parser.add_argument(
-        "--no_metrics",
-        action="store_true",
-        help="Disable structured metrics.jsonl / manifest.json recording",
-    )
-    parser.add_argument(
-        "--no_monitoring",
-        action="store_true",
-        help="Disable loss-spike detection and grad-norm monitoring",
-    )
-    parser.add_argument(
-        "--config", type=str, default=None, help="Path to YAML config file"
-    )
-    parser.add_argument(
-        "--attn_backend",
-        type=str,
-        default="auto",
-        choices=["auto", "flash", "mem_efficient", "math", "default"],
-        help="Force SDPA attention backend (auto lets PyTorch choose)",
     )
     return parse_args_with_config(parser)
 

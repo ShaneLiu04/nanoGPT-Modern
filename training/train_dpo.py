@@ -30,6 +30,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset, Dataset
 
 from model.attention_utils import print_attention_backend, set_attention_backend
+from training.args import add_common_trainer_args
 from training.trainer_base import (
     BaseTrainer,
     enable_tf32,
@@ -52,6 +53,7 @@ enable_tf32()
 
 def get_args():
     parser = argparse.ArgumentParser()
+    add_common_trainer_args(parser)
     parser.add_argument(
         "--init_from",
         type=str,
@@ -66,22 +68,14 @@ def get_args():
     )
     parser.add_argument("--out_dir", type=str, default="out/dpo")
     parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--max_length", type=int, default=128)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--learning_rate", type=float, default=1e-6)
     parser.add_argument("--min_lr", type=float, default=1e-7)
     parser.add_argument(
-        "--lr_schedule",
-        type=str,
-        default="cosine",
-        choices=["cosine", "linear", "wsd", "constant"],
-    )
-    parser.add_argument(
         "--warmup_iters", type=int, default=0, help="Linear warmup steps (0 = none)"
     )
     parser.add_argument("--weight_decay", type=float, default=0.1)
-    parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument(
         "--beta", type=float, default=0.1, help="DPO/IPO/KTO temperature"
     )
@@ -92,37 +86,6 @@ def get_args():
         "--label_smoothing", type=float, default=0.0, help="DPO label smoothing"
     )
     parser.add_argument("--eval_interval", type=int, default=50)
-    parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument(
-        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
-    )
-    parser.add_argument("--use_wandb", action="store_true")
-    parser.add_argument("--backend", type=str, default="nccl")
-    parser.add_argument("--keep_last_n", type=int, default=0)
-    parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument(
-        "--exp_id",
-        type=str,
-        default=None,
-        help="Experiment ID for structured metrics (default: basename of --out_dir)",
-    )
-    parser.add_argument(
-        "--no_metrics",
-        action="store_true",
-        help="Disable structured metrics.jsonl / manifest.json recording",
-    )
-    parser.add_argument(
-        "--no_monitoring",
-        action="store_true",
-        help="Disable loss-spike detection and grad-norm monitoring",
-    )
-    parser.add_argument("--config", type=str, default=None)
-    parser.add_argument(
-        "--attn_backend",
-        type=str,
-        default="auto",
-        choices=["auto", "flash", "mem_efficient", "math", "default"],
-    )
     # Dataset sources
     parser.add_argument(
         "--preference_source",

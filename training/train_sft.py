@@ -22,6 +22,7 @@ from data.arithmetic import (
     collate_fn,
 )
 from model.attention_utils import set_attention_backend, print_attention_backend
+from training.args import add_common_trainer_args
 from training.trainer_base import (
     BaseTrainer,
     enable_tf32,
@@ -39,30 +40,18 @@ enable_tf32()
 
 def get_args():
     parser = argparse.ArgumentParser()
+    add_common_trainer_args(parser)
     parser.add_argument(
         "--init_from", type=str, required=True, help="Path to pretrain checkpoint"
     )
     parser.add_argument("--out_dir", type=str, default="out/sft")
     parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument(
-        "--gradient_accumulation_steps",
-        type=int,
-        default=1,
-        help="Number of forward/backward passes before one optimizer step",
-    )
     parser.add_argument("--max_length", type=int, default=256)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--learning_rate", type=float, default=3e-4)
     parser.add_argument("--min_lr", type=float, default=1e-5)
     parser.add_argument("--weight_decay", type=float, default=0.1)
-    parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--eval_interval", type=int, default=100)
-    parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument(
-        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
-    )
-    parser.add_argument("--use_wandb", action="store_true")
-    parser.add_argument("--backend", type=str, default="nccl")
     parser.add_argument(
         "--variant", type=str, default="sft-only", choices=["sft-only", "sft-continued"]
     )
@@ -77,51 +66,6 @@ def get_args():
         type=int,
         default=500,
         help="Samples per difficulty level for validation",
-    )
-    parser.add_argument(
-        "--lr_schedule",
-        type=str,
-        default="cosine",
-        choices=["cosine", "linear", "wsd", "constant"],
-        help="LR schedule type",
-    )
-    parser.add_argument(
-        "--keep_last_n",
-        type=int,
-        default=0,
-        help="Keep only the last N non-best checkpoints (0=keep all)",
-    )
-    parser.add_argument(
-        "--resume",
-        type=str,
-        default=None,
-        help="Resume from a checkpoint saved by this script",
-    )
-    parser.add_argument(
-        "--exp_id",
-        type=str,
-        default=None,
-        help="Experiment ID for structured metrics (default: basename of --out_dir)",
-    )
-    parser.add_argument(
-        "--no_metrics",
-        action="store_true",
-        help="Disable structured metrics.jsonl / manifest.json recording",
-    )
-    parser.add_argument(
-        "--no_monitoring",
-        action="store_true",
-        help="Disable loss-spike detection and grad-norm monitoring",
-    )
-    parser.add_argument(
-        "--config", type=str, default=None, help="Path to YAML config file"
-    )
-    parser.add_argument(
-        "--attn_backend",
-        type=str,
-        default="auto",
-        choices=["auto", "flash", "mem_efficient", "math", "default"],
-        help="Force SDPA attention backend (auto lets PyTorch choose)",
     )
     return parse_args_with_config(parser)
 

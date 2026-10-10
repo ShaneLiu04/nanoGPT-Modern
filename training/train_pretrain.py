@@ -20,6 +20,7 @@ from model.attention_utils import set_attention_backend, print_attention_backend
 from model.baseline_gpt import BaselineGPT, BaselineGPTConfig
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 from data.openwebtext import default_num_workers, get_dataloader
+from training.args import add_common_trainer_args
 from training.trainer_base import (
     BaseTrainer,
     enable_tf32,
@@ -37,6 +38,7 @@ enable_tf32()
 
 def get_args():
     parser = argparse.ArgumentParser()
+    add_common_trainer_args(parser)
     parser.add_argument(
         "--model", type=str, default="modern", choices=["baseline", "modern"]
     )
@@ -84,31 +86,11 @@ def get_args():
     parser.add_argument("--warmup_iters", type=int, default=2000)
     parser.add_argument("--lr_decay_iters", type=int, default=18000)
     parser.add_argument("--min_lr", type=float, default=6e-5)
-    parser.add_argument(
-        "--lr_schedule",
-        type=str,
-        default="cosine",
-        choices=["cosine", "linear", "wsd", "constant"],
-        help="LR schedule type",
-    )
     parser.add_argument("--weight_decay", type=float, default=0.1)
-    parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--eval_interval", type=int, default=1000)
     parser.add_argument("--eval_iters", type=int, default=200)
-    parser.add_argument(
-        "--ckpt_interval",
-        type=int,
-        default=0,
-        help="Save latest_ckpt.pt every N iters between eval points "
-        "(0 = follow eval_interval)",
-    )
     parser.add_argument("--log_interval", type=int, default=10)
-    parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument(
-        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
-    )
     parser.add_argument("--compile", action="store_true")
-    parser.add_argument("--backend", type=str, default="nccl")
     parser.add_argument(
         "--fsdp",
         action="store_true",
@@ -134,13 +116,6 @@ def get_args():
         help="Eval-time batch size; default is 2x train batch_size (FR8b)",
     )
     parser.add_argument(
-        "--gradient_accumulation_steps",
-        type=int,
-        default=1,
-        help="Number of forward/backward passes before one optimizer step",
-    )
-    parser.add_argument("--use_wandb", action="store_true")
-    parser.add_argument(
         "--use_ema",
         action="store_true",
         help="Enable Exponential Moving Average of weights",
@@ -151,12 +126,6 @@ def get_args():
         type=int,
         default=0,
         help="Stop if val loss does not improve for N evals (0=disabled)",
-    )
-    parser.add_argument(
-        "--keep_last_n",
-        type=int,
-        default=0,
-        help="Keep only the last N non-best checkpoints (0=keep all)",
     )
     parser.add_argument(
         "--use_packing",
@@ -173,33 +142,6 @@ def get_args():
         type=int,
         default=None,
         help="MemmapDataset shuffle buffer size (default: 10000 or dataset size)",
-    )
-    parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument(
-        "--exp_id",
-        type=str,
-        default=None,
-        help="Experiment ID for structured metrics (default: basename of --out_dir)",
-    )
-    parser.add_argument(
-        "--no_metrics",
-        action="store_true",
-        help="Disable structured metrics.jsonl / manifest.json recording",
-    )
-    parser.add_argument(
-        "--no_monitoring",
-        action="store_true",
-        help="Disable loss-spike detection and grad-norm monitoring",
-    )
-    parser.add_argument(
-        "--config", type=str, default=None, help="Path to YAML config file"
-    )
-    parser.add_argument(
-        "--attn_backend",
-        type=str,
-        default="auto",
-        choices=["auto", "flash", "mem_efficient", "math", "default"],
-        help="Force SDPA attention backend (auto lets PyTorch choose)",
     )
     parser.add_argument(
         "--use_ring_attention",
