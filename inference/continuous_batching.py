@@ -1,41 +1,44 @@
-"""Continuous batching inference engine for nanoGPT-Modern.
+"""Iteration-level continuous batching scheduler for nanoGPT-Modern.
 
-This module provides a production-oriented continuous batching scheduler that
-dynamically fills GPU batches from an asynchronous request queue.  When a
-sequence completes (hits ``eos_token_id`` or ``max_tokens``), a new request is
-pulled from the queue and its prompt is prefilled, keeping the GPU at full
-utilisation.
+FR7 rewrite: the scheduler advances the whole batch one *iteration* at a
+time.  Each iteration harvests FINISHED slots, pops queued requests into
+the freed slots, prefills the new-request group (left-aligned, right pads
+never enter the KV buffer, per-sequence positions 0..pl-1, first token
+sampled from the prompt's last real position) and steps every DECODING
+slot once, sampling all tokens of the iteration through a single
+vectorized call.  A request that finishes therefore frees its slot at the
+very next iteration boundary instead of waiting for the rest of the batch.
 
-Features
---------
-* **RequestQueue** — async prompt queue with per-request temperature/top_k/etc.
-* **ContinuousBatchScheduler** — dynamic batch assembly with prefix-cache sharing.
-* **BatchGenerator** — wraps ``model.generate()`` and manages ``finished_mask``
-  plus KV cache reuse across requests.
-* **PrefixCache** — stores precomputed KV cache for shared system prompts so
-  multiple requests with the same prefix skip redundant prefill.
-* **torch.compile** — optional compilation of the decode step for lower kernel
-  launch overhead.
+The former placeholder prefix-cache class and the never-called
+decode-step compile helper were removed (dead code); ``RequestQueue`` is
+protected by a ``threading.Lock``.
+
+KV ownership: the scheduler allocates one dense buffer per layer of shape
+[batch_size, n_kv_head, max_cache_len, head_dim].  Each slot row holds
+only its own real tokens (``slot.cache_len``); rows never share state, so
+an empty slot cannot contaminate its neighbours (B12).  Decode steps pass
+each row's valid prefix via ``kv_mask`` and the new token's absolute
+position via ``positions`` (see ``ModernGPT.forward``).
 
 Usage Example
 -------------
 >>> queue = RequestQueue()
->>> queue.enqueue(Request(prompt="Hello", max_tokens=50, temperature=0.8))
->>> scheduler = ContinuousBatchScheduler(queue, model, device="cuda")
->>> results = scheduler.run_batch_size=4, max_total_tokens=1024)
+>>> queue.enqueue(Request(prompt_ids=[1, 2, 3], max_tokens=16, request_id="a"))
+>>> scheduler = ContinuousBatchScheduler(queue, model, device="cpu", batch_size=4)
+>>> results = scheduler.run()          # List[GenerateResult]
 """
 
 from __future__ import annotations
 
 import dataclasses
-import time
-from typing import Callable, Dict, List, Optional, Tuple, Union, cast
+import enum
+import threading
+from typing import List, Optional, Union
 
 import torch
 import torch.nn as nn
 
-from model.modern_gpt import ModernGPTConfig
-from model.kv_cache_utils import KVCacheManager
+from inference.generate_utils import _sample_logits_batched
 
 
 @dataclasses.dataclass
@@ -45,18 +48,23 @@ class Request:
     Attributes
     ----------
     prompt_ids : torch.Tensor [1, T] or list[int]
-        Prompt token ids.  Internally converted to a 1-D or 2-D long tensor.
+        Prompt token ids.  Internally normalized to a [1, T] long tensor.
     max_tokens : int
         Maximum number of *new* tokens to generate.
     temperature : float
+        Sampling temperature; ``0.0`` means greedy argmax.
     top_k : int or None
+        Top-k filtering (None or <= 0 -> no filtering).
     top_p : float or None
+        Nucleus sampling threshold (None or >= 1.0 -> no filtering).
     repetition_penalty : float or None
+        Divide the logits of already-seen token ids by this factor
+        (None or 1.0 -> disabled).
     eos_token_id : int or None
+        Sampling this token finishes the request early (None -> never
+        stop on EOS).
     request_id : str
-        Unique identifier for result tracking.
-    prefix_key : str or None
-        If set, the scheduler looks up a shared prefix KV cache in the PrefixCache.
+        Unique identifier returned with the result.
     """
 
     prompt_ids: Union[torch.Tensor, List[int]]
@@ -67,7 +75,6 @@ class Request:
     repetition_penalty: Optional[float] = None
     eos_token_id: Optional[int] = None
     request_id: str = ""
-    prefix_key: Optional[str] = None
 
     def __post_init__(self):
         if isinstance(self.prompt_ids, list):
@@ -77,458 +84,462 @@ class Request:
 
 
 class RequestQueue:
-    """Thread-safe (in-process) request queue for continuous batching.
+    """Thread-safe in-process request queue for continuous batching.
 
-    Parameters
-    ----------
-    maxsize : int
-        Maximum number of pending requests.  ``enqueue`` blocks when full.
+    ``enqueue`` raises ``RuntimeError`` when the queue is full (it does
+    not block); all operations are protected by a ``threading.Lock``.
     """
 
     def __init__(self, maxsize: int = 1000):
         self._queue: List[Request] = []
         self.maxsize = maxsize
+        self._lock = threading.Lock()
 
     def enqueue(self, req: Request) -> None:
         """Add a request to the tail of the queue."""
-        if len(self._queue) >= self.maxsize:
-            raise RuntimeError("Request queue is full")
-        self._queue.append(req)
+        with self._lock:
+            if len(self._queue) >= self.maxsize:
+                raise RuntimeError("Request queue is full")
+            self._queue.append(req)
 
     def dequeue(self) -> Optional[Request]:
         """Pop the oldest request, or ``None`` if the queue is empty."""
-        if not self._queue:
-            return None
-        return self._queue.pop(0)
+        with self._lock:
+            if not self._queue:
+                return None
+            return self._queue.pop(0)
 
     def __len__(self) -> int:
-        return len(self._queue)
+        with self._lock:
+            return len(self._queue)
 
     def is_empty(self) -> bool:
-        return len(self._queue) == 0
+        return len(self) == 0
 
 
-class PrefixCache:
-    """Cache for shared-prefix KV tensors to avoid redundant prefill.
+@dataclasses.dataclass
+class GenerateResult:
+    """A completed request, as returned by ``ContinuousBatchScheduler.run``.
 
-    When multiple requests share the same system prompt (or any long prefix),
-    the KV cache for that prefix is computed once and reused across requests.
-    The cache stores raw ``(k, v)`` tuples per layer as returned by the model's
-    forward pass with ``use_cache=True``.
-
-    Parameters
+    Attributes
     ----------
-    max_entries : int
-        Maximum number of distinct prefix keys to keep.  LRU eviction when full.
+    request_id : str
+    token_ids : list[int]
+        Full generated sequence: prompt + completion (the sampled EOS
+        token, if any, is included at the end).
+    finish_reason : str
+        ``"eos"`` when the request stopped on its eos token, ``"length"``
+        when it ran to ``max_tokens``.
+    finish_iteration : int
+        1-based index of the iteration in which the request finished.
     """
 
-    def __init__(self, max_entries: int = 64):
-        self.max_entries = max_entries
-        self._cache: Dict[str, List[Tuple[torch.Tensor, torch.Tensor]]] = {}
-        self._access_order: List[str] = []
-
-    def get(self, key: str) -> Optional[List[Tuple[torch.Tensor, torch.Tensor]]]:
-        """Retrieve prefix KV cache by key."""
-        if key not in self._cache:
-            return None
-        # Move to MRU.
-        self._access_order.remove(key)
-        self._access_order.append(key)
-        return self._cache[key]
-
-    def put(self, key: str, kv_cache: List[Tuple[torch.Tensor, torch.Tensor]]) -> None:
-        """Store prefix KV cache, evicting LRU entry if at capacity."""
-        if key in self._cache:
-            self._access_order.remove(key)
-        elif len(self._cache) >= self.max_entries:
-            lru = self._access_order.pop(0)
-            del self._cache[lru]
-        self._access_order.append(key)
-        # Deep-copy to avoid accidental mutation by the caller.
-        self._cache[key] = [(k.clone(), v.clone()) for k, v in kv_cache]
-
-    def clear(self) -> None:
-        self._cache.clear()
-        self._access_order.clear()
+    request_id: str
+    token_ids: List[int]
+    finish_reason: str
+    finish_iteration: int
 
 
-class BatchGenerator:
-    """Wrapper around ``model.generate()`` that maintains a running batch.
+class _SlotPhase(enum.Enum):
+    EMPTY = 0
+    PREFILL = 1  # accepted from the queue, waiting for its prefill forward
+    DECODING = 2
+    FINISHED = 3
 
-    Manages per-sequence ``finished_mask``, KV cache reuse, and prefix-cache
-    injection.  Designed to be driven by ``ContinuousBatchScheduler``.
 
-    Parameters
-    ----------
-    model : nn.Module
-    device : str or torch.device
-    eos_token_id : int or None
-        Default EOS token used when a request does not specify one.
-    use_compile : bool
-        If ``True``, compile the single-token decode step with ``torch.compile``.
-    """
+@dataclasses.dataclass
+class _Slot:
+    """Per-slot state of the iteration-level scheduler."""
 
-    def __init__(
-        self,
-        model: nn.Module,
-        device: Union[str, torch.device] = "cuda",
-        eos_token_id: Optional[int] = None,
-        use_compile: bool = False,
-    ):
-        self.model = model
-        self.device = device
-        self.eos_token_id = eos_token_id
-        self.use_compile = use_compile and str(device).startswith("cuda")
-        self.config: ModernGPTConfig = model.config
-        self._compiled_decode_step: Optional[Callable] = None
-
-    def _get_cache_manager(self, batch_size: int) -> KVCacheManager:
-        """Allocate a KVCacheManager compatible with the model config."""
-        _head_dim = self.config.n_embd // self.config.n_head
-        # Use quantized cache if the model config requests it (future hook).
-        cache_dtype = getattr(self.config, "kv_cache_dtype", "bf16")
-        return KVCacheManager.from_config(self.config, cache_dtype=cache_dtype)
-
-    def _init_decode_compile(self):
-        """Compile a single-token decode step for lower overhead."""
-        if not self.use_compile or self._compiled_decode_step is not None:
-            return
-
-        def _decode_step(x, past_kvs, start_pos):
-            logits, _, new_past = self.model(
-                x, past_kvs=past_kvs, use_cache=True, start_pos=start_pos
-            )
-            return logits[:, -1, :], new_past
-
-        try:
-            self._compiled_decode_step = torch.compile(
-                _decode_step, mode="reduce-overhead", fullgraph=False, dynamic=True
-            )
-        except Exception:
-            self._compiled_decode_step = _decode_step
-
-    def _sample(
-        self,
-        logits: torch.Tensor,
-        temperature: float,
-        top_k: Optional[int],
-        top_p: Optional[float],
-    ) -> torch.Tensor:
-        """Sample a single token from logits [B, V]."""
-        if temperature == 0:
-            return logits.argmax(dim=-1, keepdim=True).squeeze(-1)
-        if temperature > 0 and temperature != 1.0:
-            logits = logits / temperature
-        if top_k is not None and top_k > 0:
-            k = min(top_k, logits.size(-1))
-            v, _ = torch.topk(logits, k, dim=-1)
-            logits[logits < v[:, [-1]]] = -float("Inf")
-        if top_p is not None and top_p < 1.0:
-            sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
-            sorted_probs = torch.nn.functional.softmax(sorted_logits, dim=-1)
-            cum_probs = torch.cumsum(sorted_probs, dim=-1)
-            sorted_mask = cum_probs > top_p
-            sorted_mask[:, 1:] = sorted_mask[:, :-1].clone()
-            sorted_mask[:, 0] = False
-            sorted_logits[sorted_mask] = -float("Inf")
-            logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
-        probs = torch.nn.functional.softmax(logits, dim=-1)
-        return torch.multinomial(probs, num_samples=1).squeeze(-1)
-
-    def generate_batch(
-        self,
-        requests: List[Request],
-        prefix_cache: Optional[PrefixCache] = None,
-        max_total_tokens: Optional[int] = None,
-    ) -> Dict[str, List[int]]:
-        """Generate responses for a fixed batch of requests.
-
-        This is the core continuous-batching primitive: all requests in ``batch``
-        run together until every sequence has finished.  The caller (scheduler)
-        is responsible for swapping new requests into finished slots.
-
-        Returns
-        -------
-        results : dict[str, list[int]]
-            Mapping from ``request_id`` to the full generated token-id list
-            (prompt + completion).
-        """
-        if not requests:
-            return {}
-
-        B = len(requests)
-        max_new = max(r.max_tokens for r in requests)
-        if max_total_tokens is not None:
-            max_new = min(max_new, max_total_tokens)
-
-        # Right-pad prompts to the same length so we can prefill in one forward.
-        prompt_lens = [cast(torch.Tensor, r.prompt_ids).shape[1] for r in requests]
-        max_prompt_len = max(prompt_lens)
-        input_ids = torch.full(
-            (B, max_prompt_len),
-            self.eos_token_id or 0,
-            dtype=torch.long,
-            device=self.device,
-        )
-        attention_mask = torch.zeros(
-            (B, max_prompt_len), dtype=torch.bool, device=self.device
-        )
-        for b, req in enumerate(requests):
-            pl = prompt_lens[b]
-            input_ids[b, :pl] = cast(torch.Tensor, req.prompt_ids)[0, :pl].to(
-                self.device
-            )
-            attention_mask[b, :pl] = True
-
-        # Build a shared KV cache manager for the batch.
-        cache = self._get_cache_manager(B)
-        cache.init_cache(
-            B, torch.device(self.device), next(self.model.parameters()).dtype
-        )
-
-        # --- Prefill: encode all prompts together ---
-        with torch.no_grad():
-            logits, _, raw_kvs = self.model(
-                input_ids,
-                attention_mask=attention_mask,
-                use_cache=True,
-                start_pos=0,
-            )
-        for li in range(self.config.n_layer):
-            cache.update(li, raw_kvs[li][0], raw_kvs[li][1])
-        cache.advance(max_prompt_len)
-
-        # --- Prefix cache injection for shared prefixes ---
-        if prefix_cache is not None:
-            for b, req in enumerate(requests):
-                if req.prefix_key is not None:
-                    prefix_kv = prefix_cache.get(req.prefix_key)
-                    if prefix_kv is not None:
-                        # Replace the precomputed prefix KV for this sequence.
-                        # The prefix must be <= prompt_len; we overwrite the first
-                        # prefix_len positions of the cache.
-                        _prefix_len = prefix_kv[0][0].shape[2]
-                        for li in range(self.config.n_layer):
-                            k_p, v_p = prefix_kv[li]
-                            # Ensure same batch dimension
-                            if k_p.shape[0] == 1 and B > 1:
-                                k_p = k_p.expand(B, -1, -1, -1)
-                                v_p = v_p.expand(B, -1, -1, -1)
-                            # Overwrite the first prefix_len tokens for this batch item.
-                            # For simplicity we assume the prefix is at the start.
-                            # In a production system this would use paged attention block tables.
-                            pass  # placeholder: real prefix cache requires paged layout
-
-        # --- Decode loop ---
-        finished = torch.zeros(B, dtype=torch.bool, device=self.device)
-        generated_counts = torch.zeros(B, dtype=torch.long, device=self.device)
-        results: List[List[int]] = [
-            input_ids[b, : prompt_lens[b]].tolist() for b in range(B)
-        ]
-
-        # Prepare per-request hyperparameters as tensors for vectorised sampling.
-        temperatures = torch.tensor(
-            [r.temperature for r in requests], device=self.device, dtype=torch.float32
-        )
-        top_ks = [r.top_k for r in requests]
-        top_ps = [r.top_p for r in requests]
-        repetition_penalties = [r.repetition_penalty for r in requests]
-        eos_ids = [
-            r.eos_token_id if r.eos_token_id is not None else self.eos_token_id
-            for r in requests
-        ]
-
-        for step in range(max_new):
-            if finished.all():
-                break
-
-            # Feed EOS to finished sequences so KV cache stays aligned.
-            next_in = torch.full(
-                (B, 1), self.eos_token_id or 0, dtype=torch.long, device=self.device
-            )
-            for b in range(B):
-                if not finished[b]:
-                    next_in[b] = results[b][-1]
-
-            with torch.no_grad():
-                logits, _, next_kv = self.model(
-                    next_in,
-                    past_kvs=cache.get_cache(),
-                    use_cache=True,
-                    start_pos=cache.start_pos,
-                )
-            for li in range(self.config.n_layer):
-                cache.update(li, next_kv[li][0], next_kv[li][1])
-            cache.advance(1)
-
-            logits_last = logits[:, -1, :]  # [B, V]
-
-            # Apply repetition penalty per sequence.
-            for b in range(B):
-                if (
-                    repetition_penalties[b] is not None
-                    and repetition_penalties[b] != 1.0
-                ):
-                    for tid in results[b]:
-                        logits_last[b, tid] /= repetition_penalties[b]
-
-            # Sample one token per sequence (different hyperparams per request).
-            next_tokens = torch.zeros(B, dtype=torch.long, device=self.device)
-            for b in range(B):
-                if finished[b]:
-                    eos_id = eos_ids[b]
-                    if eos_id is None:
-                        next_tokens[b] = 0
-                    else:
-                        next_tokens[b] = eos_id
-                else:
-                    next_tokens[b] = self._sample(
-                        logits_last[b].unsqueeze(0),
-                        temperature=temperatures[b].item(),
-                        top_k=top_ks[b],
-                        top_p=top_ps[b],
-                    ).item()
-
-            # Append and mark finished.
-            for b in range(B):
-                if not finished[b]:
-                    results[b].append(int(next_tokens[b].item()))
-                    generated_counts[b] += 1
-                    if eos_ids[b] is not None and next_tokens[b].item() == eos_ids[b]:
-                        finished[b] = True
-                    if generated_counts[b] >= requests[b].max_tokens:
-                        finished[b] = True
-
-        return {requests[b].request_id: results[b] for b in range(B)}
+    request: Request
+    prompt_len: int
+    completion: List[int]
+    cache_len: int  # number of real KV entries in this slot's buffer row
+    phase: _SlotPhase = _SlotPhase.PREFILL
+    finish_reason: str = ""
+    finish_iteration: int = 0
 
 
 class ContinuousBatchScheduler:
-    """Dynamic scheduler that keeps a GPU batch full by back-filling from a queue.
+    """Iteration-level scheduler driven by a request queue.
+
+    Each iteration: harvest FINISHED slots -> pop new requests into freed
+    slots -> prefill the new-request group (left-aligned) -> step every
+    DECODING slot one token -> vectorized sampling.  ``run`` returns the
+    results of all requests that finished within the step budget.
 
     Parameters
     ----------
     queue : RequestQueue
     model : nn.Module
+        A ``ModernGPT`` (needs ``.config`` with n_layer/n_head/n_kv_head/
+        n_embd/effective_block_size).
     device : str or torch.device
     batch_size : int
-        Maximum number of concurrent sequences in a batch.
-    prefix_cache : PrefixCache or None
-    use_compile : bool
+        Maximum number of concurrent sequences (KV buffer rows).
     """
 
     def __init__(
         self,
         queue: RequestQueue,
         model: nn.Module,
-        device: Union[str, torch.device] = "cuda",
+        device: Union[str, torch.device] = "cpu",
         batch_size: int = 4,
-        prefix_cache: Optional[PrefixCache] = None,
-        use_compile: bool = False,
     ):
         self.queue = queue
         self.model = model
-        self.device = device
+        self.device = torch.device(device)
         self.batch_size = batch_size
-        self.prefix_cache = prefix_cache or PrefixCache()
-        self.generator = BatchGenerator(model, device, use_compile=use_compile)
+        self.iteration_count = 0
+        cfg = model.config
+        self._n_layer = cfg.n_layer
+        self._n_kv_head = cfg.n_kv_head
+        self._head_dim = cfg.n_embd // cfg.n_head
+        self._max_cache_len = cfg.effective_block_size
+        self._k_buf: Optional[List[torch.Tensor]] = None
+        self._v_buf: Optional[List[torch.Tensor]] = None
+        self._slots: List[Optional[_Slot]] = [None] * batch_size
 
-    def _fill_batch(self, current: List[Optional[Request]]) -> List[Optional[Request]]:
-        """Replace ``None`` (finished) slots with new requests from the queue."""
-        new_batch: List[Optional[Request]] = []
-        for slot in current:
-            if slot is not None:
-                new_batch.append(slot)
-        while len(new_batch) < self.batch_size and not self.queue.is_empty():
-            req = self.queue.dequeue()
-            if req is not None:
-                new_batch.append(req)
-        return new_batch
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-    def run(
-        self,
-        max_total_tokens: Optional[int] = None,
-        timeout_seconds: Optional[float] = None,
-    ) -> Dict[str, List[int]]:
-        """Run continuous batching until the queue is empty and all slots finish.
+    def run(self, max_steps: Optional[int] = None) -> List[GenerateResult]:
+        """Run the scheduler until the queue is empty and every slot has
+        finished, or until ``max_steps`` iterations have been executed.
 
         Parameters
         ----------
-        max_total_tokens : int or None
-            Global cap on the number of decode steps per batch generation call.
-        timeout_seconds : float or None
-            If set, return partial results after the timeout even if the queue is
-            not empty.
+        max_steps : int or None
+            Iteration budget.  ``None`` runs to completion.  Requests
+            that have not finished within the budget do not produce a
+            ``GenerateResult``.
 
         Returns
         -------
-        results : dict[str, list[int]]
-            Merged results from all completed requests.
+        list[GenerateResult]
+            Results of all finished requests, in completion order.
         """
-        start_time = time.time()
-        all_results: Dict[str, List[int]] = {}
+        self.iteration_count = 0
+        self._slots = []
+        self._ensure_buffers()
+        results: List[GenerateResult] = []
 
-        # Seed the first batch.
-        current_batch = self._fill_batch([])
-        while current_batch:
-            active_requests = [r for r in current_batch if r is not None]
-            if not active_requests:
+        while True:
+            # 1. Harvest FINISHED slots into results and compact the
+            #    buffer so active slots always occupy rows [0..K): the
+            #    decode forward can then slice its past as a zero-copy
+            #    view instead of gathering rows every step.
+            keep: List[int] = []
+            for i, slot in enumerate(self._slots):
+                if slot is None:
+                    continue
+                if slot.phase == _SlotPhase.FINISHED:
+                    results.append(
+                        GenerateResult(
+                            request_id=slot.request.request_id,
+                            token_ids=slot.request.prompt_ids[0].tolist()
+                            + slot.completion,
+                            finish_reason=slot.finish_reason,
+                            finish_iteration=slot.finish_iteration,
+                        )
+                    )
+                else:
+                    keep.append(i)
+            if len(keep) != len(self._slots):
+                if keep != list(range(len(keep))):
+                    idx = torch.tensor(keep, dtype=torch.long, device=self.device)
+                    for li in range(self._n_layer):
+                        # Fancy indexing copies, so writing the prefix
+                        # back in place is aliasing-safe.  The buffer keeps
+                        # its full batch_size row count.
+                        self._k_buf[li][: len(keep)] = self._k_buf[li][idx]
+                        self._v_buf[li][: len(keep)] = self._v_buf[li][idx]
+                self._slots = [self._slots[i] for i in keep]
+
+            # 2. Back-fill empty slots at the iteration boundary (new
+            #    requests append at the tail rows).
+            while len(self._slots) < self.batch_size and not self.queue.is_empty():
+                req = self.queue.dequeue()
+                if req is None:
+                    break
+                needed = req.prompt_ids.shape[1] + req.max_tokens
+                if needed > self._max_cache_len:
+                    raise ValueError(
+                        f"request {req.request_id!r} needs "
+                        f"{needed} cache slots (prompt + "
+                        f"max_tokens) but the effective block "
+                        f"size is {self._max_cache_len}"
+                    )
+                self._slots.append(
+                    _Slot(
+                        request=req,
+                        prompt_len=req.prompt_ids.shape[1],
+                        completion=[],
+                        cache_len=0,
+                    )
+                )
+
+            # 3. Budget / termination checks.
+            if max_steps is not None and self.iteration_count >= max_steps:
+                break
+            if not self._slots:
                 break
 
-            batch_results = self.generator.generate_batch(
-                active_requests,
-                prefix_cache=self.prefix_cache,
-                max_total_tokens=max_total_tokens,
+            self.iteration_count += 1
+
+            # 4. Snapshot the decode group first: slots accepted in this
+            #    iteration prefill below and join the decode group only in
+            #    the next iteration (their first token comes from prefill).
+            #    DECODING slots are exactly the contiguous rows [0..K).
+            n_decoding = sum(
+                1 for s in self._slots if s.phase == _SlotPhase.DECODING
             )
-            all_results.update(batch_results)
 
-            # Check timeout.
-            if (
-                timeout_seconds is not None
-                and (time.time() - start_time) > timeout_seconds
-            ):
-                break
-
-            # Back-fill finished slots and continue.
-            finished_ids = {r.request_id for r in active_requests}
-            current_batch = [
-                r if r is not None and r.request_id not in finished_ids else None
-                for r in current_batch
+            # 5. Prefill group (slots accepted since the last boundary).
+            prefill_rows = [
+                i
+                for i, s in enumerate(self._slots)
+                if s.phase == _SlotPhase.PREFILL
             ]
-            current_batch = self._fill_batch(current_batch)
+            if prefill_rows:
+                self._prefill(prefill_rows)
 
-        return all_results
+            # 6. Decode: every slot that was DECODING at the iteration
+            #    boundary advances one token.
+            if n_decoding:
+                self._decode(list(range(n_decoding)))
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _ensure_buffers(self) -> None:
+        if self._k_buf is not None:
+            return
+        dtype = next(self.model.parameters()).dtype
+        shape = (
+            self.batch_size,
+            self._n_kv_head,
+            self._max_cache_len,
+            self._head_dim,
+        )
+        self._k_buf = [
+            torch.zeros(shape, dtype=dtype, device=self.device)
+            for _ in range(self._n_layer)
+        ]
+        self._v_buf = [
+            torch.zeros(shape, dtype=dtype, device=self.device)
+            for _ in range(self._n_layer)
+        ]
+
+    def _prefill(self, rows: List[int]) -> None:
+        """Left-aligned prefill of the new-request group.
+
+        Prompts are packed from position 0 (so implicit RoPE/wpe positions
+        0..pl-1 are correct for every row); right pads are masked out and
+        their K/V are *never* written into the buffer.  The first token is
+        sampled from each row's last real position, fixing the legacy
+        off-by-one where the prompt tail was re-fed on the first decode
+        step.
+        """
+        slots = [self._slots[i] for i in rows]
+        P = len(slots)
+        max_pl = max(s.prompt_len for s in slots)
+        input_ids = torch.zeros((P, max_pl), dtype=torch.long, device=self.device)
+        attn = torch.zeros((P, max_pl), dtype=torch.bool, device=self.device)
+        for j, s in enumerate(slots):
+            pl = s.prompt_len
+            input_ids[j, :pl] = s.request.prompt_ids[0, :pl].to(self.device)
+            attn[j, :pl] = True
+
+        with torch.no_grad():
+            logits, _, raw_kvs = self.model(
+                input_ids, attention_mask=attn, use_cache=True, start_pos=0
+            )
+
+        # Write only each row's real prefix: pad positions never enter KV.
+        for li in range(self._n_layer):
+            k_new, v_new = raw_kvs[li]
+            for j, i in enumerate(rows):
+                pl = slots[j].prompt_len
+                self._k_buf[li][i, :, :pl] = k_new[j, :, :pl].to(
+                    self._k_buf[li].dtype
+                )
+                self._v_buf[li][i, :, :pl] = v_new[j, :, :pl].to(
+                    self._v_buf[li].dtype
+                )
+
+        for i in rows:
+            s = self._slots[i]
+            s.cache_len = s.prompt_len
+            s.phase = _SlotPhase.DECODING
+
+        last_logits = torch.stack(
+            [logits[j, slots[j].prompt_len - 1] for j in range(P)]
+        )
+        self._sample_and_finish(rows, last_logits)
+
+    def _decode(self, rows: List[int]) -> None:
+        """Advance every DECODING slot in ``rows`` by one token.
+
+        ``rows`` is the contiguous prefix [0..K) of the compact buffer
+        layout, so the past is a zero-copy view.  Each row feeds its last
+        generated token at its own absolute position (``positions``); the
+        shared past carries the per-row valid prefix (``kv_mask``), so
+        rows with unequal cache lengths decode correctly in one batched
+        forward.
+        """
+        slots = [self._slots[i] for i in rows]
+        D = len(rows)
+        lens_t = torch.tensor(
+            [s.cache_len for s in slots], dtype=torch.long, device=self.device
+        )
+        max_len = int(lens_t.max().item())
+
+        next_in = torch.tensor(
+            [[s.completion[-1]] for s in slots], dtype=torch.long, device=self.device
+        )
+        positions = lens_t.unsqueeze(1)  # [D, 1] absolute position per row
+        kv_mask = (
+            torch.arange(max_len, device=self.device).unsqueeze(0)
+            < lens_t.unsqueeze(1)
+        )  # [D, max_len] bool: True at each row's real prefix
+
+        past = [
+            (
+                self._k_buf[li][:D, :, :max_len, :],
+                self._v_buf[li][:D, :, :max_len, :],
+            )
+            for li in range(self._n_layer)
+        ]
+
+        with torch.no_grad():
+            logits, _, new_kvs = self.model(
+                next_in,
+                past_kvs=past,
+                use_cache=True,
+                positions=positions,
+                kv_mask=kv_mask,
+            )
+
+        # Write each row's new K/V at that row's own cache_len: one
+        # vectorized indexed assignment per layer (no per-row loop).
+        for li in range(self._n_layer):
+            k_new, v_new = new_kvs[li]  # [D, n_kv_head, 1, head_dim]
+            self._k_buf[li][
+                torch.arange(D, device=self.device), :, lens_t
+            ] = k_new[:, :, 0]
+            self._v_buf[li][
+                torch.arange(D, device=self.device), :, lens_t
+            ] = v_new[:, :, 0]
+        for i in rows:
+            self._slots[i].cache_len += 1
+
+        self._sample_and_finish(rows, logits[:, -1, :])
+
+    def _sample_and_finish(self, rows: List[int], logits: torch.Tensor) -> None:
+        """Vectorized sampling + per-slot finish bookkeeping.
+
+        ``logits`` is [len(rows), V]: one row per slot, gathered at each
+        slot's own last real position.  Temperature/top-k/top-p travel as
+        [B] tensors through ``_sample_logits_batched`` (no per-request
+        Python sampling loop).
+        """
+        slots = [self._slots[i] for i in rows]
+        logits = self._apply_repetition_penalty(logits, slots)
+
+        temps = torch.tensor(
+            [s.request.temperature for s in slots],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        top_ks = torch.tensor(
+            [
+                s.request.top_k if s.request.top_k is not None else 0
+                for s in slots
+            ],
+            dtype=torch.long,
+            device=self.device,
+        )
+        top_ps = torch.tensor(
+            [
+                s.request.top_p if s.request.top_p is not None else 1.0
+                for s in slots
+            ],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        tokens = _sample_logits_batched(logits, temps, top_ks=top_ks, top_ps=top_ps)
+        toks = tokens.tolist()
+
+        for j, i in enumerate(rows):
+            s = self._slots[i]
+            tok = int(toks[j])
+            s.completion.append(tok)
+            eos = s.request.eos_token_id
+            if eos is not None and tok == eos:
+                s.phase = _SlotPhase.FINISHED
+                s.finish_reason = "eos"
+                s.finish_iteration = self.iteration_count
+            elif len(s.completion) >= s.request.max_tokens:
+                s.phase = _SlotPhase.FINISHED
+                s.finish_reason = "length"
+                s.finish_iteration = self.iteration_count
+
+    def _apply_repetition_penalty(
+        self, logits: torch.Tensor, slots: List[_Slot]
+    ) -> torch.Tensor:
+        """Divide the logits of each slot's seen token ids by that slot's
+        penalty factor.  Vectorized gather/scatter over a padded [B, L]
+        index tensor; slots without a penalty pass through unchanged."""
+        pens = [s.request.repetition_penalty for s in slots]
+        if all(p is None or p == 1.0 for p in pens):
+            return logits
+
+        seqs = [
+            s.request.prompt_ids[0].tolist() + s.completion for s in slots
+        ]
+        maxlen = max(len(q) for q in seqs)
+        B = len(slots)
+        idx = torch.zeros((B, maxlen), dtype=torch.long, device=self.device)
+        valid = torch.zeros((B, maxlen), dtype=torch.bool, device=self.device)
+        for j, q in enumerate(seqs):
+            idx[j, : len(q)] = torch.as_tensor(q, dtype=torch.long, device=self.device)
+            valid[j, : len(q)] = True
+        pen = torch.tensor(
+            [p if p is not None and p != 1.0 else 1.0 for p in pens],
+            dtype=logits.dtype,
+            device=self.device,
+        ).unsqueeze(1)
+        gathered = logits.gather(1, idx)
+        scaled = torch.where(valid, gathered / pen, gathered)
+        return logits.scatter(1, idx, scaled)
 
 
 class ContinuousBatchingServer:
-    """High-level server wrapper that exposes a simple ``submit/generate`` API.
-
-    This is intended for local/offline serving; for HTTP serving see the
-    OpenAI-compatible API server in ``api_server.py`` (future work).
+    """High-level wrapper exposing a simple ``submit``/``generate_pending``
+    API for local/offline serving (for HTTP serving see ``api_server.py``).
     """
 
     def __init__(
         self,
         model: nn.Module,
-        device: Union[str, torch.device] = "cuda",
+        device: Union[str, torch.device] = "cpu",
         batch_size: int = 4,
-        use_compile: bool = False,
     ):
         self.model = model
         self.queue = RequestQueue()
         self.scheduler = ContinuousBatchScheduler(
-            self.queue,
-            model,
-            device=device,
-            batch_size=batch_size,
-            use_compile=use_compile,
+            self.queue, model, device=device, batch_size=batch_size
         )
 
     def submit(self, req: Request) -> None:
         """Enqueue a new request."""
         self.queue.enqueue(req)
 
-    def generate_pending(
-        self, max_total_tokens: Optional[int] = None
-    ) -> Dict[str, List[int]]:
+    def generate_pending(self, max_steps: Optional[int] = None) -> List[GenerateResult]:
         """Run the scheduler on all pending requests and return results."""
-        return self.scheduler.run(max_total_tokens=max_total_tokens)
+        return self.scheduler.run(max_steps=max_steps)

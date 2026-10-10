@@ -45,6 +45,79 @@ def _sample_logits(
     return torch.multinomial(probs, num_samples=1).squeeze(-1)
 
 
+def _sample_logits_batched(
+    logits: torch.Tensor,
+    temperatures: torch.Tensor,
+    top_ks: Optional[torch.Tensor] = None,
+    top_ps: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Sample one token per row from logits [B, V] with per-row controls.
+
+    Row semantics match :func:`_sample_logits` exactly:
+
+    * ``temperatures[b] == 0`` -> strict argmax (top_k/top_p ignored);
+    * ``top_ks[b] <= 0`` and ``top_ps[b] >= 1.0`` mean "no filtering";
+    * otherwise: temperature scaling, top-k and top-p filtering, then a
+      single vectorized ``torch.multinomial`` over the whole batch (no
+      per-row Python loop; FR7).
+
+    Parameters
+    ----------
+    logits : [B, V] unnormalized scores.
+    temperatures : [B] float tensor.
+    top_ks : [B] long tensor or None (None -> no row filters).
+    top_ps : [B] float tensor or None.
+
+    Returns
+    -------
+    [B] long tensor of sampled token ids.
+    """
+    B, V = logits.shape
+    temps = torch.as_tensor(temperatures, device=logits.device).to(logits.dtype)
+    greedy = temps == 0
+    # Divide only where temperature > 0 (avoid 0-division NaNs); greedy
+    # rows are overwritten by argmax at the end regardless.
+    safe_temps = torch.where(greedy, torch.ones_like(temps), temps)
+    scaled = logits / safe_temps.unsqueeze(1)
+
+    if top_ks is not None:
+        ks = torch.as_tensor(top_ks, device=logits.device, dtype=torch.long)
+        k_max = int(ks.max().item()) if ks.numel() else 0
+        if k_max > 0:
+            k_cap = min(k_max, V)
+            top_v, top_i = torch.topk(scaled, k_cap, dim=-1)
+            # Column j of top_v holds the (j+1)-th largest logit of each
+            # row; a row with top_k = k only keeps columns j < k.
+            ranks = torch.arange(k_cap, device=logits.device).unsqueeze(0)
+            keep = ranks < ks.clamp(min=0).unsqueeze(1)
+            top_v = top_v.masked_fill(~keep, float("-Inf"))
+            filt = torch.full_like(scaled, float("-Inf"))
+            filt.scatter_(1, top_i, top_v)
+            scaled = filt
+
+    if top_ps is not None:
+        ps = torch.as_tensor(top_ps, device=logits.device).to(logits.dtype)
+        if bool((ps < 1.0).any().item()):
+            sorted_logits, sorted_idx = torch.sort(scaled, descending=True, dim=-1)
+            sorted_probs = F.softmax(sorted_logits, dim=-1)
+            cum_probs = torch.cumsum(sorted_probs, dim=-1)
+            # A token is dropped when the cumulative mass *before* it
+            # already exceeds top_p (mirrors the shifted mask in
+            # _sample_logits); the top-1 token is always kept.
+            smask = cum_probs > ps.unsqueeze(1)
+            smask = torch.cat(
+                [torch.zeros_like(smask[:, :1]), smask[:, :-1]], dim=1
+            )
+            sorted_logits = sorted_logits.masked_fill(smask, float("-Inf"))
+            scaled = torch.full_like(scaled, float("-Inf")).scatter(
+                1, sorted_idx, sorted_logits
+            )
+
+    probs = F.softmax(scaled, dim=-1)
+    sampled = torch.multinomial(probs, num_samples=1).squeeze(-1)
+    return torch.where(greedy, logits.argmax(dim=-1), sampled)
+
+
 def batched_generate(
     model: nn.Module,
     prompts: List[str],
