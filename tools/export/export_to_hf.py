@@ -2,7 +2,6 @@
 
 import argparse
 import os
-
 import os as _os
 import sys as _sys
 
@@ -10,9 +9,7 @@ import sys as _sys
 # FR10 move into tools/export/ (three levels up to the root).
 _sys.path.insert(
     0,
-    _os.path.dirname(
-        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    ),
+    _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))),
 )
 
 from model.hf_model import NanoGPTModernConfig, NanoGPTModernForCausalLM

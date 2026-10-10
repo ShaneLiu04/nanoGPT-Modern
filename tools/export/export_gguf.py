@@ -9,20 +9,17 @@ from __future__ import annotations
 
 import argparse
 import os
+import os as _os
+import sys as _sys
 from pathlib import Path
 
 import torch
-
-import os as _os
-import sys as _sys
 
 # Repo root on sys.path so this script runs from any cwd after the
 # FR10 move into tools/export/ (three levels up to the root).
 _sys.path.insert(
     0,
-    _os.path.dirname(
-        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    ),
+    _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))),
 )
 
 from model.gguf_utils import GGMLQuantizationType, GGUFWriter

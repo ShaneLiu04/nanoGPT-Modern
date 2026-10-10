@@ -22,12 +22,12 @@ import json
 import os
 import random
 from contextlib import nullcontext
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset, Dataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from model.attention_utils import print_attention_backend, set_attention_backend
 from training.args import add_common_trainer_args
@@ -76,15 +76,9 @@ def get_args():
         "--warmup_iters", type=int, default=0, help="Linear warmup steps (0 = none)"
     )
     parser.add_argument("--weight_decay", type=float, default=0.1)
-    parser.add_argument(
-        "--beta", type=float, default=0.1, help="DPO/IPO/KTO temperature"
-    )
-    parser.add_argument(
-        "--preference_loss", type=str, default="dpo", choices=["dpo", "ipo", "kto"]
-    )
-    parser.add_argument(
-        "--label_smoothing", type=float, default=0.0, help="DPO label smoothing"
-    )
+    parser.add_argument("--beta", type=float, default=0.1, help="DPO/IPO/KTO temperature")
+    parser.add_argument("--preference_loss", type=str, default="dpo", choices=["dpo", "ipo", "kto"])
+    parser.add_argument("--label_smoothing", type=float, default=0.0, help="DPO label smoothing")
     parser.add_argument("--eval_interval", type=int, default=50)
     # Dataset sources
     parser.add_argument(
@@ -129,9 +123,7 @@ def get_args():
     return parse_args_with_config(parser)
 
 
-def _build_synthetic_preference_dataset(
-    num_samples: int, seq_len: int, vocab_size: int, seed: int
-):
+def _build_synthetic_preference_dataset(num_samples: int, seq_len: int, vocab_size: int, seed: int):
     """Create a synthetic preference dataset for testing/demonstration."""
     torch.manual_seed(seed)
     chosen = torch.randint(0, vocab_size, (num_samples, seq_len))
@@ -142,13 +134,13 @@ def _build_synthetic_preference_dataset(
 class PreferenceDataset(Dataset):
     """Simple wrapper around a list of (chosen, rejected) token-id tensors."""
 
-    def __init__(self, pairs: List[Tuple[torch.Tensor, torch.Tensor]]):
+    def __init__(self, pairs: list[tuple[torch.Tensor, torch.Tensor]]):
         self.pairs = pairs
 
     def __len__(self) -> int:
         return len(self.pairs)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self.pairs[idx]
 
 
@@ -208,7 +200,7 @@ def _build_preference_dataset_from_grpo(
         loser_ids = flat_responses[loser_idx]
 
         # Pad / truncate to max_length.
-        def pad_or_trim(ids: List[int]) -> torch.Tensor:
+        def pad_or_trim(ids: list[int]) -> torch.Tensor:
             if len(ids) >= max_length:
                 return torch.tensor(ids[:max_length], dtype=torch.long)
             return torch.tensor(ids + [0] * (max_length - len(ids)), dtype=torch.long)
@@ -248,11 +240,10 @@ class DPOTrainer(BaseTrainer):
             )
         elif args.preference_source == "grpo":
             if args.grpo_checkpoint is None:
-                raise ValueError(
-                    "--grpo_checkpoint is required when --preference_source=grpo"
-                )
+                raise ValueError("--grpo_checkpoint is required when --preference_source=grpo")
             # Load GRPO trainer to generate preference pairs.
-            from training.train_grpo import GRPOTrainer, get_args as grpo_get_args
+            from training.train_grpo import GRPOTrainer
+            from training.train_grpo import get_args as grpo_get_args
 
             # Build a minimal GRPO args object from the loaded checkpoint.
             grpo_ckpt = torch.load(
@@ -327,9 +318,7 @@ class DPOTrainer(BaseTrainer):
 
     def _build_scheduler(self):
         args = self.args
-        total_steps = (
-            len(self.train_loader) * args.epochs // args.gradient_accumulation_steps
-        )
+        total_steps = len(self.train_loader) * args.epochs // args.gradient_accumulation_steps
         self.scheduler = LRScheduler(
             schedule=args.lr_schedule,
             learning_rate=args.learning_rate,
@@ -433,9 +422,7 @@ class DPOTrainer(BaseTrainer):
                     if self.scaler is not None:
                         self.scaler.unscale_(self.optimizer)
                     self._step_grad_norm = float(
-                        torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(), self.args.grad_clip
-                        )
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.grad_clip)
                     )
                     if self.scaler is not None:
                         self.scaler.step(self.optimizer)
@@ -450,8 +437,7 @@ class DPOTrainer(BaseTrainer):
                         self.log_scalars({"train/lr": lr}, self.global_step)
                         self.on_step_end(
                             self.global_step,
-                            loss.detach().item()
-                            * self.args.gradient_accumulation_steps,
+                            loss.detach().item() * self.args.gradient_accumulation_steps,
                             lr=lr,
                             grad_norm=getattr(self, "_step_grad_norm", None),
                         )
@@ -471,9 +457,7 @@ class DPOTrainer(BaseTrainer):
             num_batches += 1
 
             if self.master_process and is_train and num_batches % 10 == 0:
-                self.log_scalars(
-                    {f"train/{k}": v for k, v in metrics.items()}, self.global_step
-                )
+                self.log_scalars({f"train/{k}": v for k, v in metrics.items()}, self.global_step)
 
         return total_loss / max(num_batches, 1)
 
@@ -482,7 +466,7 @@ class DPOTrainer(BaseTrainer):
         with torch.no_grad():
             return self._run_epoch(0, is_train=False)
 
-    def _evaluate_win_rate(self, num_samples: int = 50) -> Dict[str, Any]:
+    def _evaluate_win_rate(self, num_samples: int = 50) -> dict[str, Any]:
         """Compare policy vs reference on a held-out prompt set and return win rate.
 
         Uses the ``evaluation.eval_win_rate`` module with a rule-based judge.
@@ -495,7 +479,7 @@ class DPOTrainer(BaseTrainer):
             return {"error": "tiktoken not available for win-rate evaluation"}
 
         try:
-            from evaluation.eval_win_rate import WinRateEvaluator, RuleJudge
+            from evaluation.eval_win_rate import RuleJudge, WinRateEvaluator
 
             prompts = [f"What is {i} + {i+1}?" for i in range(num_samples)]
             evaluator = WinRateEvaluator(
@@ -521,7 +505,8 @@ class DPOTrainer(BaseTrainer):
             return {"error": str(e)}
 
     def train(self) -> None:
-        """Full DPO training loop with periodic evaluation, checkpointing, and optional win-rate metrics."""
+        """Full DPO training loop with periodic evaluation, checkpointing,
+        and optional win-rate metrics."""
         args = self.args
         for epoch in range(self.start_epoch, args.epochs):
             train_loss = self._run_epoch(epoch, is_train=True)
@@ -538,9 +523,7 @@ class DPOTrainer(BaseTrainer):
                 if (epoch + 1) % max(
                     1, args.win_rate_interval // len(self.train_loader)
                 ) == 0 or epoch == args.epochs - 1:
-                    win_rate_metrics = self._evaluate_win_rate(
-                        num_samples=args.win_rate_samples
-                    )
+                    win_rate_metrics = self._evaluate_win_rate(num_samples=args.win_rate_samples)
                     print(f"win_rate metrics: {win_rate_metrics}")
                     self.log_scalars(
                         {
@@ -551,9 +534,7 @@ class DPOTrainer(BaseTrainer):
                         self.global_step,
                     )
                     # Save win-rate results to JSON.
-                    wr_path = os.path.join(
-                        args.out_dir, f"win_rate_step{self.global_step}.json"
-                    )
+                    wr_path = os.path.join(args.out_dir, f"win_rate_step{self.global_step}.json")
                     with open(wr_path, "w", encoding="utf-8") as f:
                         json.dump(win_rate_metrics, f, indent=2)
 

@@ -16,17 +16,16 @@ import argparse
 
 import torch
 
-
 from data.arithmetic import (
-    generate_easy,
-    generate_medium,
-    generate_hard,
     ArithmeticDataset,
     collate_fn,
+    generate_easy,
+    generate_hard,
+    generate_medium,
 )
 from rewards.rule_reward import compute_reward_batch
-from training.train_grpo import GRPOTrainer
 from training.args import add_common_trainer_args
+from training.train_grpo import GRPOTrainer
 from training.trainer_base import enable_tf32
 from utils.config import parse_args_with_config
 
@@ -38,9 +37,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     add_common_trainer_args(parser)
     # Base GRPO arguments
-    parser.add_argument(
-        "--init_from", type=str, required=True, help="SFT checkpoint path"
-    )
+    parser.add_argument("--init_from", type=str, required=True, help="SFT checkpoint path")
     parser.add_argument(
         "--ref_from",
         type=str,
@@ -52,9 +49,7 @@ def get_args():
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--min_lr", type=float, default=1e-6)
     parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument(
-        "--beta", type=float, default=0.04, help="KL penalty coefficient"
-    )
+    parser.add_argument("--beta", type=float, default=0.04, help="KL penalty coefficient")
     parser.add_argument("--eval_interval", type=int, default=100)
     parser.add_argument("--num_train", type=int, default=2000)
     parser.add_argument("--num_val", type=int, default=300)
@@ -150,9 +145,7 @@ class IterativeGRPOTrainer(GRPOTrainer):
             ratio = self.args.ref_update_ratio
 
         if ratio >= 1.0:
-            self.ref.load_state_dict(
-                {k: v.clone() for k, v in self.raw_model.state_dict().items()}
-            )
+            self.ref.load_state_dict({k: v.clone() for k, v in self.raw_model.state_dict().items()})
         else:
             policy_sd = self.raw_model.state_dict()
             for k, v in self.ref.state_dict().items():
@@ -201,18 +194,14 @@ class IterativeGRPOTrainer(GRPOTrainer):
                     gen_batch_size=min(sft_batch_size, args.rejection_samples),
                 )
 
-                rewards, _, _, _ = compute_reward_batch(
-                    responses, [answer] * len(responses)
-                )
+                rewards, _, _, _ = compute_reward_batch(responses, [answer] * len(responses))
                 samples = list(zip(responses, rewards, response_ids_list))
                 samples.sort(key=lambda x: x[1], reverse=True)
                 top_samples = samples[: args.rejection_top_k]
 
                 for resp_text, r, _ in top_samples:
                     if r > 0:
-                        sft_data.append(
-                            {"prompt": prompt, "response": resp_text, "reward": r}
-                        )
+                        sft_data.append({"prompt": prompt, "response": resp_text, "reward": r})
 
         if len(sft_data) == 0:
             print("  No high-reward samples found, skipping SFT phase.")
@@ -264,9 +253,7 @@ class IterativeGRPOTrainer(GRPOTrainer):
             else:
                 loss.backward()
                 if args.grad_clip > 0:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.policy.parameters(), args.grad_clip
-                    )
+                    torch.nn.utils.clip_grad_norm_(self.policy.parameters(), args.grad_clip)
                 sft_optimizer.step()
 
             total_sft_loss += loss.item()
@@ -284,11 +271,7 @@ class IterativeGRPOTrainer(GRPOTrainer):
         args = self.args
         extra_metrics = {}
 
-        if (
-            args.ref_update_interval > 0
-            and step > 0
-            and step % args.ref_update_interval == 0
-        ):
+        if args.ref_update_interval > 0 and step > 0 and step % args.ref_update_interval == 0:
             self.ref_updates_done += 1
             print(
                 f"\n--- Updating reference model (round {self.ref_updates_done}, step {step}) ---"
@@ -296,15 +279,9 @@ class IterativeGRPOTrainer(GRPOTrainer):
             self.update_reference_model()
             extra_metrics["iter/ref_updates"] = self.ref_updates_done
 
-        if (
-            args.rejection_interval > 0
-            and step > 0
-            and step % args.rejection_interval == 0
-        ):
+        if args.rejection_interval > 0 and step > 0 and step % args.rejection_interval == 0:
             self.rejection_rounds_done += 1
-            print(
-                f"\n--- Rejection sampling round {self.rejection_rounds_done} (step {step}) ---"
-            )
+            print(f"\n--- Rejection sampling round {self.rejection_rounds_done} (step {step}) ---")
             sft_loss = self.rejection_sampling_sft(self.rejection_pool)
             extra_metrics["rejection/sft_loss"] = sft_loss
             extra_metrics["rejection/rounds"] = self.rejection_rounds_done
@@ -345,9 +322,7 @@ def main():
         )
         if trainer.recorder is not None:
             trainer.recorder.write_manifest(
-                artifacts={
-                    "final_checkpoint": f"final_iterative_grpo_g{args.group_size}.pt"
-                }
+                artifacts={"final_checkpoint": f"final_iterative_grpo_g{args.group_size}.pt"}
             )
         trainer.cleanup()
 

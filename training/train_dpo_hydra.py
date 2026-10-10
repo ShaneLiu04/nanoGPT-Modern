@@ -7,8 +7,7 @@ from typing import Any
 import hydra
 from omegaconf import DictConfig
 
-
-from model.attention_utils import set_attention_backend, print_attention_backend
+from model.attention_utils import print_attention_backend, set_attention_backend
 from training.train_dpo import DPOTrainer
 from utils.hydra_utils import to_namespace
 

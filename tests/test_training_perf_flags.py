@@ -31,10 +31,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-
-from model.modern_gpt import ModernGPT, ModernGPTConfig
 from helpers import tiny_modern_config
 
+from model.modern_gpt import ModernGPT
 
 # ---------------------------------------------------------------------------
 #  Shared helpers
@@ -143,9 +142,7 @@ class TestGQANativeMode:
             calls.append(kwargs)
             return orig_sdpa(*args, **kwargs)
 
-        monkeypatch.setattr(
-            torch.nn.functional, "scaled_dot_product_attention", recording_sdpa
-        )
+        monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention", recording_sdpa)
         with torch.no_grad():
             model(x)
         assert any(kw.get("enable_gqa") is True for kw in calls)
@@ -180,9 +177,7 @@ class TestGQANativeMode:
         ``from .attention_utils import sdpa_supports_enable_gqa`` so
         patching the attribute on the modern_gpt module is effective.
         """
-        monkeypatch.setattr(
-            "model.modern_gpt.sdpa_supports_enable_gqa", lambda: False
-        )
+        monkeypatch.setattr("model.modern_gpt.sdpa_supports_enable_gqa", lambda: False)
         model = _make_gqa_model()
         assert model.transformer.h[0].attn._gqa_mode == "grouped"
 
@@ -214,9 +209,7 @@ class TestGQANativeMode:
                 raise RuntimeError("simulated enable_gqa runtime failure")
             return orig_sdpa(*args, **kwargs)
 
-        monkeypatch.setattr(
-            torch.nn.functional, "scaled_dot_product_attention", flaky_sdpa
-        )
+        monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention", flaky_sdpa)
         with pytest.warns(UserWarning, match="enable_gqa"):
             with torch.no_grad():
                 logits, _, _ = model(x)
@@ -242,9 +235,7 @@ class TestGQANativeMode:
                 raise RuntimeError("simulated enable_gqa runtime failure")
             return orig_sdpa(*args, **kwargs)
 
-        monkeypatch.setattr(
-            torch.nn.functional, "scaled_dot_product_attention", flaky_sdpa
-        )
+        monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention", flaky_sdpa)
         with pytest.warns(UserWarning, match="enable_gqa"):
             with torch.no_grad():
                 model(x)
@@ -263,12 +254,11 @@ class TestGQANativeMode:
         torch.compile; it must be gone.  We patch the probe to raise
         AssertionError and require a clean forward.
         """
+
         def _probe_must_not_run(*args, **kwargs):
             raise AssertionError("probe must not be called")
 
-        monkeypatch.setattr(
-            "model.attention_utils.probe_gqa_sdpa_support", _probe_must_not_run
-        )
+        monkeypatch.setattr("model.attention_utils.probe_gqa_sdpa_support", _probe_must_not_run)
         model = _make_gqa_model()
         model.eval()
         x = _make_input()
@@ -577,9 +567,7 @@ class TestGetDataloaderDataPath:
         loader2 = self._make_loader(data_dir, num_workers=2, persistent_workers=None)
         assert loader2.persistent_workers is True
         # Explicit override wins even with a positive worker count.
-        loader_off = self._make_loader(
-            data_dir, num_workers=2, persistent_workers=False
-        )
+        loader_off = self._make_loader(data_dir, num_workers=2, persistent_workers=False)
         assert loader_off.persistent_workers is False
 
     def test_pin_memory_stays_true(self, tmp_path):
@@ -660,13 +648,8 @@ class TestPretrainEvalSlimming:
             assert len(trainer.train_eval_loader.dataset) == _T009_N_TRAIN_CHUNKS
             assert len(trainer.val_loader.dataset) == _T009_N_VAL_CHUNKS
             # Dedicated dataset instance, offset fixed at build time.
-            assert (
-                trainer.train_eval_loader.dataset is not trainer.train_loader.dataset
-            )
-            assert (
-                trainer.train_eval_loader.dataset.resume_offset
-                == trainer.resume_offset
-            )
+            assert trainer.train_eval_loader.dataset is not trainer.train_loader.dataset
+            assert trainer.train_eval_loader.dataset.resume_offset == trainer.resume_offset
         finally:
             trainer.cleanup()
 
@@ -749,12 +732,8 @@ class TestPretrainEvalSlimming:
             monkeypatch.setattr(torch.distributed, "all_reduce", fake_all_reduce)
 
             out = trainer.estimate_loss()
-            assert math.isclose(
-                out["train"], base["train"], rel_tol=1e-5, abs_tol=1e-6
-            )
-            assert math.isclose(
-                out["val"], base["val"], rel_tol=1e-5, abs_tol=1e-6
-            )
+            assert math.isclose(out["train"], base["train"], rel_tol=1e-5, abs_tol=1e-6)
+            assert math.isclose(out["val"], base["val"], rel_tol=1e-5, abs_tol=1e-6)
             # Exactly one all_reduce per split (train, val).
             assert len(calls) == 2
             for op in calls:
@@ -770,7 +749,6 @@ class TestPretrainEvalSlimming:
 import copy
 import gc
 import re
-
 
 # ---------------------------------------------------------------------------
 #  T022 (FR8): EMA foreach update (ModernGPT.update_ema)
@@ -808,9 +786,7 @@ class TestEMAForeachUpdate:
         with torch.no_grad():
             for name, param in model.named_parameters():
                 if param.requires_grad:
-                    model.ema_shadow[name].mul_(decay).add_(
-                        param.data, alpha=1.0 - decay
-                    )
+                    model.ema_shadow[name].mul_(decay).add_(param.data, alpha=1.0 - decay)
 
     def test_update_ema_uses_foreach_lerp(self, monkeypatch):
         """update_ema must invoke torch._foreach_lerp_ at least once.
@@ -855,9 +831,7 @@ class TestEMAForeachUpdate:
 
         assert set(model_a.ema_shadow) == set(model_b.ema_shadow)
         for name in model_a.ema_shadow:
-            assert torch.allclose(
-                model_a.ema_shadow[name], model_b.ema_shadow[name], atol=1e-6
-            )
+            assert torch.allclose(model_a.ema_shadow[name], model_b.ema_shadow[name], atol=1e-6)
 
     def test_update_ema_multiple_steps(self):
         """Equivalence must hold across consecutive updates, not just one."""
@@ -922,11 +896,7 @@ class TestEMAForeachUpdate:
                 if param.requires_grad:
                     param.data.add_(torch.randn_like(param.data) * 0.3)
         # Values at the moment apply_ema_weights is called ("pre-apply").
-        pre_apply = {
-            n: p.data.clone()
-            for n, p in model.named_parameters()
-            if p.requires_grad
-        }
+        pre_apply = {n: p.data.clone() for n, p in model.named_parameters() if p.requires_grad}
         pre_shadow = {n: t.clone() for n, t in model.ema_shadow.items()}
 
         model.apply_ema_weights()

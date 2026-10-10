@@ -18,16 +18,16 @@ ATTN_BACKEND_CHOICES = ["auto", "flash", "mem_efficient", "math", "default"]
 
 def add_common_trainer_args(parser: argparse.ArgumentParser) -> None:
     """Add the trainer flags shared by all five training scripts."""
-    parser.add_argument("--seed", type=int, default=1337,
-                        help="Random seed for reproducibility")
+    parser.add_argument("--seed", type=int, default=1337, help="Random seed for reproducibility")
     parser.add_argument(
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Compute device (default: cuda if available, else cpu)",
     )
-    parser.add_argument("--backend", type=str, default="nccl",
-                        help="Distributed communication backend")
+    parser.add_argument(
+        "--backend", type=str, default="nccl", help="Distributed communication backend"
+    )
     parser.add_argument(
         "--grad_clip",
         type=float,
@@ -71,8 +71,7 @@ def add_common_trainer_args(parser: argparse.ArgumentParser) -> None:
         "--ckpt_interval",
         type=int,
         default=0,
-        help="Save latest_ckpt.pt every N iters between eval points "
-        "(0 = follow eval_interval)",
+        help="Save latest_ckpt.pt every N iters between eval points " "(0 = follow eval_interval)",
     )
     parser.add_argument(
         "--gradient_accumulation_steps",

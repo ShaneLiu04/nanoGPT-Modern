@@ -16,34 +16,27 @@ from __future__ import annotations
 
 import argparse
 import os
-from typing import Dict, Tuple, Union, cast
+import os as _os
+import sys as _sys
+from typing import cast
 
 import torch
 import torch.nn as nn
 from torch.onnx import export as onnx_export
 
-import os as _os
-import sys as _sys
-
 # Repo root on sys.path so this script runs from any cwd after the
 # FR10 move into tools/export/ (three levels up to the root).
 _sys.path.insert(
     0,
-    _os.path.dirname(
-        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    ),
+    _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))),
 )
 
 from training.trainer_base import load_model_from_checkpoint
 
 
 def get_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Export nanoGPT-Modern checkpoint to ONNX"
-    )
-    parser.add_argument(
-        "--checkpoint", type=str, required=True, help="Path to .pt checkpoint"
-    )
+    parser = argparse.ArgumentParser(description="Export nanoGPT-Modern checkpoint to ONNX")
+    parser.add_argument("--checkpoint", type=str, required=True, help="Path to .pt checkpoint")
     parser.add_argument(
         "--model",
         type=str,
@@ -51,21 +44,15 @@ def get_args() -> argparse.Namespace:
         choices=["baseline", "modern"],
         help="Model architecture",
     )
-    parser.add_argument(
-        "--out_path", type=str, default=None, help="Output .onnx file path"
-    )
+    parser.add_argument("--out_path", type=str, default=None, help="Output .onnx file path")
     parser.add_argument(
         "--opset",
         type=int,
         default=17,
         help="ONNX opset version (default 17)",
     )
-    parser.add_argument(
-        "--batch_size", type=int, default=2, help="Dummy batch size for tracing"
-    )
-    parser.add_argument(
-        "--seq_len", type=int, default=8, help="Dummy sequence length for tracing"
-    )
+    parser.add_argument("--batch_size", type=int, default=2, help="Dummy batch size for tracing")
+    parser.add_argument("--seq_len", type=int, default=8, help="Dummy sequence length for tracing")
     parser.add_argument(
         "--validate",
         action="store_true",
@@ -121,7 +108,7 @@ class _OnnxCacheWrapper(nn.Module):
         self,
         idx: torch.Tensor,
         *past_kvs: torch.Tensor,
-    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, ...]]:
         """Forward with explicit past KV pairs.
 
         Parameters
@@ -143,9 +130,7 @@ class _OnnxCacheWrapper(nn.Module):
             idx, past_kvs=past_kv_list, use_cache=True, start_pos=0
         )
         # Flatten new KV pairs into a tuple
-        flat = cast(
-            Tuple[torch.Tensor, ...], tuple(t for pair in new_past_kvs for t in pair)
-        )
+        flat = cast(tuple[torch.Tensor, ...], tuple(t for pair in new_past_kvs for t in pair))
         return logits, flat
 
 
@@ -186,9 +171,7 @@ def export_to_onnx(
     wrapper: nn.Module
     if use_cache:
         wrapper = _OnnxCacheWrapper(model)
-        dummy_idx = torch.randint(
-            0, vocab_size, (batch_size, 1), dtype=torch.long, device=device
-        )
+        dummy_idx = torch.randint(0, vocab_size, (batch_size, 1), dtype=torch.long, device=device)
         dummy_past = []
         for _ in range(model.config.n_layer):
             past_k = torch.zeros(
@@ -215,7 +198,7 @@ def export_to_onnx(
             + [f"present_k_{i}" for i in range(n_layers)]
             + [f"present_v_{i}" for i in range(n_layers)]
         )
-        dynamic_axes: Dict[str, Dict[int, str]] = {}
+        dynamic_axes: dict[str, dict[int, str]] = {}
         dynamic_axes["input_ids"] = {0: "batch_size", 1: "seq_len"}
         for i in range(n_layers):
             dynamic_axes[f"past_k_{i}"] = {0: "batch_size", 2: "past_seq_len"}
@@ -279,9 +262,7 @@ def validate_onnx(
 
     device = next(model.parameters()).device
     vocab_size = model.config.vocab_size
-    dummy_idx = torch.randint(
-        0, vocab_size, (batch_size, seq_len), dtype=torch.long, device=device
-    )
+    dummy_idx = torch.randint(0, vocab_size, (batch_size, seq_len), dtype=torch.long, device=device)
 
     with torch.no_grad():
         pt_out = model(dummy_idx)

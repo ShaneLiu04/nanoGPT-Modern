@@ -61,20 +61,16 @@ def die(msg: str) -> None:
 
 def mgit(*args: str, input_bytes: bytes | None = None, check: bool = True) -> bytes:
     """git invocation inside the mirror repo (shares objects via alternates)."""
-    r = subprocess.run(
-        ["git", "-C", MIRROR_DIR, *args], input=input_bytes, capture_output=True
-    )
+    r = subprocess.run(["git", "-C", MIRROR_DIR, *args], input=input_bytes, capture_output=True)
     if check and r.returncode != 0:
         raise RuntimeError(
-            "git %s failed: %s" % (args, r.stderr.decode(errors="replace")[:400])
+            "git {} failed: {}".format(args, r.stderr.decode(errors="replace")[:400])
         )
     return r.stdout
 
 
 def push(refspec: str) -> tuple[bool, str]:
-    r = subprocess.run(
-        ["git", "-C", MIRROR_DIR, "push", REMOTE_NAME, refspec], capture_output=True
-    )
+    r = subprocess.run(["git", "-C", MIRROR_DIR, "push", REMOTE_NAME, refspec], capture_output=True)
     out = (r.stdout + r.stderr).decode(errors="replace")
     return r.returncode == 0, out
 
@@ -108,12 +104,10 @@ def init_mirror() -> None:
 
 def gg(*args: str, input_bytes: bytes | None = None, check: bool = True) -> bytes:
     """git invocation inside the main repo (read side)."""
-    r = subprocess.run(
-        ["git", "-C", MAIN_REPO, *args], input=input_bytes, capture_output=True
-    )
+    r = subprocess.run(["git", "-C", MAIN_REPO, *args], input=input_bytes, capture_output=True)
     if check and r.returncode != 0:
         raise RuntimeError(
-            "git %s failed: %s" % (args, r.stderr.decode(errors="replace")[:400])
+            "git {} failed: {}".format(args, r.stderr.decode(errors="replace")[:400])
         )
     return r.stdout
 
@@ -157,9 +151,7 @@ def scan_replacements() -> dict[str, str]:
                     f"untransportable blob {sha[:10]} at '{path}' "
                     f"({int(size)//1024}KB) has no replacement rule; add one"
                 )
-            new_sha = mgit(
-                "hash-object", "-w", "--stdin", input_bytes=new_blob
-            ).decode().strip()
+            new_sha = mgit("hash-object", "-w", "--stdin", input_bytes=new_blob).decode().strip()
             repl[sha] = new_sha
             print(
                 f"  replace {path}: {int(size)//1024}KB -> "
@@ -231,9 +223,7 @@ class MirrorChain:
             self.tree_memo[tree_sha] = tree_sha
             return tree_sha
         new_sha = (
-            mgit("mktree", "-z", input_bytes=b"\x00".join(new_entries) + b"\x00")
-            .decode()
-            .strip()
+            mgit("mktree", "-z", input_bytes=b"\x00".join(new_entries) + b"\x00").decode().strip()
         )
         self.tree_memo[tree_sha] = new_sha
         return new_sha
@@ -244,17 +234,24 @@ class MirrorChain:
         if prev is None:
             subprocess.run(
                 ["git", "-C", MIRROR_DIR, "read-tree", "--empty"],
-                env=env, capture_output=True, check=True,
+                env=env,
+                capture_output=True,
+                check=True,
             )
         else:
             subprocess.run(
                 ["git", "-C", MIRROR_DIR, "read-tree", prev],
-                env=env, capture_output=True, check=True,
+                env=env,
+                capture_output=True,
+                check=True,
             )
         index_info = "".join(f"{mode} {sha} 0\t{path}\n" for mode, sha, path in batch)
         subprocess.run(
             ["git", "-C", MIRROR_DIR, "update-index", "--index-info"],
-            env=env, input=index_info.encode(), capture_output=True, check=True,
+            env=env,
+            input=index_info.encode(),
+            capture_output=True,
+            check=True,
         )
         return subprocess.run(
             ["git", "-C", MIRROR_DIR, "write-tree"], env=env, capture_output=True, text=True
@@ -273,12 +270,14 @@ class MirrorChain:
                     pos = nl + 1
                     continue
                 size = int(parts[2])
-                body = data[nl + 1:nl + 1 + size]
+                body = data[nl + 1 : nl + 1 + size]
                 self.blob_kb[parts[0]] = len(gzip.compress(body, 9)) / 1024.0
                 pos = nl + 1 + size + 1
         return {s: self.blob_kb[s] for s in shas}
 
-    def _commit_tree(self, tree: str, prev: str | None, message: bytes, env_meta: dict | None = None) -> str:
+    def _commit_tree(
+        self, tree: str, prev: str | None, message: bytes, env_meta: dict | None = None
+    ) -> str:
         args = ["git", "-C", MIRROR_DIR, "commit-tree", tree]
         if prev is not None:
             args += ["-p", prev]
@@ -302,7 +301,7 @@ class MirrorChain:
                 orig_parents.append(line[7:].decode())
             elif line.startswith(b"author ") or line.startswith(b"committer "):
                 kind = line.split(b" ", 1)[0].decode()
-                header_meta[kind] = line[len(kind) + 1:]
+                header_meta[kind] = line[len(kind) + 1 :]
             elif line == b"":
                 break
         if orig_tree is None:
@@ -327,7 +326,7 @@ class MirrorChain:
         # objects newly introduced by this commit (vs its parents)
         rev_args = ["rev-list", "--objects", orig] + [f"^{p}" for p in orig_parents]
         new_objs = gg(*rev_args).decode(errors="replace").strip().splitlines()
-        new_shas = {l.split()[0] for l in new_objs if l.strip()}
+        new_shas = {ln.split()[0] for ln in new_objs if ln.strip()}
 
         # new blob entries in the mirrored tree, split into budget groups;
         # replaced blobs map to their slim versions
@@ -407,7 +406,7 @@ def main() -> None:
     commits = gg("rev-list", "--reverse", "--topo-order", "HEAD").decode().split()
     print(f"[gitee-mirror] mirroring {len(commits)} commits ...", flush=True)
     for c in commits:
-        m = chain.mirror_commit(c)
+        chain.mirror_commit(c)
     head_mirror = chain.commit_map[commits[-1]]
 
     # record mapping for incremental reuse
@@ -424,17 +423,18 @@ def main() -> None:
     # the _sm* chain refs are cleaned up (main survives and covers the chain)
     remote_refs = subprocess.run(
         ["git", "-C", MIRROR_DIR, "ls-remote", REMOTE_NAME],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     ).stdout
-    ref_shas = [l.split()[0] for l in remote_refs.strip().splitlines() if l.strip()]
-    remote_ref_names = [
-        l.split()[1] for l in remote_refs.strip().splitlines() if l.strip()
-    ]
+    ref_lines = [ln for ln in remote_refs.strip().splitlines() if ln.strip()]
+    ref_shas = [ln.split()[0] for ln in ref_lines]
+    remote_ref_names = [ln.split()[1] for ln in ref_lines]
     known: set[str] = set()
     for sha in set(ref_shas):
         r = subprocess.run(
             ["git", "-C", MIRROR_DIR, "rev-list", sha],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if r.returncode == 0:
             known.update(r.stdout.split())
@@ -474,7 +474,8 @@ def main() -> None:
     anc = set(
         subprocess.run(
             ["git", "-C", MIRROR_DIR, "rev-list", head_mirror],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         ).stdout.split()
     )
     orphans = [sha for sha in chain.push_seq if sha not in anc]
@@ -494,8 +495,16 @@ def main() -> None:
     to_delete = [r.split("/")[-1] for r in remote_ref_names]
     to_delete += [f"_sm{i}" for i in range(1, n + 1)]
     to_delete += [
-        r for r in ("_tmpbatch1", "_tmpbatch2", "_tmpbatch3a",
-                    "_probe_fig4", "_probe_fig2", "_probe_fig1", "_probe_uvlock")
+        r
+        for r in (
+            "_tmpbatch1",
+            "_tmpbatch2",
+            "_tmpbatch3a",
+            "_probe_fig4",
+            "_probe_fig2",
+            "_probe_fig1",
+            "_probe_uvlock",
+        )
         if any(r in name for name in remote_ref_names)
     ]
     for ref in sorted(set(to_delete)):

@@ -22,24 +22,21 @@ import torch
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from torch.utils.data import DataLoader
+
 from training.trainer_base import load_model_from_checkpoint, set_seed
 from utils.profiler import Profiler
-from torch.utils.data import DataLoader
 
 
 def get_args():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", type=str, required=True)
-    p.add_argument(
-        "--model", type=str, default="modern", choices=["baseline", "modern"]
-    )
+    p.add_argument("--model", type=str, default="modern", choices=["baseline", "modern"])
     p.add_argument("--steps", type=int, default=50)
     p.add_argument("--batch_size", type=int, default=4)
     p.add_argument("--block_size", type=int, default=256)
     p.add_argument("--learning_rate", type=float, default=1e-4)
-    p.add_argument(
-        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
-    )
+    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--output_dir", type=str, default="profiles/train")
     p.add_argument("--compile", action="store_true")
     return p.parse_args()
@@ -56,9 +53,7 @@ def main():
     set_seed(1337)
     device = args.device
 
-    model, ckpt = load_model_from_checkpoint(
-        args.checkpoint, device=device, model_type=args.model
-    )
+    model, ckpt = load_model_from_checkpoint(args.checkpoint, device=device, model_type=args.model)
     if args.compile and device == "cuda":
         model = torch.compile(model)
 
@@ -71,9 +66,7 @@ def main():
         device_type="cuda" if device.startswith("cuda") else "cpu",
     )
 
-    inputs, targets = build_dummy_data(
-        args.batch_size, args.block_size, args.steps, device
-    )
+    inputs, targets = build_dummy_data(args.batch_size, args.block_size, args.steps, device)
     dataset = torch.utils.data.TensorDataset(inputs, targets)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
@@ -106,7 +99,8 @@ def main():
     mem_path = prof.export_memory_summary("train_memory.txt")
     stats_path = prof.export_stats("train_stats.json")
     print(
-        f"Profiling complete.\n  Chrome trace: {trace_path}\n  Memory summary: {mem_path}\n  Stats: {stats_path}"
+        f"Profiling complete.\n  Chrome trace: {trace_path}\n"
+        f"  Memory summary: {mem_path}\n  Stats: {stats_path}"
     )
 
 

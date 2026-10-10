@@ -2,19 +2,16 @@
 
 import argparse
 import os
-
-import torch
-
 import os as _os
 import sys as _sys
+
+import torch
 
 # Repo root on sys.path so this script runs from any cwd after the
 # FR10 move into tools/export/ (three levels up to the root).
 _sys.path.insert(
     0,
-    _os.path.dirname(
-        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    ),
+    _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))),
 )
 
 from model.hf_model import NanoGPTModernForCausalLM
@@ -43,9 +40,7 @@ def main():
         "config": nano_config.to_dict(),
     }
     torch.save(ckpt, args.out)
-    print(
-        f"Loaded HF checkpoint from {args.hf_dir} and saved nanoGPT checkpoint to {args.out}"
-    )
+    print(f"Loaded HF checkpoint from {args.hf_dir} and saved nanoGPT checkpoint to {args.out}")
 
 
 if __name__ == "__main__":
