@@ -21,6 +21,7 @@ import torch
 from model.modern_gpt import ModernGPT, ModernGPTConfig
 from model.kv_cache_utils import KVCacheManager
 from model.paged_kv_cache import PagedKVCacheManager
+from helpers import tiny_modern_config
 
 
 def _make_mgr(n_layers=2, max_cache_len=32, block_size=8, batch=1):
@@ -125,7 +126,7 @@ def test_paged_matches_ring_logits_stepwise():
     decode step the last-position logits must agree within atol=1e-5.
     """
     torch.manual_seed(7)
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=2,
         n_head=2,
         n_embd=32,

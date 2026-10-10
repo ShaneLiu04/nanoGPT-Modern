@@ -37,6 +37,7 @@ import torch.nn.functional as F
 
 from model import ModernGPT, ModernGPTConfig
 from model.modern_gpt import SwiGLU
+from helpers import tiny_modern_config
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +122,7 @@ def _make_moe_cfg(num_experts, **overrides):
         dropout=0.0,
     )
     kwargs.update(overrides)
-    return ModernGPTConfig(**kwargs)
+    return tiny_modern_config(**kwargs)
 
 
 def _make_tiny_model(num_experts, seed, **overrides):
@@ -535,7 +536,7 @@ def test_moe_speedup_at_least_2x():
 
     # new implementation: the model's MoE layer, weights loaded via the
     # legacy state_dict key format
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=4,
         n_embd=C,

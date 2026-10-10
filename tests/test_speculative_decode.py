@@ -5,12 +5,13 @@ import torch
 
 
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 @pytest.mark.parametrize("draft_tokens", [1, 2, 4])
 def test_speculative_self_draft_matches_target_greedy(draft_tokens):
     """Using the target model as its own draft model must yield greedy output."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=2,
         n_head=2,
         n_embd=32,
@@ -47,7 +48,7 @@ def test_speculative_self_draft_matches_target_greedy(draft_tokens):
 
 def test_speculative_different_draft_runs():
     """A separate draft model should run without crashing and respect length."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=2,
         n_head=2,
         n_embd=32,
@@ -77,7 +78,7 @@ def test_speculative_different_draft_runs():
 
 def test_speculative_eos_stops():
     """Speculative decoding must stop when eos_token_id is emitted."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=2,
         n_head=2,
         n_embd=32,
@@ -112,7 +113,7 @@ def test_speculative_eos_stops():
 
 def test_speculative_batched():
     """Speculative decoding supports batch size > 1 via _generate_speculative_batched."""
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=16,

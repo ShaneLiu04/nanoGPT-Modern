@@ -65,3 +65,68 @@ def test_load_mixed_dataset_data_files_takes_priority(tmp_path):
     )
     ds = _load_mixed_dataset(args)
     assert ds["text"] == ["local doc"]
+
+
+# ---------------------------------------------------------------------------
+# Migrated from tests/test_bugfixes.py (FR11b split)
+# ---------------------------------------------------------------------------
+
+import os
+import tempfile
+
+import numpy as np
+
+
+def test_prepare_shard_writer_dtype_and_index():
+    """_ShardWriter must produce readable shards and a dtype-aware .idx."""
+    from data.prepare import _ShardWriter, _concatenate_shards_to_bin
+    from data.openwebtext import _detect_dtype_from_index
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        writer = _ShardWriter(
+            output_dir=tmpdir,
+            split="train",
+            dtype=np.uint32,
+            shard_size=100,
+            vocab_size=70000,
+            eot_token=50256,
+        )
+        tokens = np.arange(1000, 1100, dtype=np.uint32)
+        writer.append(tokens)
+        writer.record_doc_boundary()
+        writer.append(tokens + 100)
+        writer.record_doc_boundary()
+        meta = writer.close()
+        writer.write_index()
+
+        assert meta["total_tokens"] == 200
+        assert meta["num_docs"] == 2
+
+        _concatenate_shards_to_bin(writer.shard_dir, tmpdir, "train", np.uint32)
+        bin_path = os.path.join(tmpdir, "train.bin")
+        idx_path = os.path.join(tmpdir, "train.idx")
+        assert os.path.exists(bin_path)
+        assert os.path.exists(idx_path)
+
+        detected = _detect_dtype_from_index(bin_path)
+        assert detected == np.uint32
+
+        arr = np.memmap(bin_path, dtype=np.uint32, mode="r")
+        try:
+            assert len(arr) == 200
+            assert arr[0] == 1000
+            assert arr[100] == 1100
+        finally:
+            del arr  # close memmap so Windows can clean up the temp dir
+        print("[OK] Shard writer + dtype-aware index works")
+
+
+def test_prepare_dtype_selection():
+    """_select_dtype must pick uint16 for small vocab and uint32 for large vocab."""
+    from data.prepare import _select_dtype
+
+    assert _select_dtype(50000) == np.uint16
+    assert _select_dtype(65535) == np.uint16
+    assert _select_dtype(65536) == np.uint32
+    assert _select_dtype(100000) == np.uint32
+    print("[OK] prepare.py dtype selection works")

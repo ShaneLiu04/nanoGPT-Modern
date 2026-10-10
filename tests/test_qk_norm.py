@@ -4,10 +4,11 @@ import math
 import torch
 
 from model import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 def test_qk_norm_adds_parameters():
-    cfg = ModernGPTConfig(n_layer=1, n_head=4, n_embd=64, block_size=16, qk_norm=True)
+    cfg = tiny_modern_config(n_layer=1, n_head=4, n_embd=64, block_size=16, qk_norm=True)
     model = ModernGPT(cfg)
     norm_names = [
         name
@@ -18,7 +19,7 @@ def test_qk_norm_adds_parameters():
 
 
 def test_qk_norm_false_has_no_norm_parameters():
-    cfg = ModernGPTConfig(n_layer=1, n_head=4, n_embd=64, block_size=16, qk_norm=False)
+    cfg = tiny_modern_config(n_layer=1, n_head=4, n_embd=64, block_size=16, qk_norm=False)
     model = ModernGPT(cfg)
     norm_names = [
         name
@@ -29,7 +30,7 @@ def test_qk_norm_false_has_no_norm_parameters():
 
 
 def test_forward_backward_with_qk_norm():
-    cfg = ModernGPTConfig(n_layer=2, n_head=4, n_embd=64, block_size=16, qk_norm=True)
+    cfg = tiny_modern_config(n_layer=2, n_head=4, n_embd=64, block_size=16, qk_norm=True)
     model = ModernGPT(cfg)
     x = torch.randint(0, cfg.vocab_size, (2, 8))
     logits, loss, _ = model(x, targets=x)
@@ -39,7 +40,7 @@ def test_forward_backward_with_qk_norm():
 
 
 def test_attention_temperature_changes_output():
-    cfg_base = ModernGPTConfig(
+    cfg_base = tiny_modern_config(
         n_layer=1,
         n_head=4,
         n_embd=64,
@@ -47,7 +48,7 @@ def test_attention_temperature_changes_output():
         qk_norm=False,
         attn_temperature=1.0,
     )
-    cfg_temp = ModernGPTConfig(
+    cfg_temp = tiny_modern_config(
         n_layer=1,
         n_head=4,
         n_embd=64,
@@ -68,7 +69,7 @@ def test_attention_temperature_changes_output():
 
 def test_attention_temperature_scale_matches_eager():
     """Ensure the custom temperature is reflected in attention logits."""
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1, n_head=2, n_embd=32, block_size=8, attn_temperature=math.sqrt(2.0)
     )
     model = ModernGPT(cfg)
@@ -80,7 +81,7 @@ def test_attention_temperature_scale_matches_eager():
 
 
 def test_kv_cache_compatible_with_qk_norm():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, qk_norm=True)
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=16, qk_norm=True)
     model = ModernGPT(cfg)
     model.eval()
     prompt = torch.randint(0, cfg.vocab_size, (1, 4))
@@ -100,7 +101,7 @@ def test_kv_cache_compatible_with_qk_norm():
 
 
 def test_config_serialization_roundtrip():
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=32,

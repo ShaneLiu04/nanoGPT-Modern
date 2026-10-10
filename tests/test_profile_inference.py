@@ -27,6 +27,7 @@ import torch
 
 from inference.generate import benchmark
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 from utils.profiler import InferenceProfiler
 
 N_TOKENS = 5
@@ -34,7 +35,7 @@ PROMPT_LEN = 8
 
 
 def _tiny_model():
-    config = ModernGPTConfig(
+    config = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=32,

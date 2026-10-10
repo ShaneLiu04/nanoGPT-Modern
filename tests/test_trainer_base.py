@@ -56,7 +56,7 @@ def test_build_amp_context_cuda():
 
 
 def test_checkpoint_manager_roundtrip(tmp_path):
-    config = ModernGPTConfig(block_size=16, n_layer=2, n_head=2, n_embd=32)
+    config = tiny_modern_config(block_size=16, n_layer=2, n_head=2, n_embd=32)
     model = ModernGPT(config)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     ema_shadow = {k: v.clone() for k, v in model.state_dict().items()}
@@ -107,7 +107,7 @@ def test_checkpoint_manager_roundtrip(tmp_path):
 
 
 def test_checkpoint_manager_keep_last_n(tmp_path):
-    config = ModernGPTConfig(block_size=16, n_layer=2, n_head=2, n_embd=32)
+    config = tiny_modern_config(block_size=16, n_layer=2, n_head=2, n_embd=32)
     model = ModernGPT(config)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
@@ -169,3 +169,73 @@ def test_make_worker_init_fn_deterministic():
     set_seed(7 + 2 * 1000 + 0)
     b = torch.rand(5)
     assert torch.allclose(a, b)
+
+
+# ---------------------------------------------------------------------------
+# Migrated from tests/test_bugfixes.py (FR11b split)
+# ---------------------------------------------------------------------------
+
+from helpers import tiny_modern_config
+from utils.checkpoint import save_checkpoint, load_checkpoint, get_rng_state
+
+
+def test_optimizer_weight_tying_dedup():
+    """wte and lm_head share the same tensor; optimizer must see it once."""
+    config = tiny_modern_config(n_head=4, n_embd=128, block_size=64)
+    model = ModernGPT(config)
+    opt = model.configure_optimizers(0.1, 1e-3, (0.9, 0.95), "cpu")
+    param_ids = {id(p) for group in opt.param_groups for p in group["params"]}
+    # wte and lm_head are the same tensor -> should appear only once in optimizer.
+    assert id(model.transformer.wte.weight) == id(model.lm_head.weight)
+    assert id(model.transformer.wte.weight) in param_ids
+    # Count how many times the shared tensor appears in optimizer params.
+    occurrences = sum(
+        1
+        for group in opt.param_groups
+        for p in group["params"]
+        if id(p) == id(model.transformer.wte.weight)
+    )
+    assert occurrences == 1, f"shared weight appears {occurrences} times in optimizer"
+    print("[OK] Optimizer weight-tying deduplication works")
+
+
+def test_ma_update_and_checkpoint():
+    """EMA shadow weights must update and round-trip through checkpoint."""
+    config = tiny_modern_config(n_head=4, n_embd=128, block_size=64)
+    model = ModernGPT(config)
+    model.init_ema(decay=0.9)
+
+    # Simulate one update step with dummy gradients.
+    opt = model.configure_optimizers(0.1, 1e-3, (0.9, 0.95), "cpu")
+    x = torch.randint(0, 100, (2, 8))
+    y = torch.randint(0, 100, (2, 8))
+    _, loss, _ = model(x, y)
+    loss.backward()
+    opt.step()
+    model.update_ema()
+
+    # EMA should differ from current weights after update.
+    name = next(iter(model.ema_shadow))
+    assert not torch.equal(model.ema_shadow[name], model.state_dict()[name])
+
+    # Save and load checkpoint.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = save_checkpoint(
+            model,
+            opt,
+            iter_num=7,
+            best_val_loss=1.23,
+            config=config,
+            out_dir=tmpdir,
+            filename="ckpt.pt",
+            ema_shadow=model.ema_shadow,
+            rng_state=get_rng_state(),
+        )
+        model2 = ModernGPT(config)
+        opt2 = model2.configure_optimizers(0.1, 1e-3, (0.9, 0.95), "cpu")
+        extra = load_checkpoint(path, model2, opt2)
+        assert extra["iter_num"] == 7
+        assert extra["best_val_loss"] == 1.23
+        assert "ema_shadow" in extra
+        assert torch.equal(extra["ema_shadow"][name], model.ema_shadow[name])
+    print("[OK] EMA update and checkpoint round-trip work")

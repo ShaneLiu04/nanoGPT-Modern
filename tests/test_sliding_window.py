@@ -4,6 +4,7 @@ import torch
 
 from model import ModernGPT, ModernGPTConfig
 from model.kv_cache_utils import build_sliding_window_mask
+from helpers import tiny_modern_config
 
 
 def test_build_sliding_window_mask_shape():
@@ -17,7 +18,7 @@ def test_build_sliding_window_mask_shape():
 
 
 def test_forward_with_sliding_window():
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=4
     )
     model = ModernGPT(cfg)
@@ -28,8 +29,8 @@ def test_forward_with_sliding_window():
 
 
 def test_sliding_window_changes_output():
-    cfg_full = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16)
-    cfg_win = ModernGPTConfig(
+    cfg_full = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=16)
+    cfg_win = tiny_modern_config(
         n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=2
     )
     torch.manual_seed(0)
@@ -44,7 +45,7 @@ def test_sliding_window_changes_output():
 
 
 def test_sliding_window_cache_bounded():
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1, n_head=2, n_embd=32, block_size=16, sliding_window_size=3
     )
     model = ModernGPT(cfg)
@@ -63,7 +64,7 @@ def test_sliding_window_cache_bounded():
 
 
 def test_sliding_window_config_serialization():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, sliding_window_size=128)
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, sliding_window_size=128)
     d = cfg.to_dict()
     cfg2 = ModernGPTConfig.from_dict(d)
     assert cfg2.sliding_window_size == 128

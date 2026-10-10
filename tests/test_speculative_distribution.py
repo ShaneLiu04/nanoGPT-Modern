@@ -35,11 +35,12 @@ import pytest
 import torch
 
 from model.modern_gpt import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 def _tiny_model(seed=0, vocab_size=100, n_layer=2, n_embd=32, block_size=64):
     torch.manual_seed(seed)
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=n_layer,
         n_head=2,
         n_embd=n_embd,

@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from model import ModernGPT, ModernGPTConfig
 from model import ring_attention as ring_attn_module
 from model.attention_utils import set_attention_backend
+from helpers import tiny_modern_config
 
 
 def _reference_sdpa(q, k, v, causal=True, scale=None):
@@ -118,7 +119,7 @@ def test_blockwise_attention_rejects_bad_shapes():
 
 
 def test_model_runs_with_ring_attention():
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=32,
@@ -141,7 +142,7 @@ def test_model_ring_attention_matches_sdpa():
         if torch.cuda.is_available():
             set_attention_backend("math")
 
-        cfg = ModernGPTConfig(
+        cfg = tiny_modern_config(
             n_layer=1,
             n_head=2,
             n_embd=32,
@@ -154,7 +155,7 @@ def test_model_ring_attention_matches_sdpa():
         model_ring = ModernGPT(cfg)
         model_ring.eval()
 
-        cfg2 = ModernGPTConfig(
+        cfg2 = tiny_modern_config(
             n_layer=1,
             n_head=2,
             n_embd=32,
@@ -180,7 +181,7 @@ def test_model_ring_attention_matches_sdpa():
 
 
 def test_ring_attention_config_serialization():
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=32,

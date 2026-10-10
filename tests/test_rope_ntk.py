@@ -6,6 +6,7 @@ import torch
 
 from model import ModernGPT, ModernGPTConfig
 from model.modern_gpt import RotaryEmbedding
+from helpers import tiny_modern_config
 
 
 def test_ntk_scaling_increases_base():
@@ -27,7 +28,7 @@ def test_no_scaling_preserves_base():
 def test_ntk_allows_longer_context():
     train_len = 16
     factor = 2.0
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=32,
@@ -43,7 +44,7 @@ def test_ntk_allows_longer_context():
 
 
 def test_unscaled_fails_beyond_block_size():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16)
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=16)
     model = ModernGPT(cfg)
     long_prompt = torch.randint(0, cfg.vocab_size, (1, 33))
     with pytest.raises(AssertionError):
@@ -51,7 +52,7 @@ def test_unscaled_fails_beyond_block_size():
 
 
 def test_config_serialization_roundtrip():
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=32,

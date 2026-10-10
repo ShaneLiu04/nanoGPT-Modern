@@ -127,3 +127,47 @@ def test_memmap_dataset_shuffle_buffer():
         import shutil
 
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Migrated from tests/test_bugfixes.py (FR11b split)
+# ---------------------------------------------------------------------------
+
+from data.openwebtext import DocBoundaryDataset
+
+
+def test_doc_boundary_dataset_resume_offset():
+    """DocBoundaryDataset must accept resume_offset and iterate without error."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        bin_path = os.path.join(tmpdir, "train.bin")
+        # 1024 tokens with EOT at positions 100, 200, ...
+        data = np.zeros(1024, dtype=np.uint16)
+        for pos in range(100, 1024, 100):
+            data[pos] = 50256
+        data.tofile(bin_path)
+
+        ds = DocBoundaryDataset(bin_path, block_size=64, resume_offset=0)
+        samples = list(ds)
+        del ds  # release the memmap so Windows can clean up the temp dir
+        assert len(samples) > 0
+        for x, y in samples:
+            assert x.shape[0] == y.shape[0]
+        print("[OK] DocBoundaryDataset resume_offset fix works")
+
+
+def test_doc_boundary_dataset_state_dict():
+    """DocBoundaryDataset state_dict/load_state_dict round-trip."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        bin_path = os.path.join(tmpdir, "train.bin")
+        data = np.zeros(1024, dtype=np.uint16)
+        for pos in range(100, 1024, 100):
+            data[pos] = 50256
+        data.tofile(bin_path)
+
+        ds = DocBoundaryDataset(bin_path, block_size=64, resume_offset=3)
+        state = ds.state_dict()
+        assert state == {"resume_offset": 3}
+        ds.load_state_dict({"resume_offset": 5})
+        assert ds.resume_offset == 5
+        del ds
+        print("[OK] DocBoundaryDataset state_dict round-trip works")

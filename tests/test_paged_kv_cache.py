@@ -4,10 +4,11 @@ import torch
 
 from model import ModernGPT, ModernGPTConfig
 from model.paged_kv_cache import PagedKVCacheManager
+from helpers import tiny_modern_config
 
 
 def test_paged_manager_api_matches_kv_manager():
-    cfg = ModernGPTConfig(n_layer=2, n_head=2, n_embd=32, block_size=64)
+    cfg = tiny_modern_config(n_layer=2, n_head=2, n_embd=32, block_size=64)
     mgr = PagedKVCacheManager.from_config(cfg, block_size=16)
     mgr.init_cache(batch_size=2, device="cpu", dtype=torch.float32)
     k = torch.randn(2, cfg.n_kv_head, 10, cfg.n_embd // cfg.n_head)
@@ -23,7 +24,7 @@ def test_paged_manager_api_matches_kv_manager():
 
 
 def test_paged_manager_handles_multiblock_sequence():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=64)
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=64)
     mgr = PagedKVCacheManager.from_config(cfg, block_size=8)
     mgr.init_cache(batch_size=1, device="cpu", dtype=torch.float32)
     head_dim = cfg.n_embd // cfg.n_head
@@ -37,8 +38,8 @@ def test_paged_manager_handles_multiblock_sequence():
 
 
 def test_paged_generation_matches_ring_buffer():
-    cfg_ring = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=64)
-    cfg_paged = ModernGPTConfig(
+    cfg_ring = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=64)
+    cfg_paged = tiny_modern_config(
         n_layer=1,
         n_head=2,
         n_embd=32,
@@ -63,7 +64,7 @@ def test_paged_generation_matches_ring_buffer():
 
 
 def test_paged_config_serialization():
-    cfg = ModernGPTConfig(
+    cfg = tiny_modern_config(
         n_layer=1, n_head=2, n_embd=32, use_paged_kv_cache=True, kv_cache_block_size=32
     )
     d = cfg.to_dict()

@@ -3,23 +3,24 @@
 import torch
 
 from model import ModernGPT, ModernGPTConfig
+from helpers import tiny_modern_config
 
 
 def test_mtp_adds_no_parameters_when_disabled():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=0)
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=0)
     model = ModernGPT(cfg)
     assert not hasattr(model, "future_heads") or len(model.future_heads) == 0
 
 
 def test_mtp_adds_heads():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=2)
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=2)
     model = ModernGPT(cfg)
     assert hasattr(model, "future_heads")
     assert len(model.future_heads) == 2
 
 
 def test_mtp_forward_backward():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=2)
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=2)
     model = ModernGPT(cfg)
     x = torch.randint(0, cfg.vocab_size, (2, 8))
     logits, loss, _ = model(x, targets=x)
@@ -31,8 +32,8 @@ def test_mtp_forward_backward():
 
 def test_mtp_loss_grows_with_n_future():
     """More future heads should produce a strictly positive MTP component."""
-    cfg1 = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=0)
-    cfg2 = ModernGPTConfig(
+    cfg1 = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=0)
+    cfg2 = tiny_modern_config(
         n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=1, mtp_weight=1.0
     )
     torch.manual_seed(0)
@@ -46,10 +47,10 @@ def test_mtp_loss_grows_with_n_future():
 
 
 def test_mtp_weight_scales_loss():
-    cfg_low = ModernGPTConfig(
+    cfg_low = tiny_modern_config(
         n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=1, mtp_weight=0.1
     )
-    cfg_high = ModernGPTConfig(
+    cfg_high = tiny_modern_config(
         n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=1, mtp_weight=1.0
     )
     torch.manual_seed(0)
@@ -64,7 +65,7 @@ def test_mtp_weight_scales_loss():
 
 def test_mtp_disabled_during_cache():
     """MTP heads should not be computed during cached generation."""
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=2)
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, block_size=16, n_future=2)
     model = ModernGPT(cfg)
     model.eval()
     x = torch.randint(0, cfg.vocab_size, (1, 4))
@@ -75,7 +76,7 @@ def test_mtp_disabled_during_cache():
 
 
 def test_mtp_config_serialization():
-    cfg = ModernGPTConfig(n_layer=1, n_head=2, n_embd=32, n_future=3, mtp_weight=0.5)
+    cfg = tiny_modern_config(n_layer=1, n_head=2, n_embd=32, n_future=3, mtp_weight=0.5)
     d = cfg.to_dict()
     cfg2 = ModernGPTConfig.from_dict(d)
     assert cfg2.n_future == 3
