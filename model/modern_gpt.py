@@ -685,6 +685,16 @@ class SwiGLU(nn.Module):
         the highest routing score.  Total forward FLOPs remain close to the
         dense case (only one expert active per token), but total parameter
         count scales with `num_experts`.
+
+    Notes
+    -----
+    MoE expert weights are stacked into single tensors (`gate_w`/`up_w`:
+    ``[E, H, C]``, `down_w`: ``[E, C, H]``) and the forward dispatches all
+    experts through one fixed-shape padded batched matmul (no per-expert
+    Python loop, no per-forward weight stacking).  The state_dict keeps the
+    legacy per-expert key format (``gate_proj.{e}.weight`` etc.) via
+    translation hooks, so checkpoints stay byte-compatible across the
+    T012 rewrite in both directions.
     """
 
     def __init__(self, config: ModernGPTConfig):
@@ -700,29 +710,65 @@ class SwiGLU(nn.Module):
             self.up_proj: nn.Module = nn.Linear(config.n_embd, hidden, bias=False)
             self.down_proj: nn.Module = nn.Linear(hidden, config.n_embd, bias=False)
         else:
-            # MoE: each expert has its own gate/up/down projection
-            self.gate_proj = nn.ModuleList(
-                [
-                    nn.Linear(config.n_embd, hidden, bias=False)
-                    for _ in range(self.num_experts)
-                ]
-            )
-            self.up_proj = nn.ModuleList(
-                [
-                    nn.Linear(config.n_embd, hidden, bias=False)
-                    for _ in range(self.num_experts)
-                ]
-            )
-            self.down_proj = nn.ModuleList(
-                [
-                    nn.Linear(hidden, config.n_embd, bias=False)
-                    for _ in range(self.num_experts)
-                ]
-            )
+            # MoE: stacked expert weights, one Parameter per projection.
+            # gate_w/up_w: [E, H, C]; down_w: [E, C, H] (H = hidden, C = n_embd).
+            # The on-disk state_dict keeps the legacy per-expert key format
+            # (gate_proj.{e}.weight etc.) via the load/save translation hooks
+            # registered below, so pre-T012 checkpoints remain compatible.
+            E = self.num_experts
+            self.gate_w = nn.Parameter(torch.empty(E, hidden, config.n_embd))
+            self.up_w = nn.Parameter(torch.empty(E, hidden, config.n_embd))
+            self.down_w = nn.Parameter(torch.empty(E, config.n_embd, hidden))
+            # Match the init ModernGPT._init_weights applies to nn.Linear
+            # modules (normal std=0.02); the depth-scaled re-init in
+            # ModernGPT.__init__ covers down_w the same way it covered the
+            # legacy per-expert down projections.
+            nn.init.normal_(self.gate_w, mean=0.0, std=0.02)
+            nn.init.normal_(self.up_w, mean=0.0, std=0.02)
+            nn.init.normal_(self.down_w, mean=0.0, std=0.02)
             # router: learns per-expert logits from the input
             self.router = nn.Linear(config.n_embd, self.num_experts, bias=False)
+            self._register_legacy_state_dict_hooks()
 
         self.dropout = nn.Dropout(config.dropout)
+
+    def _register_legacy_state_dict_hooks(self) -> None:
+        """Keep the pre-T012 (per-expert Linear) on-disk key format.
+
+        Load: a pre-hook concatenates legacy ``gate_proj.{e}.weight`` entries
+        along dim 0 into the stacked ``gate_w`` parameter (same for up/down)
+        before the module reads its local keys. Save: a post-hook splits the
+        stacked parameters back into per-expert entries so newly written
+        checkpoints are byte-compatible with the legacy format.
+        """
+        num_experts = self.num_experts
+
+        def _load_translate(state_dict, prefix, *args, **kwargs):
+            for stacked, stem in (
+                ("gate_w", "gate_proj"),
+                ("up_w", "up_proj"),
+                ("down_w", "down_proj"),
+            ):
+                keys = [f"{prefix}{stem}.{e}.weight" for e in range(num_experts)]
+                if all(k in state_dict for k in keys):
+                    state_dict[prefix + stacked] = torch.stack(
+                        [state_dict.pop(k) for k in keys], dim=0
+                    )
+
+        def _save_translate(module, state_dict, prefix, local_metadata):
+            if module.num_experts <= 1:
+                return
+            for stacked, stem in (
+                ("gate_w", "gate_proj"),
+                ("up_w", "up_proj"),
+                ("down_w", "down_proj"),
+            ):
+                tensor = state_dict.pop(prefix + stacked)
+                for e in range(module.num_experts):
+                    state_dict[f"{prefix}{stem}.{e}.weight"] = tensor[e]
+
+        self._register_load_state_dict_pre_hook(_load_translate)
+        self.register_state_dict_post_hook(_save_translate)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.num_experts <= 1:
@@ -731,9 +777,10 @@ class SwiGLU(nn.Module):
             out = self.down_proj(gate * up)
             return self.dropout(out), torch.zeros((), device=x.device, dtype=x.dtype)
 
-        # --- MoE: top-1 gating with grouped-GEMM, load-balancing aux loss ---
+        # --- MoE: top-1 gating with padded grouped-GEMM, load-balancing aux loss ---
         B, T, C = x.shape
         x_flat = x.view(B * T, C)  # [B*T, C]
+        E = self.num_experts
 
         # routing scores
         router_logits = self.router(x_flat)  # [B*T, num_experts]
@@ -747,54 +794,48 @@ class SwiGLU(nn.Module):
         # f_i = fraction of tokens routed to expert i
         # P_i = mean router probability assigned to expert i
         token_counts = (
-            torch.bincount(selected, minlength=self.num_experts)
+            torch.bincount(selected, minlength=E)
             .float()
             .to(router_probs.device)
         )
         f = token_counts / (B * T)
         P = router_probs.mean(dim=0)
-        aux_loss = self.moe_aux_loss_factor * self.num_experts * (f * P).sum()
+        aux_loss = self.moe_aux_loss_factor * E * (f * P).sum()
 
         # Capacity factor: each expert can process at most capacity tokens.
+        # int() truncation, identical to the pre-T012 loop implementation.
         total_tokens = B * T
-        capacity = int(self.moe_capacity_factor * total_tokens / self.num_experts)
+        capacity = int(self.moe_capacity_factor * total_tokens / E)
 
-        # Grouped-GEMM: stack expert weights for bmm dispatch.
-        # gate_proj: [num_experts, hidden, C]  up_proj: [num_experts, hidden, C]  down_proj: [num_experts, C, hidden]
-        gate_proj_list: nn.ModuleList = self.gate_proj  # type: ignore[assignment]
-        up_proj_list: nn.ModuleList = self.up_proj  # type: ignore[assignment]
-        down_proj_list: nn.ModuleList = self.down_proj  # type: ignore[assignment]
-        gate_w = torch.stack([w.weight for w in gate_proj_list], dim=0)  # [E, H, C]
-        up_w = torch.stack([w.weight for w in up_proj_list], dim=0)  # [E, H, C]
-        down_w = torch.stack([w.weight for w in down_proj_list], dim=0)  # [E, C, H]
+        # Vectorized dispatch. A stable sort groups tokens by expert while
+        # preserving the original token order inside each expert segment, so
+        # taking slots < capacity keeps exactly the first `capacity` tokens
+        # per expert (same set the loop implementation kept).
+        sorted_experts, sort_idx = torch.sort(selected, stable=True)
+        counts = torch.bincount(selected, minlength=E)
+        seg_starts = torch.cumsum(counts, 0) - counts
+        slots = torch.arange(total_tokens, device=x.device) - seg_starts[sorted_experts]
+        keep = slots < capacity
 
+        e_idx = sorted_experts[keep]
+        s_idx = slots[keep]
+        t_idx = sort_idx[keep]
+
+        # Padded grouped-GEMM: one static-shape [E, capacity, C] buffer.
+        # Padding rows stay zero and are never gathered back; tokens beyond
+        # capacity are dropped (output stays zero, Switch Transformer style).
+        padded = torch.zeros(E, capacity, C, device=x.device, dtype=x.dtype)
+        padded[e_idx, s_idx] = x_flat[t_idx]
+
+        ge = F.silu(padded @ self.gate_w.transpose(1, 2))  # [E, cap, H]
+        ue = padded @ self.up_w.transpose(1, 2)  # [E, cap, H]
+        de = (ge * ue) @ self.down_w.transpose(1, 2)  # [E, cap, C]
+
+        # Gather back to token order, weighted by the routing probability so
+        # gradients flow to the router.
         out_flat = torch.zeros_like(x_flat)
-        for e in range(self.num_experts):
-            idx = (selected == e).nonzero(as_tuple=False).flatten()
-            if idx.numel() == 0:
-                continue
-            # Drop tokens beyond the per-expert capacity (Switch Transformer style).
-            if idx.numel() > capacity:
-                idx = idx[:capacity]
-            xe = x_flat.index_select(0, idx)  # [n_e, C]
-            # Use bmm to compute all tokens for this expert in one kernel call.
-            # xe: [n_e, C] -> [n_e, 1, C];  weight: [H, C] -> [C, H] -> [n_e, C, H]
-            xe_3d = xe.unsqueeze(1)  # [n_e, 1, C]
-            gw = (
-                gate_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)
-            )  # [n_e, C, H]
-            uw = (
-                up_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)
-            )  # [n_e, C, H]
-            dw = (
-                down_w[e].transpose(0, 1).unsqueeze(0).expand(xe.size(0), -1, -1)
-            )  # [n_e, H, C]
-            ge = F.silu(torch.bmm(xe_3d, gw).squeeze(1))  # [n_e, H]
-            ue = torch.bmm(xe_3d, uw).squeeze(1)  # [n_e, H]
-            de = torch.bmm((ge * ue).unsqueeze(1), dw).squeeze(1)  # [n_e, C]
-            # weight by routing probability for gradient flow
-            weight = router_probs.index_select(0, idx)[:, e].unsqueeze(-1)  # [n_e, 1]
-            out_flat.index_copy_(0, idx, de * weight)
+        weight = router_probs[t_idx, e_idx].unsqueeze(-1)
+        out_flat[t_idx] = de[e_idx, s_idx] * weight
 
         out = out_flat.view(B, T, C)
         out = self.dropout(out)
@@ -1373,10 +1414,13 @@ class ModernGPT(nn.Module):
         self._log_attention_backend()
         for pn, p in self.named_parameters():
             # Residual-output projections get the GPT-2-style depth-scaled init.
-            # "mlp.proj.weight" is the GELUFFN counterpart of SwiGLU's down_proj.
+            # "mlp.proj.weight" is the GELUFFN counterpart of SwiGLU's down_proj;
+            # "down_w" is the stacked MoE counterpart ([E, C, H], one expert per
+            # leading slice, each slice scaled like a legacy down_proj.weight).
             if (
                 pn.endswith("o_proj.weight")
                 or pn.endswith("down_proj.weight")
+                or pn.endswith("down_w")
                 or pn.endswith("mlp.proj.weight")
             ):
                 torch.nn.init.normal_(
