@@ -472,3 +472,12 @@
 **验证：** 14/14 目标全绿；全量 **618 passed / 3 skipped / 2 deselected**（~105s，604+14）；black/ruff/mypy 三绿。
 
 **AR-v0.5.0-hpc-readiness 至此 T001-T022 全部完成**（含提前完成的 T022）。剩余非任务项：GPU 冒烟遗留清单（迁移演练：compile recompile 计数、KV 显存斜率、static_graph+no_sync、FSDP gather——本机已有 Quadro RTX 5000 可先行演练）。
+
+### 2026-10-10 审查记录（sdd-task-review）
+
+- 审查结果：PASS（第 1 轮，独立子代理审查，基线 2a75797..HEAD）
+- S 维度（S1-S5）：全部通过——14 FR 均有专属测试（抽查 8 个）；行为断言为主（静态源码断言均为 design §6.5 明示的结构契约）；FR12 breaking 已入 CHANGELOG 并被测试锁定；design §4.4 规划 19 个新增文件 100% 落地；边界/异常抽查 7 项（B2/B5/B10/B11/B12/E5/E6）全部有对应用例
+- D 维度（D1-D4）：全部通过——forward 10 参数签名、BaselineGPT 3-tuple、load_model_from_checkpoint(path, device, model_type, strict, eval_mode)、add_common_trainer_args 逐项核实；FR5 append 布局+ring 回退、FR7 左对齐 padding 实现确认；影响范围无不可解释偏差（127 文件 M 来自 T020 格式化 commit，已记录）；全部偏离（mypy 3.11、20 flag、compile 反射、cap int 截断、EMA lerp、eval_mode=False、KV 单写协议）均在 tasks.md 有记录
+- C 维度（C1-C3）：全部通过——FR12 为唯一声明 breaking；分层合规（model 无 training 依赖、tools/export 仅向下 import 统一加载器）；lint 三工具配置契约 + 11 用例静态检查落地
+- 修复的问题：无
+- 附注（Minor，不阻塞）：design §4.4 新增文件清单未列 utils/notify.py 与 tools/gitee_mirror.py（tasks.md 会话记录已完整登记，属 design 清单遗漏，后续 AR 修订时补录）
