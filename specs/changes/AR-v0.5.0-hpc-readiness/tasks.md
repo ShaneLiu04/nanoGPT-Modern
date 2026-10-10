@@ -35,7 +35,7 @@
 | T018 | FR11b load_model 统一到 load_model_from_checkpoint（7 份拷贝收敛）+ tests/conftest.py tiny fixture + test_bugfixes.py 拆分 | T017 | passing | |
 | T019 | FR12 接口统一（breaking）：BaselineGPT 3-tuple 返回、no-op 参数显式化、调用点全量同步、反射 hack 清理、CHANGELOG | T013,T014 | passing | v0.5.0 大版本 |
 | T020 | FR13 lint/测试基建：black line-length=100 统一 + ruff 配置 + mypy 版本对齐 + test_kv_cache_benchmark 相对断言/perf marker + 文档数字刷新 | T017,T018 | passing | 2026-10-10 完成；两 commit：5f9d02b（配置+契约+perf 隔离+mypy 修复）、db3b7ff（一次性格式化 127 文件）；mypy 3.9 target 不支持→保持 3.11（执行偏差）；unsafe fix 安全性审计（UP045/UP007 全在 future import 文件、UP006/UP035 为 PEP 585 py39 运行时安全） |
-| T021 | FR14 理解力交付物：docs/ARCHITECTURE.md（训练基座）、modern_gpt.py 分区导航 + docstring 100%、GRPO 家族对比笔记、与 MIGRATION.md 交叉引用 | T011,T019 | pending | 收尾任务 |
+| T021 | FR14 理解力交付物：docs/ARCHITECTURE.md（训练基座）、modern_gpt.py 分区导航 + docstring 100%、GRPO 家族对比笔记、与 MIGRATION.md 交叉引用 | T011,T019 | passing | 2026-10-10 完成；commit 246fc07；14 契约用例（Red→Green）；FR14-AC2 docstring 100% 落 ast 静态检查（补评审登记缺口）；MIGRATION↔ARCHITECTURE 悬空链接修复为双向 |
 
 ## 状态说明
 
@@ -453,3 +453,22 @@
 **遗留新增：**
 - perf 用例 GPU 阈值（speedup>=1.0 / 1.5x）在云租用实例上的表现待迁移演练确认（本机 RTX 5000 通过）
 - mypy python_version 与 design 3.9 的偏差已记录（工具版本约束）
+
+### 2026-10-10 T021 完成（FR14 理解力交付物，AR 收官任务）
+
+**Red（14 用例 test_fr14_deliverables.py，子代理编写）：**
+- A 组 ARCHITECTURE.md 契约 7 用例：存在（≥100 行）、生命周期钩子关键词（_init_state..train）、机制关键词（DDP/FSDP/AMP/EMA/Checkpoint）、降级哲学、5 训练器名、双向交叉引用、README 索引收录
+- B 组 GRPO_NOTES.md 契约 3 用例：存在（≥60 行）、三维度关键词（advantage/参考/KL）、家族成员类名 + hydra shim
+- C 组 docstring 覆盖 3 用例：**FR14-AC2 落地 ast 静态检查**（公共方法 100%，dunder/下划线豁免）——补上 design 评审「Minor：FR14-AC2 未落静态检查」的缺口；顶层类/公共函数 docstring；模块 docstring 提及 GQA/MoE/投机/KV
+- D 组分区导航 1 用例：4 个 SECTION banner + 主题词匹配（架构组件/KV CACHE/SPECULATIVE/GENERATION）
+
+**Green（commit 246fc07）：**
+- docs/ARCHITECTURE.md（~180 行）：生命周期 12 钩子构建顺序图、on_step_end 监控管线（grad-norm → spike 检测 → record）、wrap_distributed 三路径表（FSDP transformer_auto_wrap_policy + use_orig_params、DDP static_graph + gradient_as_bucket_view、FR9b FSDP-then-compile）、CheckpointManager（ema_shadow/异步写/FSDP 感知 state_dict）、降级哲学（构造失败→warn→继续）、5 训练器差异矩阵——全部对照 trainer_base.py 源码逐条核实（FR14-AC1 零漂移）
+- docs/GRPO_NOTES.md（~120 行）：继承树图 + 三维度对比（GRPO 组内相对优势/冻结 ref/显式反向 KL；Iterative 周期 hard-EMA ref 更新+拒绝采样 SFT/信任域移动；DPO 隐式优势/理论要求冻结 ref/KL 折叠进损失差分）+ 一页对比表 + dropout 不变量（GRPO 系必须 0.0，DPO 无此约束）
+- modern_gpt.py：模块 docstring 现状化 + 4 SECTION banner；RMSNorm/ModernGPT 类 docstring；13 处公共方法 docstring 补齐（含 n_rep property+setter）
+- README.md：文档索引表 4→7 行（新增 ARCHITECTURE/GRPO_NOTES/MIGRATION）——MIGRATION.md L106 原有指向 ARCHITECTURE.md 的悬空链接就此闭环为双向
+- Green 期 ruff/black 顺带重排 1 文件，复验无损
+
+**验证：** 14/14 目标全绿；全量 **618 passed / 3 skipped / 2 deselected**（~105s，604+14）；black/ruff/mypy 三绿。
+
+**AR-v0.5.0-hpc-readiness 至此 T001-T022 全部完成**（含提前完成的 T022）。剩余非任务项：GPU 冒烟遗留清单（迁移演练：compile recompile 计数、KV 显存斜率、static_graph+no_sync、FSDP gather——本机已有 Quadro RTX 5000 可先行演练）。
