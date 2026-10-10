@@ -33,7 +33,7 @@
 | T016 | FR10 根目录收编：导出 4 脚本 → tools/、profile 2 脚本 → tools/、编排脚本处置（[project.scripts] 与测试路径同步）、删除死文件（run_inference_ablation.py/generate_experiment_log.py/logs_prepare*.txt） | - | passing | 删除前全库引用检查 |
 | T017 | FR11a training/args.py 公共 flag 提取（23 个重复 flag，~350 行净删） | - | passing | 可与 A 阶段并行提前 |
 | T018 | FR11b load_model 统一到 load_model_from_checkpoint（7 份拷贝收敛）+ tests/conftest.py tiny fixture + test_bugfixes.py 拆分 | T017 | passing | |
-| T019 | FR12 接口统一（breaking）：BaselineGPT 3-tuple 返回、no-op 参数显式化、调用点全量同步、反射 hack 清理、CHANGELOG | T013,T014 | pending | v0.5.0 大版本 |
+| T019 | FR12 接口统一（breaking）：BaselineGPT 3-tuple 返回、no-op 参数显式化、调用点全量同步、反射 hack 清理、CHANGELOG | T013,T014 | passing | v0.5.0 大版本 |
 | T020 | FR13 lint/测试基建：black line-length=100 统一 + ruff 配置 + mypy 版本对齐 + test_kv_cache_benchmark 相对断言/perf marker + 文档数字刷新 | T017,T018 | pending | 一次性格式化对齐 |
 | T021 | FR14 理解力交付物：docs/ARCHITECTURE.md（训练基座）、modern_gpt.py 分区导航 + docstring 100%、GRPO 家族对比笔记、与 MIGRATION.md 交叉引用 | T011,T019 | pending | 收尾任务 |
 
@@ -392,3 +392,35 @@
 - helpers.py 与 conftest fixture 并存：fixture 满足 design 接口，普通函数供 89 处直接 import（避免大范围函数签名插参）；config = model.config 替代 ckpt config 提取（两模型均有 .config 属性，已验证）
 - _make_tiny_checkpoint 显式 vocab 50257：tiny 默认 vocab=100 对 GPT2 tokenizer 路径是破坏性变更，该处保留原值
 - eval_benchmark._auto_export_hf 的 model_type 探测从 config dict 改 isinstance(model, ModernGPT)——语义等价（saved model_type 驱动构造），且少一份 config 解析重复
+
+### 2026-10-10 T019 会话记录（FR12 BaselineGPT/ModernGPT 接口统一）
+
+**调研（explore 子代理）：**
+- 破坏面实测极小：全库真 2-tuple 解包仅 train_pretrain.py:391 一处（自带 pad-to-3 补偿 hack）；tests 零 2-tuple 解包（gradient_checkpointing 用索引 out[1] 长度无关）
+- BaselineGPT.generate 三个 no-op：top_p/use_cache/eos_token_id 声明未用（temperature/top_k 已实现）；forward 的 attention_mask 静默忽略、**kwargs 吞一切
+- **反射 hack 假阳性**：BaselineGPT.generate 有显式 use_cache 参数 → co_varnames 探测恒 True → run_full_evaluation 实际给 baseline 传 use_cache=True 被静默 no-op；inference/generate.py:103 同款 hack 同样误判
+- supports_kv_cache 两模型均不存在；CHANGELOG（docs/CHANGELOG.md）最新条目 v0.3.0、无 Unreleased 段
+- ModernGPT._sample 有 temperature==0 严格 greedy 短路；baseline 无（除以 0 产生 inf → multinomial 崩溃，**既有 bug**）
+- eval_benchmark.py:96 与 profile_training.py:98 的 3-tuple 解包对 baseline checkpoint 当前会 crash——FR12 改动顺带修复
+
+**Red（14 用例 test_model_interface_unification.py：13 Red + 1 pin）：**
+- forward 3-tuple（带/不带 targets）；两模型统一解包长度冒烟；attention_mask 一次性 warn（B11：首调 pytest.warns + 复调 simplefilter("error") 断言不再 warn）；top_p 执行 + greedy 不受影响（temperature=0 时 top-1 恒在 nucleus 内）；use_cache 显式 warn；nucleus 源码静态断言（cumsum/排序）；supports_kv_cache（baseline False / modern True）；run_full_evaluation 与 generate.py 无 co_varnames、含 supports_kv_cache；train_pretrain pad hack 删除；`logits, loss =` 于 training/evaluation/tools/inference 零残留（FR12-AC1）；CHANGELOG v0.5.0 + 3-tuple + BaselineGPT 记录
+- Red 期修正 2 个测试自身缺陷：glob 逻辑写歪重写、nucleus 静态断言恒真表达式重写
+
+**Green：**
+- baseline_gpt.py：forward 返回 `(logits, loss, None)`；attention_mask 一次性 `warnings.warn`（实例级 flag `_warned_attention_mask`）；generate 实现 **top_p nucleus**（sort + cumsum + 前移一位掩码对齐 generate_utils 写法）+ **eos_token_id 提前停止**（顺手，声明未用的第三个 no-op）+ use_cache 一次性显式 warn + **temperature==0 严格 argmax greedy 短路**（修复既有除零 bug，对齐 ModernGPT._sample 语义）；类属性 `supports_kv_cache = False`
+- modern_gpt.py：类属性 `supports_kv_cache = True`
+- train_pretrain.py `_forward`：删 pad hack（baseline 直接透传 3-tuple）
+- run_full_evaluation.py：co_varnames 反射 → `getattr(model, "supports_kv_cache", False)`（修复假阳性——baseline 不再收到静默 no-op 的 use_cache）
+- inference/generate.py benchmark：同款反射 → capability flag（修复 baseline 误入 cache 路径的隐患）
+- docs/CHANGELOG.md：新建 v0.5.0（Unreleased）Breaking Changes 段（3-tuple 迁移指引 + warn 语义 + top_p 真实现 + capability flag）
+
+**验证：**
+- 目标 14/14 全绿；全量 **602 passed / 3 skipped**（~98s；588 基线 + 14）零破坏
+- FR12-AC1：`logits, loss =` 零残留 ✓；AC2（基线/现代模型统一训练评估跑通）：test_call_sites_unified_unpack_smoke + 既有 gradient_checkpointing 双模型参数化全绿 ✓
+
+**关键决策：**
+- use_cache 选择「显式 warning」而非 NotImplementedError（design 二选一；baseline 的 use_cache 在既有调用面 run_full_evaluation/api_server 被广泛传入，raise 会破坏可用性，warn 保持降级哲学）
+- top_p/eos/greedy 短路三个「最小实现」顺手完成：design 只点名 top_p，但 eos 与 temperature=0 同为声明未用/既有 bug，一次改齐避免二次触碰
+- CHANGELOG 放 docs/CHANGELOG.md（仓库实际位置，非根目录）；v0.5.0 段含迁移指引（外部 2-tuple 解包代码需跟进）
+- api_server.py:214 的 "compile" co_varnames 反射**不在本次范围**（compile 参数两模型语义不同且探测结果正确，FR12 只授权 use_cache 探测改造）——记遗留待 FR13/后续评估
