@@ -1,4 +1,4 @@
-# nanoGPT-Modern 技术白皮书
+﻿# nanoGPT-Modern 技术白皮书
 
 **面向技术决策者与核心研发团队的全栈架构技术报告**
 
@@ -232,7 +232,7 @@ data/prepare.py (数据准备)
 #### 5.1.1 类图与模块划分
 
 ```python
-# 文件路径: model/modern_gpt.py, 行号范围: 1-1986
+# 文件路径: model/modern_gpt.py, 行号范围: 1-2880
 
 ModernGPTConfig          # 配置数据类: vocab_size, block_size, n_layer, n_head, n_embd, n_kv_head, ...
 ├── RMSNorm              # 根均方归一化
@@ -321,7 +321,7 @@ def generate(
 #### 5.2.1 类图与时序图
 
 ```python
-# 文件路径: training/train_grpo.py, 行号范围: 1-29243
+# 文件路径: training/train_grpo.py, 行号范围: 1-705
 
 GRPOTrainer(BaseTrainer)
 ├── _build_model()         # 加载 policy + ref (frozen) 双模型

@@ -74,6 +74,26 @@
 
 - `cache=True` 与 `cache=False` 输出 **bit-wise 一致**，验证 RoPE 位置编码与 KV Cache 实现正确。
 
+### 4.3 KV decode append 布局改造基准（AR-v0.5.0 FR5，2026-10-10）
+
+对比对象：`KVCacheManager` 值路径（每步 `torch.cat` 整个缓存，改造前）vs
+**append 布局**（预分配缓冲 + `[:pos]` 零拷贝视图直喂 SDPA，改造后）。
+
+| 指标 | 值路径（改造前） | append 布局（改造后） | 加速比 |
+|------|-----------------|----------------------|--------|
+| 单步 decode 耗时（中位数） | 21.4 ms/步 | 13.3 ms/步 | **1.61x** |
+| 输出一致性 | — | 与值路径逐位一致 | bit-wise |
+
+- **环境**：Windows 开发机（CPU 路径）、torch 2.5.1、fp32、
+  8 层 × 8 头 × 512 维、block_size=8192（缓存长度 ~4096，FR5-AC2 基准规模）、
+  5 次预热 + 30 次重复取中位数（`tests/test_kv_append_layout.py::test_decode_speedup_at_least_1_5x`，`-m perf`）。
+- **GPU 侧（Quadro RTX 5000 8GB，torch 2.5.1+cu121，FlashAttention 后端）**：
+  24 层 × 16 头 × 1024 维、prompt 1024、greedy 128 token——
+  cache 路径 6.2s vs no-cache 全量重算 23.3s，**3.75x**，输出逐位一致
+  （`tests/test_kv_cache_benchmark.py::test_kv_cache_decode_completes_efficiently`，`-m perf`）。
+- 备注：小配置（12L/512D）在 GPU 上受 kernel-launch 开销主导，cache 与 no-cache
+  不可区分（~1.0x）；上述大配置使计算主导，基准才有区分度。
+
 ---
 
 ## 5. SFT / GRPO 结果
