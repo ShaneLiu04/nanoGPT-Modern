@@ -27,7 +27,7 @@
 | T010 | FR9a DDP 数据 rank 分片（互斥切片 + resume_offset 分片语义）+ no_sync/static_graph/gradient_as_bucket_view | T009 | passing | 2026-10-09 完成；跨步切片零丢弃（优于 DistributedSampler padding/drop）；static_graph+no_sync 兼容性待 GPU 冒烟验证 |
 | T011 | FR9b FSDP 补齐：auto_wrap_policy/use_orig_params/compile 顺序/FSDP checkpoint 修复（死代码接线或 DCP）+ 分布式 round-trip 测试 | T008,T010 | passing | 2026-10-09 完成；FULL_STATE_DICT 真实 gather 是 CUDA-only，CPU 侧以「真构造 + stub 路由」分层覆盖，GPU 冒烟待迁移演练 |
 | T012 | FR6 MoE 向量化重写（方案 B）：参数改单张量 `Parameter[E,H,C]`（gate/up/down 各一）+ load/save 翻译 hook（磁盘格式不变）、定容 padded bmm `[E,cap,C]` 零 Python 循环（cap 语义与现行 int 截断对齐，容量丢弃 token 输出 0）、compile 兼容；验收 loss atol=1e-5 + ≥2x 基准对比 | - | passing | 2026-10-10 完成；实测 17.9x（137.1→7.7 ms/step @ E=4,H=688,C=256,N=512 CPU 中位），等价 diff ~3e-8 |
-| T013 | FR5 KV decode 去 cat（方案 B）：`KVCacheManager` 新增 `layout="append"` 追加式预分配缓冲 + `get_cache()` 返回 `[:pos]` 视图直喂 SDPA（零拷贝）、int8 惰性反量化切片、滑窗 mask 向量化；`pos ≥ max_cache_len` 切 ring 驱逐语义回退路径（`evicted` 标记，B5）；flash wrapper 仅可选分支（包存在才启用）；验收输出逐位一致 + ≥1.5x | T005 | pending | kernel 级；append vs 旧 cat 路径逐 token 等价测试先行 |
+| T013 | FR5 KV decode 去 cat（方案 B）：`KVCacheManager` 新增 `layout="append"` 追加式预分配缓冲 + `get_cache()` 返回 `[:pos]` 视图直喂 SDPA（零拷贝）、int8 惰性反量化切片、滑窗 mask 向量化；`pos ≥ max_cache_len` 切 ring 驱逐语义回退路径（`evicted` 标记，B5）；flash wrapper 仅可选分支（包存在才启用）；验收输出逐位一致 + ≥1.5x | T005 | passing | 2026-10-10 完成；4096ctx CPU 基准 1.61x（21.4→13.3 ms/步），fast path 逐位等价 + 单写协议 |
 | T014 | FR7a 连续批处理 iteration-level 重构：槽位回收/prefill 插入/**左对齐 padding**（右侧 pad 不参与 KV 写入）/RoPE 位置按各序列真实长度/**PrefixCache 与 _init_decode_compile 删除**（设计决策：不留死代码）/批量采样张量化（`[B]` 温度张量，消灭逐序列 Python 循环） | T006,T013 | pending | ~300 行调度器重写；必须保留/继承 T006 的 temperature=0 greedy 语义，验收补 greedy 确定性断言；**T005 定向新发现**：`generate_batch` 解码首步将 prompt 尾 token 重复喂入（KV 已含整个 prompt）——off-by-one 独立缺陷，重构时一并修复 |
 | T015 | FR7b api_server 接线新调度器（asyncio.to_thread/线程安全队列）+ 补齐或删除 --continuous_batching 声称 | T014 | pending | |
 | T016 | FR10 根目录收编：导出 4 脚本 → tools/、profile 2 脚本 → tools/、编排脚本处置（[project.scripts] 与测试路径同步）、删除死文件（run_inference_ablation.py/generate_experiment_log.py/logs_prepare*.txt） | - | pending | 删除前全库引用检查 |
@@ -218,3 +218,19 @@
 - 回归：新文件 11 PASS + 1 SKIP（compile）；全量 **481 passed / 3 skipped**（基线 470p/2s + 11 新 pass + 1 新 skip），90s 零回归
 - 基准记录（FR6-AC2，写入实验记录）：E=4, H=688, C=256, N=512, fwd+bwd, CPU 中位/10 次——旧 137.13 ms/step → 新 7.65 ms/step，**17.92x**（≥2x 达标）；N=1024 时 27.56x
 - 遗留：compile recompile 计数用例在无 triton 平台 skip，GPU 冒烟时验证（迁移演练覆盖项）
+
+### 2026-10-10 T013 会话记录（FR5 KV decode 去 cat·方案 B）
+
+- 定向关键发现：现行 KVCacheManager 已是 ring 预分配（update 无 cat）——**热点在 attention 层 L408-416**：get_cache() 返回 blocks 后每步全量 cat（值形态 past_kv）；未环绕时单块 cat 也是 O(cache_len) 拷贝
+- Red（13 用例，tests/test_kv_append_layout.py）：1 pin（generate cache/no-cache 逐 token 相等）+ 12 Red（layout/get_layer_view/对象形态/fast path 等价/零 cat/B5 驱逐回退/int8 惰性/B9 flash 回退/mask 向量化/基准/GQA+滑窗）；值形态基线全部首跑通过；既有 KV 测试（test_bugfixes/test_paged_kv_*）零影响
+- **Red 期发现（遗留问题）**：RoPE cos/sin 表在 RotaryEmbedding 中锁死 `2*block_size` 行——滑窗驱逐后 start_pos 无限前移，绝对位置超 2×block_size 时 generate 双路径都崩（block_size=16 + 28 token 即触发边界）。测试 7 以 28 token 规避；驱逐后行为与现行一致优先，未在本任务修（若滑窗长生成是需求需后续修复：表按 seq_len 请求扩展）
+- Green（kv_cache_utils.py + modern_gpt.py + flash_attention.py）：
+  - KVCacheManager：`layout="append"` 默认（"ring" 保留）；`evicted` 标记（advance 首次驱逐时置位，永久切滑窗语义）；`get_layer_view(layer_idx, extra)` 零拷贝视图（append+未驱逐+不越界，否则 None 回退；int8 仅物化该切片）；**get_cache() 返回结构不变 → 既有测试零破坏**
+  - attention fast path：past_kv 形态 `(cache, layer_idx)`（model.forward 对象分发）+ 条件 T==1、无 attention_mask/document_ids、无滑窗、未 evicted、append 布局 → O(1) 写入 buffer + `[:pos+1]` 视图直喂 SDPA（is_causal=False 与旧路径一致）→ **单写协议**：present=None、forward 折叠全 None→None、调用方跳过 update 只 advance；不满足条件回退值路径（get_cache()[layer_idx] 转换后走现行 cat 逻辑，逐位一致）
+  - flash wrapper 可选：fast path 先试 `flash_attention_with_cache`（返回 None 回退 SDPA 视图，B9）；**wrapper 探测 import 加模块级缓存**——每层每步重复失败 import 是隐性热点（实测 0.57x 的主因之一）
+  - build_sliding_window_mask 向量化（arange 比较，无 Python 循环，逐位一致）；docstring 避开 "for "（静态 ban 覆盖 docstring）
+  - generate 主循环接线对象形态；**PagedKVCacheManager 无 get_layer_view → 按能力分流保持值形态**（全量回归捕获的鸭子类型误伤，test_paged_generation_matches_ring_buffer 红灯）
+- **契约演进（测试侧修正，非弱化）**：Red 契约的幂等 update 协议（调用方无脑 update，fast path 双写）在 cProfile 下暴露 0.35ms/步开销——CPU 上净负收益（0.89x）；改为单写协议（present=None 语义，回退场景调用方仍 update）；测试 3/4/8/9/12 同步更新，测试 9 重写为单写协议 + buffer 逐位一致断言
+- 性能演进：flash import 缓存 0.57→0.89x → 单写协议 0.89→1.15x → 基准规模对齐 AC（Red 用 1024 ctx，cat 占比不足）→ **4096 ctx + embd512/8h/8L：21.4→13.3 ms/步 = 1.61x**（≥1.5x 达标；CPU 天花板 ~1.6x——cat 与 fast path 写入共享内存带宽，更大规模饱和）；基准需 buffer 余量（prompt 4096 + buffer 8192），否则 7 步即驱逐回退
+- 全量回归：**494 passed / 3 skipped**（481+13），91s
+- 遗留：投机解码/batch 投机/continuous_batching/generate_batch 仍走值形态（S>1 验证步为主 + compile step_fn 对象追踪风险；T014 重构时统一接线）；RoPE 表上限问题见上；显存斜率断言（AC2 后半）CUDA-only 留迁移演练
