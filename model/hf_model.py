@@ -8,7 +8,7 @@ rewriting the underlying model.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import torch
 from transformers import PretrainedConfig, PreTrainedModel
@@ -33,12 +33,12 @@ class NanoGPTModernConfig(PretrainedConfig):
         n_layer: int = 12,
         n_head: int = 8,
         n_embd: int = 512,
-        n_kv_head: Optional[int] = None,
-        intermediate_size: Optional[int] = None,
+        n_kv_head: int | None = None,
+        intermediate_size: int | None = None,
         dropout: float = 0.0,
         norm_position: str = "pre",
         rope_theta: float = 10000.0,
-        rope_scaling: Optional[dict] = None,
+        rope_scaling: dict | None = None,
         tie_word_embeddings: bool = True,
         **kwargs: Any,
     ):
@@ -56,7 +56,7 @@ class NanoGPTModernConfig(PretrainedConfig):
         self.rope_scaling = rope_scaling
 
     @classmethod
-    def from_nanogpt_config(cls, config: ModernGPTConfig) -> "NanoGPTModernConfig":
+    def from_nanogpt_config(cls, config: ModernGPTConfig) -> NanoGPTModernConfig:
         """Build an HF config from a ``ModernGPTConfig``."""
         d = config.to_dict()
         # ``n_rep`` is a computed property, not a constructor argument.
@@ -116,8 +116,8 @@ class NanoGPTModernForCausalLM(PreTrainedModel):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
         **kwargs: Any,
     ) -> CausalLMOutputWithCrossAttentions:
         """Forward compatible with ``transformers`` training / evaluation."""

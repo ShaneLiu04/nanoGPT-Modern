@@ -16,8 +16,8 @@ from .attention_utils import (
 from .baseline_gpt import BaselineGPT, BaselineGPTConfig
 from .kv_cache_utils import KVCacheManager, build_sliding_window_mask
 from .modern_gpt import ModernGPT, ModernGPTConfig
-from .quantization import QuantConfig, QuantizedLinear, quantize_model
 from .paged_kv_cache import PagedKVCacheManager
+from .quantization import QuantConfig, QuantizedLinear, quantize_model
 
 __all__ = [
     "BaselineGPT",

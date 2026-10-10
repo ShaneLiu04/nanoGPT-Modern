@@ -6,8 +6,10 @@ prefill (prompt encoding) from decode (token-by-token generation).
 
 import argparse
 import json
+
 import torch
-from model.attention_utils import set_attention_backend, print_attention_backend
+
+from model.attention_utils import print_attention_backend, set_attention_backend
 from training.trainer_base import load_model_from_checkpoint
 from utils.config import parse_args_with_config
 
@@ -15,32 +17,22 @@ from utils.config import parse_args_with_config
 def get_args():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", type=str, required=True)
-    p.add_argument(
-        "--model", type=str, default="modern", choices=["baseline", "modern"]
-    )
-    p.add_argument(
-        "--prompt", type=str, default="The future of artificial intelligence is"
-    )
+    p.add_argument("--model", type=str, default="modern", choices=["baseline", "modern"])
+    p.add_argument("--prompt", type=str, default="The future of artificial intelligence is")
     p.add_argument("--max_new_tokens", type=int, nargs="+", default=[400, 500])
     p.add_argument("--num_samples", type=int, default=30)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--top_k", type=int, default=50)
-    p.add_argument(
-        "--top_p", type=float, default=None, help="Nucleus sampling threshold"
-    )
+    p.add_argument("--top_p", type=float, default=None, help="Nucleus sampling threshold")
     p.add_argument(
         "--repetition_penalty",
         type=float,
         default=None,
         help="Penalty for repeated tokens (>1.0 discourages repetition)",
     )
-    p.add_argument(
-        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
-    )
+    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--output_json", type=str, default=None)
-    p.add_argument(
-        "--prompt_len", type=int, default=50, help="Pad/trim prompt to this many tokens"
-    )
+    p.add_argument("--prompt_len", type=int, default=50, help="Pad/trim prompt to this many tokens")
     p.add_argument("--config", type=str, default=None, help="Path to YAML config file")
     p.add_argument(
         "--attn_backend",
@@ -93,9 +85,9 @@ def benchmark(
         If True and the model supports it, run a manual prefill+decode loop
         with KV cache.  Otherwise use ``model.generate`` without cache.
     """
-    from inference.generate_utils import _sample_logits
-
     import time as _time
+
+    from inference.generate_utils import _sample_logits
 
     is_cuda = "cuda" in str(device)
     sync = torch.cuda.synchronize if is_cuda else (lambda: None)
@@ -239,9 +231,7 @@ def benchmark(
         "prefill_ms": med(prefill_ms),
         "decode_ms": med(decode_ms),
         "decode_tok_s": med(decode_tok_s) if decode_tok_s else 0.0,
-        "total_tok_s": (
-            max_new_tokens / (med(total_ms) / 1000.0) if med(total_ms) > 0 else 0.0
-        ),
+        "total_tok_s": (max_new_tokens / (med(total_ms) / 1000.0) if med(total_ms) > 0 else 0.0),
         "peak_mem_mb": round(peak_mem, 1),
         "prompt_len": prompt_ids.shape[1],
         "generated_len": max_new_tokens,
@@ -271,13 +261,9 @@ def main():
     else:
         # fallback: ord(char)
         s = args.prompt[: config.block_size]
-        prompt_ids = torch.tensor(
-            [[ord(c) for c in s]], dtype=torch.long, device=device
-        )
+        prompt_ids = torch.tensor([[ord(c) for c in s]], dtype=torch.long, device=device)
 
-    print(
-        f"Model: {args.model} | params={sum(p.numel() for p in model.parameters()):,}"
-    )
+    print(f"Model: {args.model} | params={sum(p.numel() for p in model.parameters()):,}")
     print(f"Prompt: {args.prompt!r}")
     print(f"Prompt tokens={prompt_ids.shape[1]} | samples={args.num_samples}")
     print()

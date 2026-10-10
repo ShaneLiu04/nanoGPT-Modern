@@ -1,5 +1,6 @@
 """
-BaselineGPT: Standard GPT-2 architecture with LayerNorm, GELU FFN, and absolute positional embeddings.
+BaselineGPT: Standard GPT-2 architecture with LayerNorm, GELU FFN, and
+absolute positional embeddings.
 """
 
 import math
@@ -127,9 +128,7 @@ class Block(nn.Module):
         self.config = config
         self.norm_pos = getattr(config, "norm_position", "pre")
         if self.norm_pos not in ("pre", "post"):
-            raise ValueError(
-                f"norm_position must be 'pre' or 'post', got '{self.norm_pos}'"
-            )
+            raise ValueError(f"norm_position must be 'pre' or 'post', got '{self.norm_pos}'")
 
         self.ln_1 = nn.LayerNorm(config.n_embd, bias=config.bias)
         self.attn = CausalSelfAttention(config)
@@ -137,9 +136,7 @@ class Block(nn.Module):
         self.mlp = MLP(config)
 
     def forward(self, x):
-        gc_enabled = self.training and getattr(
-            self.config, "gradient_checkpointing", False
-        )
+        gc_enabled = self.training and getattr(self.config, "gradient_checkpointing", False)
 
         if self.norm_pos == "pre":
             if gc_enabled:
@@ -198,9 +195,7 @@ class BaselineGPTConfig:
             )
         self.attention_backend = attention_backend
         if norm_position not in ("pre", "post"):
-            raise ValueError(
-                f"norm_position must be 'pre' or 'post', got '{norm_position}'"
-            )
+            raise ValueError(f"norm_position must be 'pre' or 'post', got '{norm_position}'")
         self.norm_position = norm_position
         self.gradient_checkpointing = gradient_checkpointing
 
@@ -222,9 +217,7 @@ class BaselineGPTConfig:
     @classmethod
     def from_dict(cls, d: dict) -> "BaselineGPTConfig":
         """Deserialize from a dict, ignoring unknown keys."""
-        return cls(
-            **{k: v for k, v in d.items() if k in cls.__init__.__code__.co_varnames}
-        )
+        return cls(**{k: v for k, v in d.items() if k in cls.__init__.__code__.co_varnames})
 
 
 class BaselineGPT(nn.Module):
@@ -252,9 +245,7 @@ class BaselineGPT(nn.Module):
         self.apply(self._init_weights)
         for pn, p in self.named_parameters():
             if pn.endswith("c_proj.weight"):
-                torch.nn.init.normal_(
-                    p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
-                )
+                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -270,9 +261,7 @@ class BaselineGPT(nn.Module):
         assert (
             t <= self.config.block_size
         ), f"Cannot forward sequence of length {t}, block size is {self.config.block_size}"
-        if attention_mask is not None and not getattr(
-            self, "_warned_attention_mask", False
-        ):
+        if attention_mask is not None and not getattr(self, "_warned_attention_mask", False):
             warnings.warn(
                 "BaselineGPT does not implement attention_mask; "
                 "cross-document masking requires ModernGPT (the mask is ignored).",
@@ -304,16 +293,12 @@ class BaselineGPT(nn.Module):
         self.transformer.wpe.weight.data = self.transformer.wpe.weight.data[:block_size]
         for block in self.transformer.h:
             if hasattr(block.attn, "bias") and block.attn.bias.numel() > 0:
-                block.attn.bias.data = block.attn.bias.data[
-                    :, :, :block_size, :block_size
-                ]
+                block.attn.bias.data = block.attn.bias.data[:, :, :block_size, :block_size]
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         # Deduplicate parameters by tensor id.  wte and lm_head share the same
         # weight tensor, so without deduplication AdamW would update it twice.
-        param_dict = {
-            id(p): (n, p) for n, p in self.named_parameters() if p.requires_grad
-        }
+        param_dict = {id(p): (n, p) for n, p in self.named_parameters() if p.requires_grad}
         decay_params = [p for n, p in param_dict.values() if p.dim() >= 2]
         nodecay_params = [p for n, p in param_dict.values() if p.dim() < 2]
         optim_groups = [
@@ -325,9 +310,7 @@ class BaselineGPT(nn.Module):
         fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == "cuda"
         extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(
-            optim_groups, lr=learning_rate, betas=betas, **extra_args
-        )
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
         return optimizer
 
     @torch.no_grad()
@@ -351,9 +334,7 @@ class BaselineGPT(nn.Module):
             self._warned_use_cache = True
         for _ in range(max_new_tokens):
             idx_cond = (
-                idx
-                if idx.size(1) <= self.config.block_size
-                else idx[:, -self.config.block_size :]
+                idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size :]
             )
             logits, _, _ = self(idx_cond)
             logits = logits[:, -1, :]
@@ -362,9 +343,7 @@ class BaselineGPT(nn.Module):
                 # (avoids the div-by-zero inf logits).
                 idx_next = logits.argmax(dim=-1, keepdim=True)
                 idx = torch.cat((idx, idx_next), dim=1)
-                if eos_token_id is not None and bool(
-                    (idx_next == eos_token_id).all()
-                ):
+                if eos_token_id is not None and bool((idx_next == eos_token_id).all()):
                     break
                 continue
             logits = logits / temperature
@@ -374,21 +353,15 @@ class BaselineGPT(nn.Module):
             if top_p is not None:
                 # FR12: nucleus sampling (previously a silent no-op).
                 sorted_logits, sorted_idx = torch.sort(logits, descending=True)
-                cum_probs = torch.cumsum(
-                    F.softmax(sorted_logits, dim=-1), dim=-1
-                )
+                cum_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
                 remove = cum_probs > top_p
                 remove[..., 1:] = remove[..., :-1].clone()
                 remove[..., 0] = False
-                logits = logits.masked_fill(
-                    remove.scatter(-1, sorted_idx, remove), float("-inf")
-                )
+                logits = logits.masked_fill(remove.scatter(-1, sorted_idx, remove), float("-inf"))
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
-            if eos_token_id is not None and bool(
-                (idx_next == eos_token_id).all()
-            ):
+            if eos_token_id is not None and bool((idx_next == eos_token_id).all()):
                 break
         return idx
 

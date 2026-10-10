@@ -21,7 +21,6 @@ are probed:
 from __future__ import annotations
 
 import threading
-from typing import Dict, Tuple
 
 import torch
 
@@ -40,9 +39,7 @@ def set_attention_backend(backend="auto"):
         * ``math``: force plain cuBLAS/math attention only.
     """
     if backend not in VALID_BACKENDS:
-        raise ValueError(
-            f"Unknown attention backend: {backend}. Choose from {VALID_BACKENDS}"
-        )
+        raise ValueError(f"Unknown attention backend: {backend}. Choose from {VALID_BACKENDS}")
 
     if not torch.cuda.is_available():
         return
@@ -101,7 +98,7 @@ def print_attention_backend(prefix="[Attention]"):
 # at its native size.
 
 _PROBE_LOCK = threading.Lock()
-_PROBE_CACHE: Dict[Tuple, Tuple[bool, bool]] = {}
+_PROBE_CACHE: dict[tuple, tuple[bool, bool]] = {}
 
 
 def sdpa_supports_enable_gqa() -> bool:
@@ -117,9 +114,7 @@ def sdpa_supports_enable_gqa() -> bool:
     try:
         import inspect
 
-        params = inspect.signature(
-            torch.nn.functional.scaled_dot_product_attention
-        ).parameters
+        params = inspect.signature(torch.nn.functional.scaled_dot_product_attention).parameters
         return "enable_gqa" in params
     except Exception:
         try:
@@ -137,7 +132,7 @@ def probe_gqa_sdpa_support(
     seq_len: int = 16,
     head_dim: int = 16,
     force_refresh: bool = False,
-) -> Tuple[bool, bool]:
+) -> tuple[bool, bool]:
     """Probe whether the active SDPA stack supports GQA without KV copy.
 
     Returns a tuple ``(supports_raw_broadcast, supports_grouped_broadcast)``.

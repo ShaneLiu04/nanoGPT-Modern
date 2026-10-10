@@ -13,7 +13,7 @@ Usage
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -70,9 +70,7 @@ class NeedleEvaluator:
         question_len = len(question_toks)
         available = context_len - needle_len - question_len - 5  # safety margin
         if available <= 0:
-            raise ValueError(
-                f"Context length {context_len} too short for needle + question"
-            )
+            raise ValueError(f"Context length {context_len} too short for needle + question")
 
         # Build haystack as filler text that tokenizes to roughly the needed length.
         haystack_text = "The sky is blue. The grass is green. " * (available // 10)
@@ -111,11 +109,11 @@ class NeedleEvaluator:
 
     def evaluate(
         self,
-        depths: Optional[List[float]] = None,
-        context_lengths: Optional[List[int]] = None,
+        depths: list[float] | None = None,
+        context_lengths: list[int] | None = None,
         num_trials: int = 3,
         max_new_tokens: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Run the needle-in-haystack evaluation grid.
 
         Parameters
@@ -168,8 +166,8 @@ class NeedleEvaluator:
                     )
 
         # Summary.
-        by_depth: Dict[float, List[bool]] = {d: [] for d in depths}
-        by_length: Dict[int, List[bool]] = {length: [] for length in context_lengths}
+        by_depth: dict[float, list[bool]] = {d: [] for d in depths}
+        by_length: dict[int, list[bool]] = {length: [] for length in context_lengths}
         for s in scores:
             by_depth[float(s["depth"])].append(bool(s["correct"]))
             by_length[int(s["context_length"])].append(bool(s["correct"]))
@@ -191,9 +189,9 @@ class NeedleEvaluator:
     def evaluate_single(
         self,
         depth: float = 0.5,
-        context_length: Optional[int] = None,
+        context_length: int | None = None,
         max_new_tokens: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Quick single-shot evaluation for CI / smoke tests."""
         length = context_length or self.max_context_length
         prompt = self._build_prompt(depth, length)

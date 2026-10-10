@@ -21,8 +21,6 @@ a Transformer decoder:
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
 import torch
 
 # ---------------------------------------------------------------------------
@@ -40,7 +38,7 @@ def is_available() -> bool:
         return False
 
 
-def version_info() -> Optional[Tuple[int, ...]]:
+def version_info() -> tuple[int, ...] | None:
     """Return the ``flash_attn`` version tuple, or ``None`` if unavailable."""
     try:
         import flash_attn
@@ -80,8 +78,8 @@ def flash_attention(
     k: torch.Tensor,
     v: torch.Tensor,
     causal: bool = True,
-    softmax_scale: Optional[float] = None,
-) -> Optional[torch.Tensor]:
+    softmax_scale: float | None = None,
+) -> torch.Tensor | None:
     """Compute memory-efficient attention using ``flash_attn.flash_attn_func``.
 
     Parameters
@@ -138,8 +136,8 @@ def flash_attention_varlen(
     max_seqlen_q: int,
     max_seqlen_k: int,
     causal: bool = True,
-    softmax_scale: Optional[float] = None,
-) -> Optional[torch.Tensor]:
+    softmax_scale: float | None = None,
+) -> torch.Tensor | None:
     """Compute attention for variable-length packed sequences.
 
     This is the flash-attn counterpart for training with packed documents
@@ -222,10 +220,10 @@ def flash_attention_with_cache(
     v_cache: torch.Tensor,
     k_new: torch.Tensor,
     v_new: torch.Tensor,
-    cache_seqlens: Optional[torch.Tensor] = None,
+    cache_seqlens: torch.Tensor | None = None,
     causal: bool = True,
-    softmax_scale: Optional[float] = None,
-) -> Optional[torch.Tensor]:
+    softmax_scale: float | None = None,
+) -> torch.Tensor | None:
     """Compute decode-step attention using ``flash_attn_with_kvcache``.
 
     This function is designed for the single-token decode step in

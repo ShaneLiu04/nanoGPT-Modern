@@ -16,7 +16,7 @@ GUI libraries.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -41,8 +41,8 @@ class AttentionVisualizer:
     def __init__(self, model: nn.Module, tokenizer: Any):
         self.model = model
         self.tokenizer = tokenizer
-        self._hooks: List[Any] = []
-        self._attn_maps: Dict[int, torch.Tensor] = {}
+        self._hooks: list[Any] = []
+        self._attn_maps: dict[int, torch.Tensor] = {}
         self._register_hooks()
 
     def _register_hooks(self) -> None:
@@ -69,9 +69,7 @@ class AttentionVisualizer:
             h = attn.register_forward_hook(make_hook(idx))
             self._hooks.append(h)
 
-    def _extract_attention(
-        self, mod: nn.Module, inp: Tuple, out: Tuple
-    ) -> torch.Tensor:
+    def _extract_attention(self, mod: nn.Module, inp: tuple, out: tuple) -> torch.Tensor:
         """Extract attention scores from a CausalSelfAttention forward call.
 
         This is a best-effort heuristic: when the module uses the eager/manual
@@ -93,9 +91,7 @@ class AttentionVisualizer:
         scores = (q @ k.transpose(-2, -1)) / (mod.head_dim**0.5)
         # Causal mask.
         causal_mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
-        scores = scores.masked_fill(
-            causal_mask.unsqueeze(0).unsqueeze(0), float("-inf")
-        )
+        scores = scores.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), float("-inf"))
         attn = F.softmax(scores, dim=-1)
         return attn.detach().cpu()  # [B, n_head, T, T]
 
@@ -107,12 +103,12 @@ class AttentionVisualizer:
 
     def plot_heatmaps(
         self,
-        tokens: List[str],
-        layer_idx: Optional[int] = None,
-        head_idx: Optional[int] = None,
-        output_path: Optional[str] = None,
-        figsize: Tuple[int, int] = (12, 8),
-    ) -> Optional[Any]:
+        tokens: list[str],
+        layer_idx: int | None = None,
+        head_idx: int | None = None,
+        output_path: str | None = None,
+        figsize: tuple[int, int] = (12, 8),
+    ) -> Any | None:
         """Render attention heatmaps with matplotlib / seaborn.
 
         Parameters
@@ -143,9 +139,7 @@ class AttentionVisualizer:
         if not self._attn_maps:
             raise RuntimeError("No attention maps captured. Run a forward pass first.")
 
-        layers = (
-            [layer_idx] if layer_idx is not None else sorted(self._attn_maps.keys())
-        )
+        layers = [layer_idx] if layer_idx is not None else sorted(self._attn_maps.keys())
         n_layers = len(layers)
         cols = min(4, n_layers)
         rows = math.ceil(n_layers / cols)
@@ -189,9 +183,9 @@ class AttentionVisualizer:
 
     def to_html(
         self,
-        tokens: List[str],
+        tokens: list[str],
         output_path: str,
-        layer_indices: Optional[List[int]] = None,
+        layer_indices: list[int] | None = None,
     ) -> str:
         """Export attention heatmaps as an interactive HTML file.
 
@@ -201,11 +195,7 @@ class AttentionVisualizer:
         if not self._attn_maps:
             raise RuntimeError("No attention maps captured. Run a forward pass first.")
 
-        layers = (
-            layer_indices
-            if layer_indices is not None
-            else sorted(self._attn_maps.keys())
-        )
+        layers = layer_indices if layer_indices is not None else sorted(self._attn_maps.keys())
         data = {}
         for li in layers:
             attn = self._attn_maps[li][0].mean(dim=0).numpy().tolist()  # [T, T]
@@ -217,7 +207,7 @@ class AttentionVisualizer:
         return output_path
 
     @staticmethod
-    def _render_html(tokens: List[str], data: Dict[str, List[List[float]]]) -> str:
+    def _render_html(tokens: list[str], data: dict[str, list[list[float]]]) -> str:
         """Build an HTML page with a selectable heatmap viewer."""
         token_json = json.dumps(tokens)
         data_json = json.dumps(data)
@@ -231,7 +221,8 @@ class AttentionVisualizer:
   #controls {{ margin-bottom: 10px; }}
   canvas {{ border: 1px solid #ccc; image-rendering: pixelated; }}
   #tooltip {{ position: absolute; background: rgba(0,0,0,0.7); color: white;
-             padding: 4px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; display: none; }}
+             padding: 4px 8px; border-radius: 4px; font-size: 12px;
+             pointer-events: none; display: none; }}
 </style>
 </head>
 <body>
@@ -315,8 +306,8 @@ class LogitLens:
         self.tokenizer = tokenizer
         self.top_k = top_k
         self._lm_head = model.lm_head
-        self._hooks: List[Any] = []
-        self._records: List[Dict[str, Any]] = []
+        self._hooks: list[Any] = []
+        self._records: list[dict[str, Any]] = []
 
     def _register_hooks(self) -> None:
         """Register hooks on every transformer block to capture hidden states."""
@@ -369,11 +360,11 @@ class LogitLens:
         """Stop recording and remove hooks."""
         self.remove_hooks()
 
-    def get_records(self) -> List[Dict[str, Any]]:
+    def get_records(self) -> list[dict[str, Any]]:
         """Return the captured records from the last forward pass."""
         return self._records
 
-    def decode_records(self, skip_special: bool = True) -> List[Dict[str, Any]]:
+    def decode_records(self, skip_special: bool = True) -> list[dict[str, Any]]:
         """Decode token ids to strings using the tokenizer.
 
         Returns a list of dicts with keys ``layer``, ``tokens``, ``texts``,
@@ -410,9 +401,7 @@ class LogitLens:
             ids = enc.encode(prompt)
         except Exception:
             ids = [ord(c) for c in prompt]
-        idx = torch.tensor(
-            [ids], dtype=torch.long, device=next(self.model.parameters()).device
-        )
+        idx = torch.tensor([ids], dtype=torch.long, device=next(self.model.parameters()).device)
 
         self.model.eval()
         with torch.no_grad():
@@ -426,9 +415,7 @@ class LogitLens:
                 decoded = self.decode_records()
                 print(f"\n--- Step {step + 1} (next token id={next_id.item()}) ---")
                 for rec in decoded:
-                    top = ", ".join(
-                        f"{t!r} ({p:.3f})" for t, p in zip(rec["texts"], rec["probs"])
-                    )
+                    top = ", ".join(f"{t!r} ({p:.3f})" for t, p in zip(rec["texts"], rec["probs"]))
                     print(f"  Layer {rec['layer']:2d}: {top}")
 
 

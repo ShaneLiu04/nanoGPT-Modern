@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any
 
 import hydra
 import torch
 from omegaconf import DictConfig
 
-
-from inference.generate import benchmark, _make_prompt
-from model.attention_utils import set_attention_backend, print_attention_backend
+from inference.generate import _make_prompt, benchmark
+from model.attention_utils import print_attention_backend, set_attention_backend
 from training.trainer_base import load_model_from_checkpoint
 from utils.hydra_utils import to_namespace
 
@@ -39,18 +38,14 @@ def main(cfg: DictConfig) -> None:
         prompt_ids = _make_prompt(tokenizer, args.prompt, args.prompt_len, device)
     else:
         s = args.prompt[: config.block_size]
-        prompt_ids = torch.tensor(
-            [[ord(c) for c in s]], dtype=torch.long, device=device
-        )
+        prompt_ids = torch.tensor([[ord(c) for c in s]], dtype=torch.long, device=device)
 
-    print(
-        f"Model: {args.model} | params={sum(p.numel() for p in model.parameters()):,}"
-    )
+    print(f"Model: {args.model} | params={sum(p.numel() for p in model.parameters()):,}")
     print(f"Prompt: {args.prompt!r}")
     print(f"Prompt tokens={prompt_ids.shape[1]} | samples={args.num_samples}")
     print()
 
-    all_results: Dict[str, Optional[Dict[int, Any]]] = {"no_cache": None, "cache": None}
+    all_results: dict[str, dict[int, Any] | None] = {"no_cache": None, "cache": None}
     headers = [
         "config",
         "total_ms",
@@ -96,7 +91,7 @@ def main(cfg: DictConfig) -> None:
             break
 
     if args.output_json:
-        out: Dict[str, Dict[str, Any]] = {}
+        out: dict[str, dict[str, Any]] = {}
         for k, v in all_results.items():
             if v:
                 out[k] = {str(nt): d for nt, d in v.items()}

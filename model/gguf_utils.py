@@ -11,7 +11,7 @@ import io
 import struct
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import torch
@@ -75,7 +75,7 @@ def _align(offset: int, alignment: int = 32) -> int:
     return (offset + alignment - 1) & ~(alignment - 1)
 
 
-def quantize_q8_0(tensor: Union[torch.Tensor, np.ndarray]) -> bytes:
+def quantize_q8_0(tensor: torch.Tensor | np.ndarray) -> bytes:
     """Quantize a tensor to GGUF Q8_0 block format.
 
     Block layout: ``int8[32] qs`` preceded by a ``float16`` scale ``d``.
@@ -105,7 +105,7 @@ def quantize_q8_0(tensor: Union[torch.Tensor, np.ndarray]) -> bytes:
     return interleaved.tobytes()
 
 
-def dequantize_q8_0(data: bytes, shape: Tuple[int, ...]) -> np.ndarray:
+def dequantize_q8_0(data: bytes, shape: tuple[int, ...]) -> np.ndarray:
     """Dequantize Q8_0 bytes back to a float32 array of ``shape``."""
     block_size = 34
     n_total = int(np.prod(shape))
@@ -121,12 +121,12 @@ def dequantize_q8_0(data: bytes, shape: Tuple[int, ...]) -> np.ndarray:
     return out.ravel()[:n_total].reshape(shape)
 
 
-def _tensor_raw_shape(shape: Tuple[int, ...]) -> Tuple[int, ...]:
+def _tensor_raw_shape(shape: tuple[int, ...]) -> tuple[int, ...]:
     """GGUF stores tensor dimensions in reverse order."""
     return tuple(reversed(shape))
 
 
-def _dtype_np(quant: GGMLQuantizationType) -> Optional[np.dtype]:
+def _dtype_np(quant: GGMLQuantizationType) -> np.dtype | None:
     if quant == GGMLQuantizationType.F32:
         return np.dtype("float32")
     if quant == GGMLQuantizationType.F16:
@@ -137,13 +137,11 @@ def _dtype_np(quant: GGMLQuantizationType) -> Optional[np.dtype]:
 class GGUFWriter:
     """Minimal GGUF writer for F32/F16/Q8_0 tensors."""
 
-    def __init__(self, path: Union[str, Path], architecture: str = "nanogpt-modern"):
+    def __init__(self, path: str | Path, architecture: str = "nanogpt-modern"):
         self.path = Path(path)
         self.architecture = architecture
-        self._metadata: List[Tuple[str, GGUFValueType, Any]] = []
-        self._tensors: List[
-            Tuple[str, GGMLQuantizationType, Tuple[int, ...], bytes]
-        ] = []
+        self._metadata: list[tuple[str, GGUFValueType, Any]] = []
+        self._tensors: list[tuple[str, GGMLQuantizationType, tuple[int, ...], bytes]] = []
         self.add_architecture(architecture)
 
     def add_key_value(self, key: str, value: Any, value_type: GGUFValueType) -> None:
@@ -156,29 +154,19 @@ class GGUFWriter:
         self.add_key_value("general.name", value, GGUFValueType.STRING)
 
     def add_context_length(self, value: int) -> None:
-        self.add_key_value(
-            f"{self.architecture}.context_length", value, GGUFValueType.UINT32
-        )
+        self.add_key_value(f"{self.architecture}.context_length", value, GGUFValueType.UINT32)
 
     def add_embedding_length(self, value: int) -> None:
-        self.add_key_value(
-            f"{self.architecture}.embedding_length", value, GGUFValueType.UINT32
-        )
+        self.add_key_value(f"{self.architecture}.embedding_length", value, GGUFValueType.UINT32)
 
     def add_block_count(self, value: int) -> None:
-        self.add_key_value(
-            f"{self.architecture}.block_count", value, GGUFValueType.UINT32
-        )
+        self.add_key_value(f"{self.architecture}.block_count", value, GGUFValueType.UINT32)
 
     def add_feed_forward_length(self, value: int) -> None:
-        self.add_key_value(
-            f"{self.architecture}.feed_forward_length", value, GGUFValueType.UINT32
-        )
+        self.add_key_value(f"{self.architecture}.feed_forward_length", value, GGUFValueType.UINT32)
 
     def add_head_count(self, value: int) -> None:
-        self.add_key_value(
-            f"{self.architecture}.attention.head_count", value, GGUFValueType.UINT32
-        )
+        self.add_key_value(f"{self.architecture}.attention.head_count", value, GGUFValueType.UINT32)
 
     def add_head_count_kv(self, value: int) -> None:
         self.add_key_value(
@@ -188,7 +176,7 @@ class GGUFWriter:
     def add_tensor(
         self,
         name: str,
-        data: Union[torch.Tensor, np.ndarray],
+        data: torch.Tensor | np.ndarray,
         quant_type: GGMLQuantizationType = GGMLQuantizationType.F32,
     ) -> None:
         """Add a tensor to the GGUF file.
@@ -259,9 +247,7 @@ class GGUFWriter:
         raise ValueError(f"Unsupported value type: {value_type}")
 
     @classmethod
-    def _write_value(
-        cls, f: io.BufferedWriter, value_type: GGUFValueType, value: Any
-    ) -> None:
+    def _write_value(cls, f: io.BufferedWriter, value_type: GGUFValueType, value: Any) -> None:
         f.write(struct.pack("<I", int(value_type)))
         if value_type == GGUFValueType.UINT8:
             f.write(struct.pack("<B", value))
@@ -297,7 +283,7 @@ class GGUFWriter:
             raise ValueError(f"Unsupported value type: {value_type}")
 
     @classmethod
-    def _tensor_info_size(cls, name: str, shape: Tuple[int, ...]) -> int:
+    def _tensor_info_size(cls, name: str, shape: tuple[int, ...]) -> int:
         # name string + n_dims uint32 + dims uint64 * ndim + dtype uint32 + offset uint64
         return cls._string_size(name) + 4 + 8 * len(shape) + 4 + 8
 
@@ -306,7 +292,7 @@ class GGUFWriter:
         cls,
         f: io.BufferedWriter,
         name: str,
-        shape: Tuple[int, ...],
+        shape: tuple[int, ...],
         quant_type: GGMLQuantizationType,
         offset: int,
     ) -> None:
@@ -329,12 +315,10 @@ class GGUFWriter:
         """Write the complete GGUF file to disk."""
         header_size = 24
         metadata_size = self._metadata_size()
-        info_size = sum(
-            self._tensor_info_size(name, shape) for name, _, shape, _ in self._tensors
-        )
+        info_size = sum(self._tensor_info_size(name, shape) for name, _, shape, _ in self._tensors)
         data_start = _align(header_size + metadata_size + info_size)
 
-        offsets: List[int] = []
+        offsets: list[int] = []
         offset = data_start
         for _, _, _, raw in self._tensors:
             offsets.append(offset)
@@ -370,16 +354,14 @@ class GGUFWriter:
 # ---------------------------------------------------------------------------
 
 
-def _read_string(mm: np.memmap, offset: int) -> Tuple[str, int]:
+def _read_string(mm: np.memmap, offset: int) -> tuple[str, int]:
     length = int(np.frombuffer(mm[offset : offset + 8].tobytes(), dtype=np.uint64)[0])
     offset += 8
     value = bytes(mm[offset : offset + length].tobytes()).decode("utf-8")
     return value, 8 + length
 
 
-def _read_value(
-    mm: np.memmap, offset: int, value_type: GGUFValueType
-) -> Tuple[Any, int]:
+def _read_value(mm: np.memmap, offset: int, value_type: GGUFValueType) -> tuple[Any, int]:
     if value_type == GGUFValueType.UINT8:
         return int(mm[offset]), 1
     if value_type == GGUFValueType.INT8:
@@ -402,9 +384,7 @@ def _read_value(
         item_type = GGUFValueType(
             int(np.frombuffer(mm[offset : offset + 4].tobytes(), np.uint32)[0])
         )
-        length = int(
-            np.frombuffer(mm[offset + 4 : offset + 12].tobytes(), np.uint64)[0]
-        )
+        length = int(np.frombuffer(mm[offset + 4 : offset + 12].tobytes(), np.uint64)[0])
         off = 12
         items = []
         for _ in range(length):
@@ -421,7 +401,7 @@ def _read_value(
     raise ValueError(f"Unsupported value type: {value_type}")
 
 
-def read_gguf_header(path: Union[str, Path]) -> Dict[str, Any]:
+def read_gguf_header(path: str | Path) -> dict[str, Any]:
     """Parse the GGUF header and metadata."""
     mm = np.memmap(path, mode="r")
     magic = int(np.frombuffer(mm[:4].tobytes(), np.uint32)[0])
@@ -432,7 +412,7 @@ def read_gguf_header(path: Union[str, Path]) -> Dict[str, Any]:
     kv_count = int(np.frombuffer(mm[16:24].tobytes(), np.uint64)[0])
     offset = 24
 
-    metadata: Dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
     for _ in range(kv_count):
         key, klen = _read_string(mm, offset)
         offset += klen
@@ -451,7 +431,7 @@ def read_gguf_header(path: Union[str, Path]) -> Dict[str, Any]:
     }
 
 
-def read_gguf_tensor_info(path: Union[str, Path]) -> List[Dict[str, Any]]:
+def read_gguf_tensor_info(path: str | Path) -> list[dict[str, Any]]:
     """Return a list of tensor metadata entries (name, shape, dtype, offset)."""
     header = read_gguf_header(path)
     mm = np.memmap(path, mode="r")
@@ -464,11 +444,7 @@ def read_gguf_tensor_info(path: Union[str, Path]) -> List[Dict[str, Any]]:
         n_dims = int(np.frombuffer(mm[offset : offset + 4].tobytes(), np.uint32)[0])
         offset += 4
         dims = tuple(
-            int(
-                np.frombuffer(
-                    mm[offset + i * 8 : offset + (i + 1) * 8].tobytes(), np.uint64
-                )[0]
-            )
+            int(np.frombuffer(mm[offset + i * 8 : offset + (i + 1) * 8].tobytes(), np.uint64)[0])
             for i in range(n_dims)
         )
         offset += 8 * n_dims
@@ -476,19 +452,15 @@ def read_gguf_tensor_info(path: Union[str, Path]) -> List[Dict[str, Any]]:
             int(np.frombuffer(mm[offset : offset + 4].tobytes(), np.uint32)[0])
         )
         offset += 4
-        data_offset = int(
-            np.frombuffer(mm[offset : offset + 8].tobytes(), np.uint64)[0]
-        )
+        data_offset = int(np.frombuffer(mm[offset : offset + 8].tobytes(), np.uint64)[0])
         offset += 8
         # GGUF stores dims reversed; expose original shape.
         shape = tuple(reversed(dims))
-        tensors.append(
-            {"name": name, "shape": shape, "dtype": dtype, "offset": data_offset}
-        )
+        tensors.append({"name": name, "shape": shape, "dtype": dtype, "offset": data_offset})
     return tensors
 
 
-def read_gguf_tensor_data(path: Union[str, Path], info: Dict[str, Any]) -> np.ndarray:
+def read_gguf_tensor_data(path: str | Path, info: dict[str, Any]) -> np.ndarray:
     """Read and dequantize a single tensor described by ``info``."""
     mm = np.memmap(path, mode="r")
     if info["dtype"] == GGMLQuantizationType.F32:
@@ -499,9 +471,7 @@ def read_gguf_tensor_data(path: Union[str, Path], info: Dict[str, Any]) -> np.nd
     if info["dtype"] == GGMLQuantizationType.F16:
         n = int(np.prod(info["shape"]))
         return (
-            np.frombuffer(
-                mm[info["offset"] : info["offset"] + n * 2].tobytes(), dtype=np.float16
-            )
+            np.frombuffer(mm[info["offset"] : info["offset"] + n * 2].tobytes(), dtype=np.float16)
             .astype(np.float32)
             .reshape(info["shape"])
         )

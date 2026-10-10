@@ -33,7 +33,6 @@ from __future__ import annotations
 import dataclasses
 import enum
 import threading
-from typing import List, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -67,13 +66,13 @@ class Request:
         Unique identifier returned with the result.
     """
 
-    prompt_ids: Union[torch.Tensor, List[int]]
+    prompt_ids: torch.Tensor | list[int]
     max_tokens: int = 128
     temperature: float = 1.0
-    top_k: Optional[int] = 50
-    top_p: Optional[float] = None
-    repetition_penalty: Optional[float] = None
-    eos_token_id: Optional[int] = None
+    top_k: int | None = 50
+    top_p: float | None = None
+    repetition_penalty: float | None = None
+    eos_token_id: int | None = None
     request_id: str = ""
 
     def __post_init__(self):
@@ -91,7 +90,7 @@ class RequestQueue:
     """
 
     def __init__(self, maxsize: int = 1000):
-        self._queue: List[Request] = []
+        self._queue: list[Request] = []
         self.maxsize = maxsize
         self._lock = threading.Lock()
 
@@ -102,7 +101,7 @@ class RequestQueue:
                 raise RuntimeError("Request queue is full")
             self._queue.append(req)
 
-    def dequeue(self) -> Optional[Request]:
+    def dequeue(self) -> Request | None:
         """Pop the oldest request, or ``None`` if the queue is empty."""
         with self._lock:
             if not self._queue:
@@ -135,7 +134,7 @@ class GenerateResult:
     """
 
     request_id: str
-    token_ids: List[int]
+    token_ids: list[int]
     finish_reason: str
     finish_iteration: int
 
@@ -153,7 +152,7 @@ class _Slot:
 
     request: Request
     prompt_len: int
-    completion: List[int]
+    completion: list[int]
     cache_len: int  # number of real KV entries in this slot's buffer row
     phase: _SlotPhase = _SlotPhase.PREFILL
     finish_reason: str = ""
@@ -183,7 +182,7 @@ class ContinuousBatchScheduler:
         self,
         queue: RequestQueue,
         model: nn.Module,
-        device: Union[str, torch.device] = "cpu",
+        device: str | torch.device = "cpu",
         batch_size: int = 4,
     ):
         self.queue = queue
@@ -196,15 +195,15 @@ class ContinuousBatchScheduler:
         self._n_kv_head = cfg.n_kv_head
         self._head_dim = cfg.n_embd // cfg.n_head
         self._max_cache_len = cfg.effective_block_size
-        self._k_buf: Optional[List[torch.Tensor]] = None
-        self._v_buf: Optional[List[torch.Tensor]] = None
-        self._slots: List[Optional[_Slot]] = [None] * batch_size
+        self._k_buf: list[torch.Tensor] | None = None
+        self._v_buf: list[torch.Tensor] | None = None
+        self._slots: list[_Slot | None] = [None] * batch_size
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self, max_steps: Optional[int] = None) -> List[GenerateResult]:
+    def run(self, max_steps: int | None = None) -> list[GenerateResult]:
         """Run the scheduler until the queue is empty and every slot has
         finished, or until ``max_steps`` iterations have been executed.
 
@@ -223,14 +222,14 @@ class ContinuousBatchScheduler:
         self.iteration_count = 0
         self._slots = []
         self._ensure_buffers()
-        results: List[GenerateResult] = []
+        results: list[GenerateResult] = []
 
         while True:
             # 1. Harvest FINISHED slots into results and compact the
             #    buffer so active slots always occupy rows [0..K): the
             #    decode forward can then slice its past as a zero-copy
             #    view instead of gathering rows every step.
-            keep: List[int] = []
+            keep: list[int] = []
             for i, slot in enumerate(self._slots):
                 if slot is None:
                     continue
@@ -238,8 +237,7 @@ class ContinuousBatchScheduler:
                     results.append(
                         GenerateResult(
                             request_id=slot.request.request_id,
-                            token_ids=slot.request.prompt_ids[0].tolist()
-                            + slot.completion,
+                            token_ids=slot.request.prompt_ids[0].tolist() + slot.completion,
                             finish_reason=slot.finish_reason,
                             finish_iteration=slot.finish_iteration,
                         )
@@ -295,16 +293,10 @@ class ContinuousBatchScheduler:
             #    iteration prefill below and join the decode group only in
             #    the next iteration (their first token comes from prefill).
             #    DECODING slots are exactly the contiguous rows [0..K).
-            n_decoding = sum(
-                1 for s in self._slots if s.phase == _SlotPhase.DECODING
-            )
+            n_decoding = sum(1 for s in self._slots if s.phase == _SlotPhase.DECODING)
 
             # 5. Prefill group (slots accepted since the last boundary).
-            prefill_rows = [
-                i
-                for i, s in enumerate(self._slots)
-                if s.phase == _SlotPhase.PREFILL
-            ]
+            prefill_rows = [i for i, s in enumerate(self._slots) if s.phase == _SlotPhase.PREFILL]
             if prefill_rows:
                 self._prefill(prefill_rows)
 
@@ -330,15 +322,13 @@ class ContinuousBatchScheduler:
             self._head_dim,
         )
         self._k_buf = [
-            torch.zeros(shape, dtype=dtype, device=self.device)
-            for _ in range(self._n_layer)
+            torch.zeros(shape, dtype=dtype, device=self.device) for _ in range(self._n_layer)
         ]
         self._v_buf = [
-            torch.zeros(shape, dtype=dtype, device=self.device)
-            for _ in range(self._n_layer)
+            torch.zeros(shape, dtype=dtype, device=self.device) for _ in range(self._n_layer)
         ]
 
-    def _prefill(self, rows: List[int]) -> None:
+    def _prefill(self, rows: list[int]) -> None:
         """Left-aligned prefill of the new-request group.
 
         Prompts are packed from position 0 (so implicit RoPE/wpe positions
@@ -382,12 +372,10 @@ class ContinuousBatchScheduler:
             s.cache_len = s.prompt_len
             s.phase = _SlotPhase.DECODING
 
-        last_logits = torch.stack(
-            [logits[j, slots[j].prompt_len - 1] for j in range(P)]
-        )
+        last_logits = torch.stack([logits[j, slots[j].prompt_len - 1] for j in range(P)])
         self._sample_and_finish(rows, last_logits)
 
-    def _decode(self, rows: List[int]) -> None:
+    def _decode(self, rows: list[int]) -> None:
         """Advance every DECODING slot in ``rows`` by one token.
 
         ``rows`` is the contiguous prefix [0..K) of the compact buffer
@@ -399,18 +387,15 @@ class ContinuousBatchScheduler:
         """
         slots = [self._slots[i] for i in rows]
         D = len(rows)
-        lens_t = torch.tensor(
-            [s.cache_len for s in slots], dtype=torch.long, device=self.device
-        )
+        lens_t = torch.tensor([s.cache_len for s in slots], dtype=torch.long, device=self.device)
         max_len = int(lens_t.max().item())
 
         next_in = torch.tensor(
             [[s.completion[-1]] for s in slots], dtype=torch.long, device=self.device
         )
         positions = lens_t.unsqueeze(1)  # [D, 1] absolute position per row
-        kv_mask = (
-            torch.arange(max_len, device=self.device).unsqueeze(0)
-            < lens_t.unsqueeze(1)
+        kv_mask = torch.arange(max_len, device=self.device).unsqueeze(0) < lens_t.unsqueeze(
+            1
         )  # [D, max_len] bool: True at each row's real prefix
 
         k_buf = self._k_buf
@@ -437,18 +422,14 @@ class ContinuousBatchScheduler:
         # vectorized indexed assignment per layer (no per-row loop).
         for li in range(self._n_layer):
             k_new, v_new = new_kvs[li]  # [D, n_kv_head, 1, head_dim]
-            k_buf[li][
-                torch.arange(D, device=self.device), :, lens_t
-            ] = k_new[:, :, 0]
-            v_buf[li][
-                torch.arange(D, device=self.device), :, lens_t
-            ] = v_new[:, :, 0]
+            k_buf[li][torch.arange(D, device=self.device), :, lens_t] = k_new[:, :, 0]
+            v_buf[li][torch.arange(D, device=self.device), :, lens_t] = v_new[:, :, 0]
         for i in rows:
             self._slots[i].cache_len += 1
 
         self._sample_and_finish(rows, logits[:, -1, :])
 
-    def _sample_and_finish(self, rows: List[int], logits: torch.Tensor) -> None:
+    def _sample_and_finish(self, rows: list[int], logits: torch.Tensor) -> None:
         """Vectorized sampling + per-slot finish bookkeeping.
 
         ``logits`` is [len(rows), V]: one row per slot, gathered at each
@@ -465,18 +446,12 @@ class ContinuousBatchScheduler:
             device=self.device,
         )
         top_ks = torch.tensor(
-            [
-                s.request.top_k if s.request.top_k is not None else 0
-                for s in slots
-            ],
+            [s.request.top_k if s.request.top_k is not None else 0 for s in slots],
             dtype=torch.long,
             device=self.device,
         )
         top_ps = torch.tensor(
-            [
-                s.request.top_p if s.request.top_p is not None else 1.0
-                for s in slots
-            ],
+            [s.request.top_p if s.request.top_p is not None else 1.0 for s in slots],
             dtype=torch.float32,
             device=self.device,
         )
@@ -497,9 +472,7 @@ class ContinuousBatchScheduler:
                 s.finish_reason = "length"
                 s.finish_iteration = self.iteration_count
 
-    def _apply_repetition_penalty(
-        self, logits: torch.Tensor, slots: List[_Slot]
-    ) -> torch.Tensor:
+    def _apply_repetition_penalty(self, logits: torch.Tensor, slots: list[_Slot]) -> torch.Tensor:
         """Divide the logits of each slot's seen token ids by that slot's
         penalty factor.  Vectorized gather/scatter over a padded [B, L]
         index tensor; slots without a penalty pass through unchanged."""
@@ -507,9 +480,7 @@ class ContinuousBatchScheduler:
         if all(p is None or p == 1.0 for p in pens):
             return logits
 
-        seqs = [
-            s.request.prompt_ids[0].tolist() + s.completion for s in slots
-        ]
+        seqs = [s.request.prompt_ids[0].tolist() + s.completion for s in slots]
         maxlen = max(len(q) for q in seqs)
         B = len(slots)
         idx = torch.zeros((B, maxlen), dtype=torch.long, device=self.device)
@@ -535,7 +506,7 @@ class ContinuousBatchingServer:
     def __init__(
         self,
         model: nn.Module,
-        device: Union[str, torch.device] = "cpu",
+        device: str | torch.device = "cpu",
         batch_size: int = 4,
     ):
         self.model = model
@@ -548,6 +519,6 @@ class ContinuousBatchingServer:
         """Enqueue a new request."""
         self.queue.enqueue(req)
 
-    def generate_pending(self, max_steps: Optional[int] = None) -> List[GenerateResult]:
+    def generate_pending(self, max_steps: int | None = None) -> list[GenerateResult]:
         """Run the scheduler on all pending requests and return results."""
         return self.scheduler.run(max_steps=max_steps)

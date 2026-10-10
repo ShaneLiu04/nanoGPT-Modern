@@ -10,7 +10,6 @@ GRPO rollouts).
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import List, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -20,8 +19,8 @@ import torch.nn.functional as F
 def _sample_logits(
     logits: torch.Tensor,
     temperature: float = 1.0,
-    top_k: Optional[int] = None,
-    top_p: Optional[float] = None,
+    top_k: int | None = None,
+    top_p: float | None = None,
 ) -> torch.Tensor:
     """Sample a single token from logits [B, vocab]."""
     if temperature is not None and temperature == 0:
@@ -48,8 +47,8 @@ def _sample_logits(
 def _sample_logits_batched(
     logits: torch.Tensor,
     temperatures: torch.Tensor,
-    top_ks: Optional[torch.Tensor] = None,
-    top_ps: Optional[torch.Tensor] = None,
+    top_ks: torch.Tensor | None = None,
+    top_ps: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Sample one token per row from logits [B, V] with per-row controls.
 
@@ -105,13 +104,9 @@ def _sample_logits_batched(
             # already exceeds top_p (mirrors the shifted mask in
             # _sample_logits); the top-1 token is always kept.
             smask = cum_probs > ps.unsqueeze(1)
-            smask = torch.cat(
-                [torch.zeros_like(smask[:, :1]), smask[:, :-1]], dim=1
-            )
+            smask = torch.cat([torch.zeros_like(smask[:, :1]), smask[:, :-1]], dim=1)
             sorted_logits = sorted_logits.masked_fill(smask, float("-Inf"))
-            scaled = torch.full_like(scaled, float("-Inf")).scatter(
-                1, sorted_idx, sorted_logits
-            )
+            scaled = torch.full_like(scaled, float("-Inf")).scatter(1, sorted_idx, sorted_logits)
 
     probs = F.softmax(scaled, dim=-1)
     sampled = torch.multinomial(probs, num_samples=1).squeeze(-1)
@@ -120,15 +115,15 @@ def _sample_logits_batched(
 
 def batched_generate(
     model: nn.Module,
-    prompts: List[str],
+    prompts: list[str],
     tokenizer,
     max_new_tokens: int,
-    device: Union[str, torch.device],
+    device: str | torch.device,
     batch_size: int = 16,
     temperature: float = 1.0,
     top_k: int = 50,
-    top_p: Optional[float] = None,
-    eos_token_id: Optional[int] = None,
+    top_p: float | None = None,
+    eos_token_id: int | None = None,
     return_ids: bool = False,
 ):
     """
@@ -160,8 +155,8 @@ def batched_generate(
     prompt_tokens = [tokenizer.encode(p) for p in prompts]
     prompt_lens = [len(t) for t in prompt_tokens]
 
-    all_responses: List[str] = []
-    all_response_ids: List[List[int]] = []
+    all_responses: list[str] = []
+    all_response_ids: list[list[int]] = []
 
     model.eval()
     with torch.no_grad():
@@ -178,25 +173,15 @@ def batched_generate(
                     break
 
                 max_len = max(len(s) for s in sequences)
-                input_ids = torch.full(
-                    (B, max_len), eos_token_id, dtype=torch.long, device=device
-                )
-                attention_mask = torch.zeros(
-                    (B, max_len), dtype=torch.bool, device=device
-                )
+                input_ids = torch.full((B, max_len), eos_token_id, dtype=torch.long, device=device)
+                attention_mask = torch.zeros((B, max_len), dtype=torch.bool, device=device)
                 for b, seq in enumerate(sequences):
-                    input_ids[b, : len(seq)] = torch.tensor(
-                        seq, dtype=torch.long, device=device
-                    )
+                    input_ids[b, : len(seq)] = torch.tensor(seq, dtype=torch.long, device=device)
                     attention_mask[b, : len(seq)] = True
 
-                logits, _, _ = model(
-                    input_ids, attention_mask=attention_mask, use_cache=False
-                )
+                logits, _, _ = model(input_ids, attention_mask=attention_mask, use_cache=False)
                 # Gather the logit at the last real token of each sequence.
-                logits_last = torch.stack(
-                    [logits[b, len(sequences[b]) - 1] for b in range(B)]
-                )
+                logits_last = torch.stack([logits[b, len(sequences[b]) - 1] for b in range(B)])
                 next_tokens = _sample_logits(logits_last, temperature, top_k, top_p)
 
                 for b in range(B):
@@ -220,15 +205,15 @@ def batched_generate(
 
 def generate_by_length(
     model: nn.Module,
-    prompts: List[str],
+    prompts: list[str],
     tokenizer,
     max_new_tokens: int,
-    device: Union[str, torch.device],
+    device: str | torch.device,
     batch_size: int = 16,
     temperature: float = 1.0,
     top_k: int = 50,
-    top_p: Optional[float] = None,
-    eos_token_id: Optional[int] = None,
+    top_p: float | None = None,
+    eos_token_id: int | None = None,
     return_ids: bool = False,
 ):
     """
@@ -247,11 +232,11 @@ def generate_by_length(
     for i, toks in enumerate(prompt_tokens):
         by_length[len(toks)].append((i, toks))
 
-    response_ids: List[Optional[List[int]]] = [None] * len(prompts)
+    response_ids: list[list[int] | None] = [None] * len(prompts)
 
     model.eval()
     with torch.no_grad():
-        for length, items in by_length.items():
+        for _length, items in by_length.items():
             for start in range(0, len(items), batch_size):
                 batch_items = items[start : start + batch_size]
                 idx = torch.tensor(
