@@ -387,9 +387,8 @@ class PretrainTrainer(BaseTrainer):
             document_ids = None
         if self.args.model == "modern":
             return self.model(input_ids, targets=targets, document_ids=document_ids)
-        # BaselineGPT returns (logits, loss); pad to the 3-tuple ModernGPT API.
-        logits, loss = self.model(input_ids, targets)
-        return logits, loss, None
+        # FR12: BaselineGPT.forward now returns the unified 3-tuple.
+        return self.model(input_ids, targets)
 
     @torch.no_grad()
     def estimate_loss(self):
