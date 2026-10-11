@@ -762,10 +762,13 @@ class BaseTrainer(ABC):
                 # FR9a: static_graph (fixed model structure, enables DDP
                 # graph analysis) + gradient_as_bucket_view (gradients
                 # alias the communication buckets, saves a full-size
-                # gradient buffer).
+                # gradient buffer).  device_ids is GPU-only: a CPU module
+                # under gloo (debug/distributed-smoke runs) must pass
+                # None or DDP rejects the construction.
+                device_ids = [self.local_rank] if self.device.startswith("cuda") else None
                 model = DDP(
                     model,
-                    device_ids=[self.local_rank],
+                    device_ids=device_ids,
                     static_graph=True,
                     gradient_as_bucket_view=True,
                 )

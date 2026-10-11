@@ -582,7 +582,12 @@ class PretrainTrainer(BaseTrainer):
                 # accumulation window (loss is pre-divided by
                 # accum_steps, so the window sum equals the window mean).
                 if self.distributed:
-                    dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
+                    # SUM + explicit division: ReduceOp.AVG is NCCL-only
+                    # and gloo rejects it (GPU-rehearsal finding,
+                    # 2026-10-11); SUM/world_size is backend-generic and
+                    # numerically identical.
+                    dist.all_reduce(loss_accum, op=dist.ReduceOp.SUM)
+                    loss_accum = loss_accum / self.world_size
                 running_loss += loss_accum.item()
                 running_count += 1
                 loss_accum = None
