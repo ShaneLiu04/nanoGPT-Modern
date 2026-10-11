@@ -706,3 +706,63 @@ class TestBuildDataSharding:
             assert trainer.train_loader.dataset.shard_world_size == 1
         finally:
             trainer.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# F. Real gloo process group through the full train loop (GPU-rehearsal
+#    finding, 2026-10-11: ReduceOp.AVG is NCCL-only)
+# ---------------------------------------------------------------------------
+
+
+def test_distributed_train_real_gloo_loss_all_reduce(tmp_path, monkeypatch):
+    """Full train() over a real single-process gloo group must work.
+
+    GPU-rehearsal finding (Quadro RTX 5000, Windows): the loss
+    all-reduce used ``ReduceOp.AVG``, which gloo rejects
+    (``Cannot use ReduceOp.AVG with Gloo``) -- NCCL-only semantics.
+    Every existing distributed test either stubs all_reduce or stops at
+    construction, so this was never exercised on a real group.
+
+    Contract: the loss all-reduce is backend-generic (SUM + explicit
+    world_size division, numerically identical to AVG); a single-rank
+    gloo group through ``PretrainTrainer.train`` completes both the
+    train loop and the eval path (estimate_loss uses the same
+    all-reduce family).
+
+    Skips (like the FSDP group tests) if a single-process group cannot
+    be created on this machine.
+    """
+    import torch.distributed as dist
+
+    from training.trainer_base import cleanup_distributed
+
+    monkeypatch.setenv("USE_LIBUV", "0")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
+    monkeypatch.setenv("MASTER_PORT", "29514")
+
+    try:
+        args, trainer = _make_pretrain_trainer(
+            tmp_path,
+            "out_gloo_train",
+            backend="gloo",
+            max_iters=2,
+            eval_interval=2,
+            eval_iters=2,
+            log_interval=1,
+            ckpt_interval=0,
+        )
+    except Exception as exc:
+        if not dist.is_initialized():
+            pytest.skip(f"single-process gloo group init failed here: {exc!r}")
+        cleanup_distributed()
+        raise
+    try:
+        assert trainer.distributed and dist.is_initialized()
+        assert dist.get_backend() == "gloo"
+        trainer.train()
+    finally:
+        trainer.cleanup()
+        cleanup_distributed()
