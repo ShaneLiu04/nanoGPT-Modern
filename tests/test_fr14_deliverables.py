@@ -86,9 +86,9 @@ def test_architecture_doc_covers_degradation():
     text = _read(ARCHITECTURE_PATH)
     assert "降级" in text, "docs/ARCHITECTURE.md does not mention 降级 (degradation)"
     lower = text.lower()
-    assert ("monitor" in lower) or ("degradation" in lower), (
-        "docs/ARCHITECTURE.md does not mention monitor/degradation"
-    )
+    assert ("monitor" in lower) or (
+        "degradation" in lower
+    ), "docs/ARCHITECTURE.md does not mention monitor/degradation"
 
 
 def test_architecture_doc_covers_five_trainers():
@@ -105,13 +105,13 @@ def test_architecture_doc_cross_references():
     assert ARCHITECTURE_PATH.is_file(), "docs/ARCHITECTURE.md does not exist"
     assert MIGRATION_PATH.is_file(), "docs/MIGRATION.md does not exist"
     arch_text = _read(ARCHITECTURE_PATH)
-    assert "MIGRATION.md" in arch_text, (
-        "docs/ARCHITECTURE.md does not link back to docs/MIGRATION.md"
-    )
+    assert (
+        "MIGRATION.md" in arch_text
+    ), "docs/ARCHITECTURE.md does not link back to docs/MIGRATION.md"
     migration_text = _read(MIGRATION_PATH)
-    assert "ARCHITECTURE.md" in migration_text, (
-        "docs/MIGRATION.md does not link to docs/ARCHITECTURE.md"
-    )
+    assert (
+        "ARCHITECTURE.md" in migration_text
+    ), "docs/MIGRATION.md does not link to docs/ARCHITECTURE.md"
 
 
 def test_readme_docs_index_lists_new_docs():
@@ -142,9 +142,9 @@ def test_grpo_notes_cover_algorithm_dimensions():
     assert GRPO_NOTES_PATH.is_file(), "docs/GRPO_NOTES.md does not exist"
     text = _read(GRPO_NOTES_PATH)
     assert "advantage" in text.lower(), "docs/GRPO_NOTES.md missing advantage dimension"
-    assert ("参考模型" in text) or ("reference" in text.lower()), (
-        "docs/GRPO_NOTES.md missing reference-model dimension"
-    )
+    assert ("参考模型" in text) or (
+        "reference" in text.lower()
+    ), "docs/GRPO_NOTES.md missing reference-model dimension"
     assert "KL" in text, "docs/GRPO_NOTES.md missing KL dimension"
 
 
@@ -183,8 +183,7 @@ def test_modern_gpt_public_methods_docstring_coverage():
             if not ast.get_docstring(child):
                 missing.append(f"{node.name}.{child.name}")
     assert not missing, (
-        "model/modern_gpt.py public methods missing docstrings "
-        f"({len(missing)}): {missing}"
+        "model/modern_gpt.py public methods missing docstrings " f"({len(missing)}): {missing}"
     )
 
 
@@ -200,8 +199,7 @@ def test_modern_gpt_public_classes_and_functions_have_docstring():
             if not node.name.startswith("_") and not ast.get_docstring(node):
                 missing.append(f"function {node.name}")
     assert not missing, (
-        "model/modern_gpt.py top-level public classes/functions missing "
-        f"docstrings: {missing}"
+        "model/modern_gpt.py top-level public classes/functions missing " f"docstrings: {missing}"
     )
 
 
@@ -213,9 +211,9 @@ def test_modern_gpt_module_docstring_current():
     lower = doc.lower()
     assert "gqa" in lower, "module docstring does not mention GQA"
     assert "moe" in lower, "module docstring does not mention MoE"
-    assert ("投机" in doc) or ("speculative" in lower), (
-        "module docstring does not mention speculative decoding"
-    )
+    assert ("投机" in doc) or (
+        "speculative" in lower
+    ), "module docstring does not mention speculative decoding"
     assert "kv" in lower, "module docstring does not mention KV cache"
 
 
@@ -229,9 +227,9 @@ def test_modern_gpt_has_section_navigation():
     assert MODERN_GPT_PATH.is_file(), "model/modern_gpt.py does not exist"
     src = _read_strict(MODERN_GPT_PATH)
     section_lines = [line for line in src.splitlines() if "SECTION:" in line]
-    assert len(section_lines) >= 4, (
-        f"model/modern_gpt.py has only {len(section_lines)} SECTION: banners (< 4)"
-    )
+    assert (
+        len(section_lines) >= 4
+    ), f"model/modern_gpt.py has only {len(section_lines)} SECTION: banners (< 4)"
     joined = "\n".join(section_lines).upper()
     themes = {
         "architecture components": ("ARCHITECTURE COMPONENTS" in joined) or ("架构组件" in joined),

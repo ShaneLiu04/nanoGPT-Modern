@@ -30,7 +30,6 @@ import math
 import statistics
 import time
 
-import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -615,13 +614,25 @@ def test_moe_speedup_at_least_2x():
 
 
 def test_compile_no_recompile_growth():
-    """100 identical steps through a compiled MoE layer must not recompile."""
+    """100 identical steps through a compiled MoE layer must not recompile.
+
+    Prefers the full inductor backend; when inductor is unavailable
+    (e.g. Windows torch 2.5 with a mismatched triton -- see MIGRATION.md
+    troubleshooting) it falls back to ``backend="eager"`` and still
+    verifies the dynamo-level recompile counter, which is backend-
+    independent: a stable ``unique_graphs`` count over 100 identical
+    steps proves the vectorized MoE layer has no shape/dict-induced
+    graph breaks.
+    """
+    backend = "inductor"
     try:
         probe = torch.compile(lambda t: t * 2)
         result = probe(torch.ones(4))
         assert torch.allclose(result, torch.full((4,), 2.0))
     except Exception:
-        pytest.skip("torch.compile unavailable on this platform")
+        # inductor broken on this platform, but dynamo recompile counting
+        # does not need it
+        backend = "eager"
 
     torch._dynamo.reset()
     cfg, model = _make_tiny_model(num_experts=4, seed=1212)
@@ -629,7 +640,7 @@ def test_compile_no_recompile_growth():
     torch.manual_seed(1213)
     x = torch.randn(2, 8, cfg.n_embd)
 
-    compiled = torch.compile(mlp)
+    compiled = torch.compile(mlp, backend=backend)
     for _ in range(3):  # warmup: pay all compilation costs up front
         compiled(x)
 
