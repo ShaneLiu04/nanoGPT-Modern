@@ -20,10 +20,12 @@ table, L483 this file's spec, L550 E7; srs.md L219 FR9b AC):
 * E7: a failed save must never corrupt the previous checkpoint
   (tmp+rename atomicity, WARN, no leftover ``*.tmp``).
 
-Real-FSDP construction tests run single-process gloo on CPU
-(``USE_LIBUV=0`` before ``init_process_group``; FSDP1 FULL_STATE_DICT
+Real-FSDP construction tests run single-process gloo
+(``USE_LIBUV=0`` before ``init_process_group``) and are skipped on
+machines without an accelerator: FSDP1 requires a non-CPU device
+handle even when the process group is gloo.  FSDP1 FULL_STATE_DICT
 gathering is CUDA-only, so state-dict tests use stubs -- never a real
-``FULL_STATE_DICT`` gather on CPU).
+``FULL_STATE_DICT`` gather.
 
 The tiny-data / args-namespace helper pattern is a self-contained copy
 of the T009/T010/T022 pattern in tests/test_training_perf_flags.py /
@@ -164,7 +166,12 @@ def _make_pretrain_trainer(tmp_path, out_name="out", **overrides):
 
 
 def _make_fsdp_trainer(tmp_path, monkeypatch, port, out_name="out", **overrides):
-    """Build a tiny single-process gloo/CPU PretrainTrainer with fsdp=True.
+    """Build a tiny single-process gloo PretrainTrainer with fsdp=True.
+
+    FSDP1 constructs a device handle for a non-CPU accelerator even
+    when the process group is gloo, so on machines without one the
+    caller tests are skipped (real-FSDP contracts are only meaningful
+    where FSDP can actually be constructed).
 
     ``USE_LIBUV=0`` must be in the environment BEFORE
     ``init_process_group`` (gloo on this torch build lacks libuv
@@ -174,6 +181,11 @@ def _make_fsdp_trainer(tmp_path, monkeypatch, port, out_name="out", **overrides)
     Construction failures BEYOND group init are re-raised (after
     destroying the leaked group) so they surface as real failures.
     """
+    if not torch.cuda.is_available():
+        pytest.skip(
+            "single-process FSDP construction needs a non-CPU "
+            "accelerator device (no CUDA on this machine)"
+        )
     from training.train_pretrain import PretrainTrainer
     from training.trainer_base import cleanup_distributed
 
