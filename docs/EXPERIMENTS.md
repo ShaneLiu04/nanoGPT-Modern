@@ -93,6 +93,12 @@
   （`tests/test_kv_cache_benchmark.py::test_kv_cache_decode_completes_efficiently`，`-m perf`）。
 - 备注：小配置（12L/512D）在 GPU 上受 kernel-launch 开销主导，cache 与 no-cache
   不可区分（~1.0x）；上述大配置使计算主导，基准才有区分度。
+- **2026-10-11 演练补记**：GPU 显存斜率演练发现 SDPA `enable_gqa` 在无原生 GQA
+  内核的后端（sm75/fp32）内部物化 KV head 扩展，decode 峰值显存随上下文线性
+  增长（12,335 B/token）。已修复：T==1 GQA decode 统一走 `_decode_gqa_attention`
+  手写内核（scores `[B,n_kv,rep,S]`，原生 KV-head 分辨率），峰值显存平坦、单步
+  瞬时分配 57.7MB→0.5MB（L=4096，114×）、fast/value 路径保持逐位一致。根因与
+  数据详见 `docs/MIGRATION.md` §8.2。
 
 ---
 

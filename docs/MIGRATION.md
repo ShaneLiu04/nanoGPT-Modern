@@ -4,6 +4,8 @@
 > 本文档是 AR-v0.5.0-hpc-readiness FR2 的交付物，环境依赖契约见 `pyproject.toml` / `uv.lock`（torch `~=2.5,<2.9`，cu12x 变体）。
 >
 > **演练记录（2026-10-08，Windows 本机）**：干净 venv `uv sync` 1m20s → 数据验证 27s → 50 步冒烟 30s，核心链路合计 **2m17s**（≤1h 达标）。两个平台差异已固化到排障表：Windows PyPI torch 为 CPU-only（云 Linux manylinux wheel 自带 cu128 不受影响）；Windows 需 `--num_workers 0`（spawn 竞态已知问题）。
+>
+> **GPU 演练记录（2026-10-11，Windows 本机 Quadro RTX 5000 8GB / sm75）**：见 §8。torch.compile recompile 计数验证通过（dynamo 层，backend 无关）；KV 显存斜率演练抓到并修复了 SDPA GQA head-expansion 物化 bug（decode 峰值显存从 O(T) 增长改为平坦）。
 
 ## 0. 前置检查
 
@@ -139,3 +141,23 @@ python data/validate.py data/openwebtext/train.bin   # 对照 §3 判据
 | 训练报 shuffle idx 缺失 | 检查 `train.bin.shuffle.idx` 是否随迁（§1 第 5 行） |
 | 冒烟 OOM | GPU：正常不应出现（A100 80GB）；CPU 冒烟会因 50257-vocab logits OOM，务必用 CI 同款小参数 |
 | val loss 不降 | 核对数据验证输出（§3）与 `--data_dir` 路径 |
+| `torch.compile` 报 `cannot import name 'triton_key'` | triton 与 torch 版本断裂（本机 triton 3.8.0 vs torch 2.5.1；torch 2.5.1 需 triton 3.1.0，Windows 无官方 wheel）。inductor 不可用，dynamo 层（recompile 计数、graph break 检查）仍可用 `backend="eager"` 验证；云 Linux 装匹配 triton 后不受影响 |
+| decode 峰值显存随上下文线性增长（长上下文 OOM） | 已修复（§8.2）：SDPA `enable_gqa` 在无原生 GQA 内核的后端会物化 KV head 扩展（~3×[B,n_head,S,D] 每层每步）。T==1 decode 现走 `_decode_gqa_attention` 手写内核，峰值显存平坦 |
+| `generate(compile='fullgraph')` 在 Windows 直接回退 eager | 同 triton 断裂根因；云 Linux 正常。回退后 eager 步走 cache 对象零拷贝 fast path，行为一致 |
+
+## 8. GPU 演练记录（本机 Quadro RTX 5000 8GB，2026-10-11）
+
+ST-024 遗留 GPU 迁移演练清单的本机执行结果。云实例（sm_80+）预期更优：flash 后端原生 GQA + 匹配 triton。
+
+### 8.1 torch.compile recompile 稳定性（FR 关联：MoE 向量化）
+
+- **现象**：`torch.compile` 首次调用即 `cannot import name 'triton_key'`（triton 3.8.0 与 torch 2.5.1 API 断裂；torch 2.5.1 配套 triton 3.1.0 无 Windows wheel）。
+- **验证**：recompile 计数是 **dynamo 层指标，与 backend 无关**。`backend="eager"` 下 100 个相同形状步进 `unique_graphs` 稳定不增长 → 向量化 MoE 层无 shape/dict 诱导的 graph break。云 Linux inductor 可用后同一测试自动走完整 inductor（`tests/test_moe_vectorized.py::test_compile_no_recompile_growth`）。
+
+### 8.2 KV 显存斜率 → 抓到真 bug 并修复
+
+- **测量**（24L/16H/8KV/1024d fp32，prompt=8，decode 至 512/1024/2048/4096）：峰值显存斜率 12,335 B/token（理论 KV 98,304 的 1/8），R²=0.99999 完美线性——预分配 append buffer 之上还有 O(T) 增长。
+- **定位**（`torch.cuda.memory._record_memory_history` 分配栈追踪）：`F.scaled_dot_product_attention(..., enable_gqa=True)` 每层每 decode 步分配 ~[B,16,S,64] fp32 ×3（sm75 无 flash 内核，mem-efficient 后端内部物化 8→16 KV head 扩展）。12,288 B/token ≈ 3×4096×24 精确吻合。零拷贝 cache view 被 SDPA 内部复制击败；grouped 5D 广播同样物化（~2×kv-native）。
+- **修复**：新增 `_decode_gqa_attention`（modern_gpt.py）——T==1 且无 additive mask 的 GQA decode 统一走手写 batched-matmul 内核，scores 在原生 KV-head 分辨率 `[B,n_kv,rep,S]`（比扩展形式小 2×n_rep 倍，与 backend 无关）。fast path（cache view）与 value path（cat 产物）同走此内核，**保持 T013 bit-identity 契约**；数值与 SDPA allclose（fp32 噪声级 4.6e-08）。prefill（T>1）与带 mask 的步进保持 SDPA 不变。
+- **顺带**：`_generate_fullgraph` 的 eager fallback 步改传 cache 对象（零拷贝 fast path），compiled 步保持 list（dynamo 对自定义对象 fullgraph 兼容性未验证，云上再评估）。
+- **效果**：峰值显存斜率 12,335 → **-1,090 B/token（平坦）**；单步瞬时分配 57.7MB → 0.5MB（L=4096，114×）；GPU decode 吞吐 68→64.5 ms/step（+5%，物化在 GPU 上只是带宽拷贝；收益主要在显存容量——长上下文/大 batch 不再 OOM）。测试：`tests/test_decode_gqa_attention.py` 8 用例（Red→Green），全量 627 passed + perf 2 passed。
