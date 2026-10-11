@@ -242,6 +242,61 @@ def _gqa_grouped_sdpa(
     return out_g.reshape(B, n_head, T, D)
 
 
+def _decode_gqa_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    n_kv_head: int,
+    *,
+    scale: float | None = None,
+) -> torch.Tensor:
+    """Single-token (T == 1) GQA attention without any KV head expansion.
+
+    SDPA backends without a native GQA kernel (e.g. ``enable_gqa`` falling
+    back to the memory-efficient/math backend on sm75 or fp32 inputs)
+    internally materialise the K/V head expansion — an
+    ``O(B * n_head * S * D)`` transient per layer per decode step that
+    defeats the zero-copy append-cache design (GPU rehearsal measured
+    ~3 such copies: 12,288 bytes/token of peak growth instead of ~0).
+
+    This kernel instead computes the attention scores at *native* KV-head
+    resolution: ``[B, n_kv, rep, S]`` — ``2 * n_rep`` times smaller than
+    the expanded form and independent of any backend fallback — so the
+    cache views (or value-form cats) are consumed directly.  Output is
+    numerically equivalent to SDPA within fp32 noise (``allclose``) and
+    bit-identical between the cache view and value-form inputs.
+
+    Parameters
+    ----------
+    q : torch.Tensor
+        ``[B, n_head, 1, D]`` query tensor (single decode token).
+    k, v : torch.Tensor
+        ``[B, n_kv_head, S, D]`` key/value tensors — a zero-copy cache
+        view on the fast path, or a concatenated value form.
+    n_kv_head : int
+        Number of KV heads (``n_head // n_rep``).
+    scale:
+        Attention scale; ``None`` defaults to ``1/sqrt(D)`` like SDPA.
+
+    Returns
+    -------
+    torch.Tensor
+        Attention output of shape ``[B, n_head, 1, D]``.
+    """
+    B, n_head, T, D = q.shape
+    rep = n_head // n_kv_head
+    if scale is None:
+        scale = 1.0 / math.sqrt(D)
+    q_g = q.view(B, n_kv_head, rep, D)
+    # Batched matmuls (faster than einsum on both CPU and GPU):
+    # [B, n_kv, rep, D] @ [B, n_kv, D, S] -> [B, n_kv, rep, S]
+    att = (q_g @ k.transpose(-1, -2)) * scale
+    att = torch.softmax(att, dim=-1)
+    # [B, n_kv, rep, S] @ [B, n_kv, S, D] -> [B, n_kv, rep, D]
+    y = att @ v
+    return y.reshape(B, n_head, T, D)
+
+
 class CausalSelfAttention(nn.Module):
     """Multi-Head / Grouped Query Attention with RoPE and KV Cache.
 
@@ -676,7 +731,17 @@ class CausalSelfAttention(nn.Module):
                 #   works everywhere, same numerical result as repeat_interleave).
                 # - "repeat": fall back to repeat_interleave (legacy eager path).
                 if self.use_gqa:
-                    if self._gqa_mode == "native":
+                    if T == 1 and attn_mask is None:
+                        # Single-token decode: SDPA backends without a native
+                        # GQA kernel silently materialise the KV head expansion
+                        # (O(cache_len) copies per layer per step), defeating
+                        # the zero-copy cache design.  The manual kernel keeps
+                        # scores at native KV-head resolution and is
+                        # bit-identical between cache views and value forms.
+                        y = _decode_gqa_attention(
+                            q_embed, k_embed, v, self.n_kv_head, scale=attn_scale
+                        )
+                    elif self._gqa_mode == "native":
                         try:
                             y = F.scaled_dot_product_attention(
                                 q_embed,
@@ -2219,10 +2284,20 @@ class ModernGPT(nn.Module):
 
         def _decode_step(
             x: torch.Tensor,
-            past_kvs: list[tuple[torch.Tensor, torch.Tensor]],
+            past_kvs: Any,
             start_pos: int,
             finished: torch.Tensor,
-        ) -> tuple[torch.Tensor, list[tuple[torch.Tensor, torch.Tensor]]]:
+        ) -> tuple[torch.Tensor, Any]:
+            """Advance one decode step.
+
+            ``past_kvs`` may be the KVCacheManager *object* (eager path:
+            every attention layer then takes the zero-copy append fast
+            path -- no per-step ``torch.cat`` of the whole prefix, which
+            would cost O(T) copies per step and O(T^2) VRAM peaks per
+            generation) or the plain value list (compiled path: dynamo
+            cannot reliably trace custom cache-manager objects under
+            fullgraph=True, so the compiled step keeps the list form).
+            """
             logits, _, new_past = self(
                 x,
                 past_kvs=past_kvs,
@@ -2304,10 +2379,15 @@ class ModernGPT(nn.Module):
                     inp,
                 )
 
+            # Eager steps feed the cache *object* (zero-copy append fast
+            # path); the compiled step keeps the plain list form (dynamo
+            # cannot reliably trace custom cache-manager objects under
+            # fullgraph=True -- re-evaluate on the cloud compile path).
+            past_arg: Any = cache if step_fn is _decode_step else cache.get_cache()
             try:
                 tok, next_kv = step_fn(
                     inp,
-                    cache.get_cache(),
+                    past_arg,
                     cache.start_pos,
                     finished,
                 )
@@ -2323,15 +2403,19 @@ class ModernGPT(nn.Module):
                     step_fn = _decode_step
                     tok, next_kv = step_fn(
                         inp,
-                        cache.get_cache(),
+                        cache,
                         cache.start_pos,
                         finished,
                     )
                 else:
                     raise
 
-            for li in range(self.config.n_layer):
-                cache.update(li, next_kv[li][0], next_kv[li][1])
+            # Object-form fast path returns None (single-write protocol:
+            # every layer already wrote into the cache in place); the value
+            # form returns per-layer K/V that must be appended here.
+            if next_kv is not None:
+                for li in range(self.config.n_layer):
+                    cache.update(li, next_kv[li][0], next_kv[li][1])
             cache.advance(1)
 
             if eos_token_id is not None:
