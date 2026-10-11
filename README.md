@@ -7,19 +7,29 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
   <a href="requirements.txt"><img src="https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C.svg" alt="PyTorch 2.0+"></a>
-  <img src="https://img.shields.io/badge/tests-600%2B%20passing-brightgreen.svg" alt="600+ tests">
-  <img src="https://img.shields.io/badge/version-0.3.0-8B5CF6.svg" alt="v0.3.0">
+  <img src="https://img.shields.io/badge/tests-628%2B%20passing-brightgreen.svg" alt="628+ tests">
+  <img src="https://img.shields.io/badge/version-0.5.0-8B5CF6.svg" alt="v0.5.0">
 </p>
 
 # nanoGPT-Modern
 
 一个**端到端的轻量级大语言模型全栈框架**，基于 Andrej Karpathy 的 [nanoGPT](https://github.com/karpathy/nanoGPT) 思想构建。在 **~50M 参数**规模下，以**双轨对照实验**的方式完整验证现代 Transformer 组件的架构增益与效率 trade-off，并覆盖 **预训练 → SFT → GRPO/DPO 对齐 → 高效推理 → 评估** 全生命周期。
 
-> v0.3.0 完成模型架构、训练系统、数据管道、推理服务、评估观测与工程 DevOps 六大领域共 **42 项现代化升级**。
+> v0.3.0 完成模型架构、训练系统、数据管道、推理服务、评估观测与工程 DevOps 六大领域共 **42 项现代化升级**；v0.5.0 完成 HPC 就绪化改造（DDP/FSDP 分布式训练栈、云迁移 Runbook、组件消融编排器），并在本机 GPU 迁移演练中定位并修复 3 个真实性能 bug（详见 [docs/MIGRATION.md](docs/MIGRATION.md) §8）。
 >
-> 技术白皮书 [docs/TECH_REPORT.md](docs/TECH_REPORT.md) · 变更日志 [docs/CHANGELOG.md](docs/CHANGELOG.md) · 实验记录 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) · 架构决策 [docs/adr/](docs/adr/README.md)
+> 技术白皮书 [docs/TECH_REPORT.md](docs/TECH_REPORT.md) · 变更日志 [docs/CHANGELOG.md](docs/CHANGELOG.md) · 实验记录 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) · 实验运行手册 [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md) · 架构决策 [docs/adr/](docs/adr/README.md)
 
 ---
+
+## 为什么读这个仓库
+
+面向深度学习工程与 LLM 全栈方向的学习/面试仓库，三条阅读线：
+
+1. **架构线**：`model/` 两个 GPT 变体 + [docs/adr/](docs/adr/README.md) 架构决策记录——每个组件为什么这么选、取舍依据是什么（GQA grouped-broadcast、MoE grouped GEMM、KV 量化、GRPO vs PPO）。
+2. **系统线**：`training/trainer_base.py` 模板方法训练基座（DDP/FSDP/AMP/EMA/checkpoint 生命周期，[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)）+ `inference/` 推理引擎（KV cache 家族、投机解码、连续批处理）——工程能力的主展示面。
+3. **证据线**：[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 实测记录 + [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md) 实验矩阵——所有架构声明都有对应实验（含负面结果与适用边界的诚实报告，例如小模型下 Python 级 cache 管理开销曾一度超过计算节省、FSDP 在 50M 规模下的分片开销分界）。
+
+> 质量保障：628+ 回归测试（含确定性测试：固定种子 loss 曲线逐位一致）· CI 四检（pytest + mypy + black + ruff + CPU 冒烟训练）· 实验编排器支持断点续跑。
 
 ## 核心亮点
 
@@ -66,7 +76,8 @@
 - **配置系统** — YAML + argparse 双向覆盖 · Hydra 可组合配置 · Pydantic 结构化校验（`n_head % n_kv_head == 0` 等规则）
 - **数据管道** — 全局 Shuffle（预计算索引）· 质量评分过滤 · MinHash+LSH 增量去重 · 多语言（tiktoken/SentencePiece + 语言检测加权采样）· 代码数据（AST 语法过滤）· 文档边界 / Packing（跨文档 mask）· 对话模板（chatml/llama-2/gemma）
 - **生态互操作** — HuggingFace 格式导出/加载（round-trip）· GGUF 导出（f32/f16/q8_0，内置无依赖 writer）· ONNX 导出（动态轴 + Runtime 验证）
-- **质量保障** — 600+ 回归测试（含确定性测试：固定种子 loss 曲线完全一致）· CI（pytest + mypy + black + ruff + CPU 冒烟训练）· 多阶段 Docker（训练 + TensorBoard + API）· pre-commit · 6 篇 ADR
+- **质量保障** — 628+ 回归测试（含确定性测试：固定种子 loss 曲线完全一致）· CI（pytest + mypy + black + ruff + CPU 冒烟训练）· 多阶段 Docker（训练 + TensorBoard + API）· pre-commit · 6 篇 ADR
+- **HPC 就绪（v0.5.0）** — 单卡到多卡的完整分布式路径（DDP `static_graph + gradient_as_bucket_view` / FSDP full-grad-no 分片 + per-block auto-wrap + `use_orig_params`）· 组件消融编排器（断点续跑 + 抢占恢复）· 云迁移 Runbook（uv 精确复现 + 数据校验 + GPU 冒烟）· 本机 GPU 演练已验证全链路并修复 3 个真实 bug（SDPA GQA 显存物化、ReduceOp.AVG gloo 兼容、DDP device_ids CPU 兼容）
 
 ---
 
@@ -323,17 +334,21 @@ docker-compose up train    # 仅训练
 
 ## 实验与结果
 
-完整记录见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。快速验证环境：RTX 4060 Laptop (8GB) · PyTorch 2.4.1+cu121 · seed 1337。
+完整记录见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)，实验矩阵与执行手册见 [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md)（14 个深度对比实验的规划、状态与云端 SOP）。
 
-| 验证项 | 结果 |
-|--------|------|
-| 端到端流程 | 预训练 → SFT → GRPO → 评估 → 推理消融全部跑通 |
-| KV Cache 正确性 | cache / no-cache 输出 **bit-wise 一致** |
-| SFT 格式注入（3.3M 快速验证） | `<answer>` 格式遵从率 88–100%（模型容量不足以学会算术本身） |
-| 推理吞吐（3.3M，短序列） | ~140–240 tok/s（小模型下 Python 级 cache 管理开销 > 计算节省；50M + 长序列下 cache 优势显现） |
-| 训练确定性 | 固定种子重复训练 loss 曲线完全一致（`tests/test_determinism.py`） |
+### 已验证结果
 
-> 参数量表中的 50M 配置为**目标规格**（数值精确计算）；小规模快速验证使用 3.3M 参数 + 合成数据，用于验证全技术栈可运行性与正确性。
+| 验证项 | 结果 | 环境 |
+|--------|------|------|
+| 端到端流程 | 预训练 → SFT → GRPO → 评估 → 推理消融全部跑通 | RTX 4060 Laptop |
+| KV Cache 正确性 | cache / no-cache 输出 **bit-wise 一致**（fast path 与值路径逐位相同） | CPU/GPU |
+| SFT 格式注入（3.3M 快速验证） | `<answer>` 格式遵从率 88–100%（模型容量不足以学会算术本身——诚实边界） | RTX 4060 Laptop |
+| 训练确定性 | 固定种子重复训练 loss 曲线完全一致（`tests/test_determinism.py`） | CPU |
+| KV append 布局 decode | 值路径 21.4 ms/步 → 零拷贝视图 13.3 ms/步（**1.61x**），GPU 大配置 cache vs 全量重算 **3.75x** | CPU + GPU |
+| **KV decode 显存平坦化**（GPU 演练修复） | 峰值显存斜率 12,335 → **~0 B/token**（SDPA GQA head-expansion 物化 bug 修复，单步瞬时分配 57.7MB→0.5MB @L=4096，**114x**），长上下文/batch 不再 OOM | Quadro RTX 5000 |
+| 单卡 DDP / FSDP 全链路 | DDP（static_graph + gradient_as_bucket_view）与 FSDP（FULL_STATE_DICT gather + resume round-trip）GPU 构造/训练/checkpoint 全通，并修复 ReduceOp.AVG gloo 兼容等 2 个分布式 bug | Quadro RTX 5000 |
+
+> 50M 规格的组件消融矩阵（baseline / modern-full / no-rope / no-swiglu / mha / moe / qk-norm 七组，18k iters）与推理效率扫描（KV 家族/量化/投机解码/连续批处理）规划在 [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md)，待云 GPU 实例执行——编排器已就绪（断点续跑 + 抢占恢复 + 摘要聚合）。
 
 ---
 
@@ -425,7 +440,8 @@ nanogpt-modern/
 | [docs/TECH_REPORT.md](docs/TECH_REPORT.md) | 技术白皮书：架构设计、模块详解、性能容量、Roadmap |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 训练基座设计：BaseTrainer 模板方法链、DDP/FSDP/AMP/EMA/Checkpoint、监控降级、5 训练器差异矩阵 |
 | [docs/GRPO_NOTES.md](docs/GRPO_NOTES.md) | RLHF 家族对比：GRPO / Iterative GRPO / DPO 的优势计算、参考更新、KL 三维度 |
-| [docs/MIGRATION.md](docs/MIGRATION.md) | 云租用 GPU 实例迁移 Runbook（环境重建、冒烟、实验矩阵启动） |
+| [docs/MIGRATION.md](docs/MIGRATION.md) | 云租用 GPU 实例迁移 Runbook（环境重建、冒烟、实验矩阵启动、GPU 演练记录与排障速查） |
+| [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md) | 实验运行手册：14 个对比实验矩阵、云端 SOP、图表与报告规范、状态跟踪（AR 更新联动） |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | v0.2.0 → v0.3.0 变更日志、42 项改进清单、已知限制 |
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | 实验记录、复现命令、关键结论 |
 | [docs/adr/](docs/adr/README.md) | 架构决策记录：GQA grouped-broadcast、GRPO vs PPO、KV 量化、MoE grouped GEMM 等 |
@@ -453,4 +469,4 @@ nanogpt-modern/
 
 ---
 
-*v0.3.0 · 最后更新 2026-10*
+*v0.5.0 · 最后更新 2026-10-11*
