@@ -25,8 +25,12 @@ import re
 from pathlib import Path
 
 import pytest
-import tomllib
 import torch
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
