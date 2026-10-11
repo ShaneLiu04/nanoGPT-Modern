@@ -5,7 +5,7 @@
 >
 > **演练记录（2026-10-08，Windows 本机）**：干净 venv `uv sync` 1m20s → 数据验证 27s → 50 步冒烟 30s，核心链路合计 **2m17s**（≤1h 达标）。两个平台差异已固化到排障表：Windows PyPI torch 为 CPU-only（云 Linux manylinux wheel 自带 cu128 不受影响）；Windows 需 `--num_workers 0`（spawn 竞态已知问题）。
 >
-> **GPU 演练记录（2026-10-11，Windows 本机 Quadro RTX 5000 8GB / sm75）**：见 §8。torch.compile recompile 计数验证通过（dynamo 层，backend 无关）；KV 显存斜率演练抓到并修复了 SDPA GQA head-expansion 物化 bug（decode 峰值显存从 O(T) 增长改为平坦）。
+> **GPU 演练记录（2026-10-11，Windows 本机 Quadro RTX 5000 8GB / sm75）**：见 §8。四项演练全部 PASS：① torch.compile recompile 计数验证（dynamo 层）；② KV 显存斜率抓到并修复 SDPA GQA head-expansion 物化 bug（decode 峰值显存平坦化）；③ 单卡 DDP（FR9a）全链路 + 修复 ReduceOp.AVG gloo 兼容与 DDP device_ids CPU 兼容 2 个真 bug；④ 单卡 FSDP（FR9b）GPU 全链路含 FULL_STATE_DICT gather + resume round-trip。多卡真分片留待云实例。
 
 ## 0. 前置检查
 
@@ -144,6 +144,9 @@ python data/validate.py data/openwebtext/train.bin   # 对照 §3 判据
 | `torch.compile` 报 `cannot import name 'triton_key'` | triton 与 torch 版本断裂（本机 triton 3.8.0 vs torch 2.5.1；torch 2.5.1 需 triton 3.1.0，Windows 无官方 wheel）。inductor 不可用，dynamo 层（recompile 计数、graph break 检查）仍可用 `backend="eager"` 验证；云 Linux 装匹配 triton 后不受影响 |
 | decode 峰值显存随上下文线性增长（长上下文 OOM） | 已修复（§8.2）：SDPA `enable_gqa` 在无原生 GQA 内核的后端会物化 KV head 扩展（~3×[B,n_head,S,D] 每层每步）。T==1 decode 现走 `_decode_gqa_attention` 手写内核，峰值显存平坦 |
 | `generate(compile='fullgraph')` 在 Windows 直接回退 eager | 同 triton 断裂根因；云 Linux 正常。回退后 eager 步走 cache 对象零拷贝 fast path，行为一致 |
+| `Cannot use ReduceOp.AVG with Gloo` | 已修复（§8.3）：损失 all-reduce 改 SUM + world_size 除法（全后端通用，数值等价） |
+| DDP 报 `device_ids and output_device arguments only work with ... GPU or CPU modules` | 已修复（§8.3）：CPU 模块下 device_ids 传 None；GPU 不受影响 |
+| Windows 下 `torchrun` 报 `use_libuv was requested but PyTorch was build without libuv support` | elastic agent 的 TCPStore 硬编码 use_libuv=True（Python 默认参数，env 不生效）。改用进程内 env-init（`RANK/LOCAL_RANK/WORLD_SIZE/MASTER_ADDR/MASTER_PORT` + `USE_LIBUV=0`，同 tests/test_fsdp_checkpoint.py 模式）；云 Linux build 自带 libuv 无此问题 |
 
 ## 8. GPU 演练记录（本机 Quadro RTX 5000 8GB，2026-10-11）
 
@@ -161,3 +164,16 @@ ST-024 遗留 GPU 迁移演练清单的本机执行结果。云实例（sm_80+�
 - **修复**：新增 `_decode_gqa_attention`（modern_gpt.py）——T==1 且无 additive mask 的 GQA decode 统一走手写 batched-matmul 内核，scores 在原生 KV-head 分辨率 `[B,n_kv,rep,S]`（比扩展形式小 2×n_rep 倍，与 backend 无关）。fast path（cache view）与 value path（cat 产物）同走此内核，**保持 T013 bit-identity 契约**；数值与 SDPA allclose（fp32 噪声级 4.6e-08）。prefill（T>1）与带 mask 的步进保持 SDPA 不变。
 - **顺带**：`_generate_fullgraph` 的 eager fallback 步改传 cache 对象（零拷贝 fast path），compiled 步保持 list（dynamo 对自定义对象 fullgraph 兼容性未验证，云上再评估）。
 - **效果**：峰值显存斜率 12,335 → **-1,090 B/token（平坦）**；单步瞬时分配 57.7MB → 0.5MB（L=4096，114×）；GPU decode 吞吐 68→64.5 ms/step（+5%，物化在 GPU 上只是带宽拷贝；收益主要在显存容量——长上下文/大 batch 不再 OOM）。测试：`tests/test_decode_gqa_attention.py` 8 用例（Red→Green），全量 627 passed + perf 2 passed。
+
+### 8.3 单卡 DDP 构造冒烟（FR9a）→ 修复 2 个真 bug
+
+- **验证**：单进程 gloo + CUDA（Quadro RTX 5000）真实构造 `DDP(static_graph=True, gradient_as_bucket_view=True)` + 4 步训练 + checkpoint + metrics 全链路 PASS（loss 10.83→10.67 正常下降）。
+- **bug 1**：`train_pretrain.py` 损失 all-reduce 用 `ReduceOp.AVG`——**NCCL-only**，gloo 直接 `RuntimeError`（云 nccl 无碍，但 gloo 调试/降级路径全断）。修复：`SUM + world_size 除法`（数值等价、全后端通用，与 estimate_loss 既有写法一致）。既有分布式测试要么 stub 掉 all_reduce 要么只到构造，从未在真实 gloo 组上跑过 train()——新增 `tests/test_ddp_shard.py::test_distributed_train_real_gloo_loss_all_reduce` 锁定。
+- **bug 2**：`wrap_distributed` 的 `DDP(device_ids=[local_rank])` 对 CPU 模块非法（gloo+CPU 分布式冒烟/调试场景构造即炸）。修复：CUDA 设备才传 `device_ids`，CPU 传 None。
+- **平台注意**：本机 Windows 无 nccl（Linux-only）；gloo 支持 CUDA 张量。**torchrun 在 Windows 被 elastic agent 的 `TCPStore(use_libuv=True)` 硬编码阻断**（Python 端默认参数，env 不生效；进程内 env-init 路径则尊重 `USE_LIBUV=0`）——云 Linux build 自带 libuv，torchrun 正常，不受影响。
+
+### 8.4 单卡 FSDP 全链路（FR9b）——补上 CPU 测试覆盖不到的 GPU 侧
+
+- **验证**：单进程 gloo + CUDA 构造 FSDP（`transformer_auto_wrap_policy` per-block + `use_orig_params=True`）→ 4 步训练 → `FULL_STATE_DICT` gather checkpoint（23 keys，orig-param 命名，无 `_fsdp_wrapped_module` 前缀）→ **resume round-trip**（新 trainer 载入后继续训练 2 步，21/23 float 参数如预期移动）全链路 PASS。
+- **说明**：`FULL_STATE_DICT` 真实 gather 是 CUDA-only 能力（`tests/test_fsdp_checkpoint.py` 在 CPU 上只能 stub），本演练首次在 GPU 上验证了完整 gather + 回读语义。world_size=1 时 FSDP 自动降级 `FULL_SHARD → NO_SHARD`（torch 内建 warning，预期行为）——**真 sharding 语义需云实例多卡**，本机验证的是构造/wrap/train/gather/checkpoint 链路。
+- **云上待验证**（多卡实例租用后）：≥2 卡 nccl `FULL_SHARD` 真分片 + 跨卡 all-gather 数值一致性 + 多卡 checkpoint 合并。
