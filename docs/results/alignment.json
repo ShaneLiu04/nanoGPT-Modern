@@ -1,0 +1,130 @@
+{
+  "batch_size": 64,
+  "num_steps": 120,
+  "note": "Wide generate (up to 512 sequences) so the 86GB GPU is doing real GEMMs. The reboot cut a batch-4 pilot short; this is the reported run.",
+  "evals": [
+    {
+      "name": "pretrain",
+      "by_level": {
+        "easy": {
+          "accuracy": 0.0,
+          "reward": 0.135,
+          "format_pass_rate": 0.03,
+          "process_score": 0.10500000000000001,
+          "invalid_rate": 0.975,
+          "kl_divergence": 0.0,
+          "failure_examples": []
+        },
+        "medium": {
+          "accuracy": 0.0,
+          "reward": 0.14750000000000002,
+          "format_pass_rate": 0.045,
+          "process_score": 0.1025,
+          "invalid_rate": 0.95,
+          "kl_divergence": 0.0,
+          "failure_examples": []
+        },
+        "hard": {
+          "accuracy": 0.0,
+          "reward": 0.195,
+          "format_pass_rate": 0.052500000000000005,
+          "process_score": 0.14250000000000002,
+          "invalid_rate": 0.975,
+          "kl_divergence": 0.0,
+          "failure_examples": []
+        }
+      }
+    },
+    {
+      "name": "sft",
+      "by_level": {
+        "easy": {
+          "accuracy": 0.08249999999999999,
+          "reward": 0.62,
+          "format_pass_rate": 0.425,
+          "process_score": 0.1125,
+          "invalid_rate": 0.025,
+          "kl_divergence": 0.0,
+          "failure_examples": []
+        },
+        "medium": {
+          "accuracy": 0.015,
+          "reward": 0.5575,
+          "format_pass_rate": 0.465,
+          "process_score": 0.0775,
+          "invalid_rate": 0.0,
+          "kl_divergence": 0.0,
+          "failure_examples": []
+        },
+        "hard": {
+          "accuracy": 0.03,
+          "reward": 0.5650000000000001,
+          "format_pass_rate": 0.45999999999999996,
+          "process_score": 0.075,
+          "invalid_rate": 0.025,
+          "kl_divergence": 0.0,
+          "failure_examples": []
+        }
+      }
+    }
+  ],
+  "grpo_curves": [
+    {
+      "name": "G4",
+      "steps": [
+        0,
+        20,
+        40,
+        60,
+        80,
+        100
+      ],
+      "reward": [
+        0.5904296636581421,
+        0.635546863079071,
+        0.6433594226837158,
+        0.6328125596046448,
+        0.632031261920929,
+        0.6287109851837158
+      ]
+    },
+    {
+      "name": "G8",
+      "steps": [
+        0,
+        20,
+        40,
+        60,
+        80,
+        100
+      ],
+      "reward": [
+        0.5856444835662842,
+        0.6386719346046448,
+        0.6509766578674316,
+        0.6465820670127869,
+        0.6351562738418579,
+        0.6342774033546448
+      ]
+    },
+    {
+      "name": "G16",
+      "steps": [
+        0,
+        20,
+        40,
+        60,
+        80,
+        100
+      ],
+      "reward": [
+        0.5959961414337158,
+        0.6381836533546448,
+        0.6469238996505737,
+        0.6414551138877869,
+        0.6398438215255737,
+        0.640576183795929
+      ]
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "checkpoint": "out/ablations/ablation-modern-full/best_ckpt.pt",
+  "train_block": 1024,
+  "num_batches": 12,
+  "batch_size": 4,
+  "rows": [
+    {
+      "length": 512,
+      "method": "naive",
+      "factor": 1.0,
+      "nll": 3.6506673296292624,
+      "ppl": 38.500349902507686,
+      "tokens": 24576
+    },
+    {
+      "length": 512,
+      "method": "ntk",
+      "factor": 1.0,
+      "nll": 3.6506673296292624,
+      "ppl": 38.500349902507686,
+      "tokens": 24576
+    },
+    {
+      "length": 1024,
+      "method": "naive",
+      "factor": 1.0,
+      "nll": 3.7002869248390198,
+      "ppl": 40.45891136144856,
+      "tokens": 49152
+    },
+    {
+      "length": 1024,
+      "method": "ntk",
+      "factor": 1.0,
+      "nll": 3.7002869248390198,
+      "ppl": 40.45891136144856,
+      "tokens": 49152
+    },
+    {
+      "length": 2048,
+      "method": "naive",
+      "factor": 1.0,
+      "nll": 4.414873878161113,
+      "ppl": 82.67141357786129,
+      "tokens": 98304
+    },
+    {
+      "length": 2048,
+      "method": "ntk",
+      "factor": 2.0,
+      "nll": 3.6658461491266885,
+      "ppl": 39.08919746402847,
+      "tokens": 98304
+    },
+    {
+      "length": 4096,
+      "method": "naive",
+      "factor": 1.0,
+      "nll": 5.365018169085185,
+      "ppl": 213.79511910738296,
+      "tokens": 196608
+    },
+    {
+      "length": 4096,
+      "method": "ntk",
+      "factor": 4.0,
+      "nll": 3.9607485135396323,
+      "ppl": 52.49660566669114,
+      "tokens": 196608
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "checkpoint": "out/alignment/sft/best_sft-only.pt",
+  "rows": [
+    {
+      "group_size": 4,
+      "prompts": 48,
+      "mean_reward": 0.5635416666666666,
+      "within_group_reward_std": 0.06633990497092646,
+      "std_error_of_group_mean": 0.03316995248546323
+    },
+    {
+      "group_size": 8,
+      "prompts": 48,
+      "mean_reward": 0.56640625,
+      "within_group_reward_std": 0.08033021133208469,
+      "std_error_of_group_mean": 0.028401018583532764
+    },
+    {
+      "group_size": 16,
+      "prompts": 48,
+      "mean_reward": 0.5703125,
+      "within_group_reward_std": 0.08600726695843675,
+      "std_error_of_group_mean": 0.021501816739609186
+    }
+  ]
+}

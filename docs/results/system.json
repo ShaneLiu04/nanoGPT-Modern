@@ -1,0 +1,33 @@
+{
+  "note": "Single GPU. FSDP here is wrapper overhead, not multi-GPU scaling.",
+  "rows": [
+    {
+      "name": "bf16",
+      "out_dir": "out/system/bf16",
+      "tok_per_s": 147727.89084046782,
+      "final_val_loss": 5.78391170501709,
+      "returncode": 0
+    },
+    {
+      "name": "fp32",
+      "out_dir": "out/system/fp32",
+      "tok_per_s": 70210.74595909662,
+      "final_val_loss": 5.752962589263916,
+      "returncode": 0
+    },
+    {
+      "name": "accum",
+      "out_dir": "out/system/accum",
+      "tok_per_s": 157090.68383887567,
+      "final_val_loss": 6.890477180480957,
+      "returncode": 0
+    },
+    {
+      "name": "fsdp",
+      "out_dir": "out/system/fsdp",
+      "tok_per_s": 147996.6018584354,
+      "final_val_loss": 5.7469329833984375,
+      "returncode": 0
+    }
+  ]
+}

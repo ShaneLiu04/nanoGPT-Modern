@@ -1,0 +1,93 @@
+{
+  "generated_ts": "2026-10-12T07:38:42.221870+08:00",
+  "config": "config/pretrain_cloud.yaml",
+  "out_root": "out/ablations",
+  "errors": [],
+  "groups": [
+    {
+      "name": "baseline",
+      "status": "completed",
+      "params_m": 64.086,
+      "active_params_m": 64.086,
+      "best_val_loss": 3.611790895462036,
+      "final_val_loss": 3.611790895462036,
+      "delta_vs_baseline_pct": null,
+      "mean_tokens_per_sec": 179504.49315819042,
+      "peak_mem_gb": 23.056,
+      "wall_time_s": 3318.954302
+    },
+    {
+      "name": "modern-full",
+      "status": "completed",
+      "params_m": 59.561,
+      "active_params_m": 59.561,
+      "best_val_loss": 3.573040723800659,
+      "final_val_loss": 3.573040723800659,
+      "delta_vs_baseline_pct": -1.0728797093448528,
+      "mean_tokens_per_sec": 146453.48584505217,
+      "peak_mem_gb": 26.261,
+      "wall_time_s": 4061.551535
+    },
+    {
+      "name": "no-rope",
+      "status": "completed",
+      "params_m": 60.085,
+      "active_params_m": 60.085,
+      "best_val_loss": 3.6258492469787598,
+      "final_val_loss": 3.6258492469787598,
+      "delta_vs_baseline_pct": 0.38923492316199626,
+      "mean_tokens_per_sec": 156794.8895660529,
+      "peak_mem_gb": 26.254,
+      "wall_time_s": 3793.837897
+    },
+    {
+      "name": "no-swiglu",
+      "status": "completed",
+      "params_m": 58.775,
+      "active_params_m": 58.775,
+      "best_val_loss": 3.5593342781066895,
+      "final_val_loss": 3.5593342781066895,
+      "delta_vs_baseline_pct": -1.4523713823315398,
+      "mean_tokens_per_sec": 152687.40003726014,
+      "peak_mem_gb": 24.741,
+      "wall_time_s": 3896.662595
+    },
+    {
+      "name": "mha",
+      "status": "completed",
+      "params_m": 64.28,
+      "active_params_m": 64.28,
+      "best_val_loss": 3.5397377014160156,
+      "final_val_loss": 3.5397377014160156,
+      "delta_vs_baseline_pct": -1.9949436756305667,
+      "mean_tokens_per_sec": 138143.03021034136,
+      "peak_mem_gb": 26.882,
+      "wall_time_s": 4307.298243
+    },
+    {
+      "name": "moe",
+      "status": "completed",
+      "params_m": 137.442,
+      "active_params_m": 59.561,
+      "best_val_loss": 3.58243727684021,
+      "final_val_loss": 3.58243727684021,
+      "delta_vs_baseline_pct": -0.8127164465336836,
+      "mean_tokens_per_sec": 115149.0803353792,
+      "peak_mem_gb": 29.265,
+      "wall_time_s": 5177.541595
+    },
+    {
+      "name": "qk-norm",
+      "status": "completed",
+      "params_m": 59.562,
+      "active_params_m": 59.562,
+      "best_val_loss": 3.5557854175567627,
+      "final_val_loss": 3.5557854175567627,
+      "delta_vs_baseline_pct": -1.550629023835251,
+      "mean_tokens_per_sec": 133213.64022597604,
+      "peak_mem_gb": 28.152,
+      "wall_time_s": 4462.291283
+    }
+  ],
+  "resumed_from_iter": {}
+}

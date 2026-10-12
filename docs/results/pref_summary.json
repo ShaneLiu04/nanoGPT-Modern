@@ -1,0 +1,25 @@
+{
+  "checkpoint": "out/alignment/sft/best_sft-only.pt",
+  "group_size": 8,
+  "max_new_tokens": 64,
+  "train": {
+    "pairs": 1333,
+    "ties": 203,
+    "seen": 1536,
+    "tie_rate": 0.13216145833333334,
+    "mean_chosen_reward": 0.7559639909977495,
+    "mean_rejected_reward": 0.47471867966991743,
+    "mean_margin": 0.2812453113278319,
+    "accuracy_gap": 0.17666916729182294
+  },
+  "val": {
+    "pairs": 168,
+    "ties": 24,
+    "seen": 192,
+    "tie_rate": 0.125,
+    "mean_chosen_reward": 0.7476190476190476,
+    "mean_rejected_reward": 0.4797619047619047,
+    "mean_margin": 0.26785714285714285,
+    "accuracy_gap": 0.1714285714285714
+  }
+}

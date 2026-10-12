@@ -1,0 +1,29 @@
+{
+  "easy": {
+    "accuracy": 0.0,
+    "reward": 0.135,
+    "format_pass_rate": 0.03,
+    "process_score": 0.10500000000000001,
+    "invalid_rate": 0.975,
+    "kl_divergence": 0.0,
+    "failure_examples": []
+  },
+  "medium": {
+    "accuracy": 0.0,
+    "reward": 0.14750000000000002,
+    "format_pass_rate": 0.045,
+    "process_score": 0.1025,
+    "invalid_rate": 0.95,
+    "kl_divergence": 0.0,
+    "failure_examples": []
+  },
+  "hard": {
+    "accuracy": 0.0,
+    "reward": 0.195,
+    "format_pass_rate": 0.052500000000000005,
+    "process_score": 0.14250000000000002,
+    "invalid_rate": 0.975,
+    "kl_divergence": 0.0,
+    "failure_examples": []
+  }
+}

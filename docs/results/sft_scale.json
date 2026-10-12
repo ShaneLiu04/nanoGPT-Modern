@@ -1,0 +1,52 @@
+{
+  "rows": [
+    {
+      "label": "2k x 2ep",
+      "num_train": 2000,
+      "epochs": 2,
+      "format_mean": 0.45,
+      "by_level": {
+        "easy": 0.425,
+        "medium": 0.465,
+        "hard": 0.45999999999999996
+      },
+      "accuracy_mean": 0.0425
+    },
+    {
+      "label": "2k x 8ep",
+      "num_train": 2000,
+      "epochs": 8,
+      "format_mean": 0.4483333333333334,
+      "by_level": {
+        "easy": 0.4425,
+        "medium": 0.4625,
+        "hard": 0.44000000000000006
+      },
+      "accuracy_mean": 0.02
+    },
+    {
+      "label": "8k x 3ep",
+      "num_train": 8000,
+      "epochs": 3,
+      "format_mean": 0.4775,
+      "by_level": {
+        "easy": 0.485,
+        "medium": 0.48,
+        "hard": 0.46749999999999997
+      },
+      "accuracy_mean": 0.05000000000000001
+    },
+    {
+      "label": "20k x 2ep",
+      "num_train": 20000,
+      "epochs": 2,
+      "format_mean": 0.4916666666666667,
+      "by_level": {
+        "easy": 0.495,
+        "medium": 0.4925,
+        "hard": 0.4875
+      },
+      "accuracy_mean": 0.07875
+    }
+  ]
+}

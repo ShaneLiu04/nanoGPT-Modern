@@ -1,0 +1,59 @@
+{
+  "draft": "8L/512/4000 steps, same width as the 12L target",
+  "rows": [
+    {
+      "variant": "speculative-2",
+      "prompt_len": 128,
+      "draft_len": 2,
+      "tok_per_s": 93.72925406746903,
+      "accept_rate": 0.5285714285714286,
+      "peak_mb": 1867.5302734375
+    },
+    {
+      "variant": "speculative-4",
+      "prompt_len": 128,
+      "draft_len": 4,
+      "tok_per_s": 90.34417153713258,
+      "accept_rate": 0.3805309734513274,
+      "peak_mb": 1867.5302734375
+    },
+    {
+      "variant": "speculative-8",
+      "prompt_len": 128,
+      "draft_len": 8,
+      "tok_per_s": 91.9048636029627,
+      "accept_rate": 0.3333333333333333,
+      "peak_mb": 1867.5302734375
+    }
+  ],
+  "compile_rows": [
+    {
+      "new_tokens": 64,
+      "compile": false,
+      "tok_per_s": 181.92573474409105,
+      "seconds": 0.3517919006347656,
+      "peak_mb": 1143.22705078125
+    },
+    {
+      "new_tokens": 64,
+      "compile": true,
+      "tok_per_s": 94.04792858866847,
+      "seconds": 0.6805040893554688,
+      "eager_tok_per_s": 181.92573474409105
+    },
+    {
+      "new_tokens": 256,
+      "compile": false,
+      "tok_per_s": 185.1416456054249,
+      "seconds": 1.38272509765625,
+      "peak_mb": 1143.22900390625
+    },
+    {
+      "new_tokens": 256,
+      "compile": true,
+      "tok_per_s": 294.2967886576668,
+      "seconds": 0.8698701782226562,
+      "eager_tok_per_s": 185.1416456054249
+    }
+  ]
+}

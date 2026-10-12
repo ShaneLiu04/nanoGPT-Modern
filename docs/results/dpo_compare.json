@@ -1,0 +1,257 @@
+{
+  "pairs": {
+    "checkpoint": "out/alignment/sft/best_sft-only.pt",
+    "group_size": 8,
+    "max_new_tokens": 64,
+    "train": {
+      "pairs": 1333,
+      "ties": 203,
+      "seen": 1536,
+      "tie_rate": 0.13216145833333334,
+      "mean_chosen_reward": 0.7559639909977495,
+      "mean_rejected_reward": 0.47471867966991743,
+      "mean_margin": 0.2812453113278319,
+      "accuracy_gap": 0.17666916729182294
+    },
+    "val": {
+      "pairs": 168,
+      "ties": 24,
+      "seen": 192,
+      "tie_rate": 0.125,
+      "mean_chosen_reward": 0.7476190476190476,
+      "mean_rejected_reward": 0.4797619047619047,
+      "mean_margin": 0.26785714285714285,
+      "accuracy_gap": 0.1714285714285714
+    }
+  },
+  "methods": [
+    {
+      "checkpoint": "out/alignment/sft/best_sft-only.pt",
+      "reward": 0.5716666666666667,
+      "accuracy": 0.03875,
+      "format_pass_rate": 0.4566666666666666,
+      "invalid_rate": 0.020833333333333332,
+      "kl": 0.0,
+      "by_level": {
+        "easy": {
+          "accuracy": 0.06749999999999999,
+          "reward": 0.6025,
+          "format_pass_rate": 0.45,
+          "process_score": 0.08499999999999999,
+          "invalid_rate": 0.0125,
+          "kl_divergence": 0.0,
+          "failure_examples": []
+        },
+        "medium": {
+          "accuracy": 0.026250000000000002,
+          "reward": 0.5575,
+          "format_pass_rate": 0.45999999999999996,
+          "process_score": 0.07125000000000001,
+          "invalid_rate": 0.0375,
+          "kl_divergence": 0.0,
+          "failure_examples": []
+        },
+        "hard": {
+          "accuracy": 0.0225,
+          "reward": 0.5549999999999999,
+          "format_pass_rate": 0.45999999999999996,
+          "process_score": 0.0725,
+          "invalid_rate": 0.0125,
+          "kl_divergence": 0.0,
+          "failure_examples": []
+        }
+      },
+      "name": "SFT"
+    },
+    {
+      "checkpoint": "out/alignment/grpo-g4/best_grpo_g4.pt",
+      "reward": 0.63125,
+      "accuracy": 0.03125,
+      "format_pass_rate": 0.3,
+      "invalid_rate": 0.0,
+      "kl": -0.7572523249934117,
+      "by_level": {
+        "easy": {
+          "accuracy": 0.045,
+          "reward": 0.6449999999999999,
+          "format_pass_rate": 0.3,
+          "process_score": 0.3,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.782187682017684,
+          "failure_examples": []
+        },
+        "medium": {
+          "accuracy": 0.0225,
+          "reward": 0.6224999999999999,
+          "format_pass_rate": 0.3,
+          "process_score": 0.3,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.7350888460874557,
+          "failure_examples": []
+        },
+        "hard": {
+          "accuracy": 0.026250000000000002,
+          "reward": 0.62625,
+          "format_pass_rate": 0.3,
+          "process_score": 0.3,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.7544804468750954,
+          "failure_examples": []
+        }
+      },
+      "name": "GRPO-G4"
+    },
+    {
+      "checkpoint": "out/alignment/grpo-g8/best_grpo_g8.pt",
+      "reward": 0.6337499999999999,
+      "accuracy": 0.033749999999999995,
+      "format_pass_rate": 0.3,
+      "invalid_rate": 0.0,
+      "kl": -0.7881404055903355,
+      "by_level": {
+        "easy": {
+          "accuracy": 0.045,
+          "reward": 0.6449999999999999,
+          "format_pass_rate": 0.3,
+          "process_score": 0.3,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.8265940099954605,
+          "failure_examples": []
+        },
+        "medium": {
+          "accuracy": 0.015,
+          "reward": 0.615,
+          "format_pass_rate": 0.3,
+          "process_score": 0.3,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.756332278251648,
+          "failure_examples": []
+        },
+        "hard": {
+          "accuracy": 0.041249999999999995,
+          "reward": 0.64125,
+          "format_pass_rate": 0.3,
+          "process_score": 0.3,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.7814949285238981,
+          "failure_examples": []
+        }
+      },
+      "name": "GRPO-G8"
+    },
+    {
+      "checkpoint": "out/alignment/grpo-g16/best_grpo_g16.pt",
+      "reward": 0.6325,
+      "accuracy": 0.0325,
+      "format_pass_rate": 0.3,
+      "invalid_rate": 0.0,
+      "kl": -0.7701809509346882,
+      "by_level": {
+        "easy": {
+          "accuracy": 0.052500000000000005,
+          "reward": 0.6525,
+          "format_pass_rate": 0.3,
+          "process_score": 0.3,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.8076794642955065,
+          "failure_examples": []
+        },
+        "medium": {
+          "accuracy": 0.01875,
+          "reward": 0.61875,
+          "format_pass_rate": 0.3,
+          "process_score": 0.3,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.7316323637962341,
+          "failure_examples": []
+        },
+        "hard": {
+          "accuracy": 0.026250000000000002,
+          "reward": 0.62625,
+          "format_pass_rate": 0.3,
+          "process_score": 0.3,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.7712310247123242,
+          "failure_examples": []
+        }
+      },
+      "name": "GRPO-G16"
+    },
+    {
+      "checkpoint": "out/alignment/dpo/best_ckpt.pt",
+      "reward": 0.6241666666666666,
+      "accuracy": 0.026249999999999996,
+      "format_pass_rate": 0.30666666666666664,
+      "invalid_rate": 0.0,
+      "kl": -0.7766864277422428,
+      "by_level": {
+        "easy": {
+          "accuracy": 0.033749999999999995,
+          "reward": 0.63625,
+          "format_pass_rate": 0.3025,
+          "process_score": 0.3,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.8385535139590502,
+          "failure_examples": []
+        },
+        "medium": {
+          "accuracy": 0.0225,
+          "reward": 0.62125,
+          "format_pass_rate": 0.3125,
+          "process_score": 0.28625,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.7648049473762513,
+          "failure_examples": []
+        },
+        "hard": {
+          "accuracy": 0.0225,
+          "reward": 0.615,
+          "format_pass_rate": 0.305,
+          "process_score": 0.2875,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.726700821891427,
+          "failure_examples": []
+        }
+      },
+      "name": "DPO"
+    },
+    {
+      "checkpoint": "out/alignment/ipo/best_ckpt.pt",
+      "reward": 0.6233333333333334,
+      "accuracy": 0.025000000000000005,
+      "format_pass_rate": 0.30666666666666664,
+      "invalid_rate": 0.0,
+      "kl": -0.7471011651058991,
+      "by_level": {
+        "easy": {
+          "accuracy": 0.026250000000000002,
+          "reward": 0.62625,
+          "format_pass_rate": 0.3,
+          "process_score": 0.3,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.7942768447101116,
+          "failure_examples": []
+        },
+        "medium": {
+          "accuracy": 0.026250000000000002,
+          "reward": 0.62375,
+          "format_pass_rate": 0.3175,
+          "process_score": 0.27999999999999997,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.7418828260153532,
+          "failure_examples": []
+        },
+        "hard": {
+          "accuracy": 0.0225,
+          "reward": 0.62,
+          "format_pass_rate": 0.3025,
+          "process_score": 0.295,
+          "invalid_rate": 0.0,
+          "kl_divergence": -0.7051438245922327,
+          "failure_examples": []
+        }
+      },
+      "name": "IPO"
+    }
+  ]
+}

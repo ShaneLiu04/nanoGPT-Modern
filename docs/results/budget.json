@@ -1,0 +1,11 @@
+{
+  "train_tokens": 1244464437,
+  "tokens_per_iter": 32768,
+  "one_epoch_iters": 36079,
+  "max_iters": 18000,
+  "warmup_iters": 2000,
+  "batch_size": 32,
+  "block_size": 1024,
+  "seed": 1337,
+  "corpus": "Skylion007/openwebtext parquet prefix, GPT-2 tokens"
+}
