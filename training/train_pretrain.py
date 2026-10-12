@@ -89,6 +89,13 @@ def get_args():
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument(
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["bf16", "fp16", "fp32"],
+        help="Training precision. bf16/fp16 use autocast; fp32 disables autocast.",
+    )
+    parser.add_argument(
         "--fsdp",
         action="store_true",
         help="Use Fully Sharded Data Parallel instead of DDP",
@@ -319,7 +326,13 @@ class PretrainTrainer(BaseTrainer):
         args = self.args
         if args.use_ema:
             self.raw_model.init_ema(decay=args.ema_decay)
-        super()._setup_amp(use_bf16=use_bf16)
+        precision = getattr(args, "precision", "bf16")
+        if precision == "fp32":
+            self.ctx = nullcontext()
+            self.scaler = None
+            self.amp_dtype = torch.float32
+            return
+        super()._setup_amp(use_bf16=(precision != "fp16"))
 
     def _setup_checkpointing(self):
         self.configure_checkpointing(

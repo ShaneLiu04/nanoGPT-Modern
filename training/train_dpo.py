@@ -102,6 +102,18 @@ def get_args():
     parser.add_argument("--num_train", type=int, default=256)
     parser.add_argument("--num_val", type=int, default=64)
     parser.add_argument("--vocab_size", type=int, default=50257)
+    parser.add_argument(
+        "--preference_jsonl",
+        type=str,
+        default=None,
+        help="Train preference JSONL used when --preference_source=jsonl",
+    )
+    parser.add_argument(
+        "--preference_val_jsonl",
+        type=str,
+        default=None,
+        help="Validation preference JSONL; defaults to --preference_jsonl",
+    )
     # Win-rate evaluation
     parser.add_argument(
         "--win_rate_eval",
@@ -142,6 +154,61 @@ class PreferenceDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self.pairs[idx]
+
+
+class JsonlPreferenceDataset(Dataset):
+    """Preference pairs stored as token ids plus a response mask.
+
+    Each line is ``chosen``, ``rejected``, ``chosen_mask``, ``rejected_mask``.
+    Mask entries are 1 on response tokens and 0 on the prompt. Padding is
+    added by the collate function and stays at mask 0.
+    """
+
+    def __init__(self, path: str):
+        self.rows = []
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                self.rows.append(row)
+        if not self.rows:
+            raise ValueError(f"no preference pairs in {path}")
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def __getitem__(self, idx: int):
+        row = self.rows[idx]
+        return (
+            row["chosen"],
+            row["rejected"],
+            row["chosen_mask"],
+            row["rejected_mask"],
+        )
+
+
+def collate_preference(batch):
+    """Pad variable-length preference pairs and keep the response mask."""
+
+    def pad(seqs, masks):
+        width = max(max(len(seq) for seq in seqs), 2)
+        tokens = torch.zeros(len(seqs), width, dtype=torch.long)
+        token_mask = torch.zeros(len(seqs), width, dtype=torch.bool)
+        for i, (seq, mask) in enumerate(zip(seqs, masks)):
+            tokens[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
+            token_mask[i, : len(mask)] = torch.tensor(mask, dtype=torch.bool)
+        return tokens, token_mask
+
+    chosen, chosen_mask = pad(
+        [item[0] for item in batch],
+        [item[2] for item in batch],
+    )
+    rejected, rejected_mask = pad(
+        [item[1] for item in batch],
+        [item[3] for item in batch],
+    )
+    return chosen, rejected, chosen_mask, rejected_mask
 
 
 def _build_preference_dataset_from_grpo(
@@ -272,10 +339,17 @@ class DPOTrainer(BaseTrainer):
                 max_length=args.max_length,
                 seed=args.seed + 1000,
             )
+        elif args.preference_source == "jsonl":
+            if not args.preference_jsonl:
+                raise ValueError("--preference_jsonl is required when --preference_source=jsonl")
+            val_path = args.preference_val_jsonl or args.preference_jsonl
+            train_ds = JsonlPreferenceDataset(args.preference_jsonl)
+            val_ds = JsonlPreferenceDataset(val_path)
         else:
             raise ValueError(f"Unknown preference_source: {args.preference_source}")
 
         worker_init = make_worker_init_fn(args.seed, self.rank)
+        collate = collate_preference if args.preference_source == "jsonl" else None
         self.train_loader = DataLoader(
             train_ds,
             batch_size=args.batch_size,
@@ -283,6 +357,7 @@ class DPOTrainer(BaseTrainer):
             num_workers=0,
             pin_memory=True,
             worker_init_fn=worker_init,
+            collate_fn=collate,
         )
         self.val_loader = DataLoader(
             val_ds,
@@ -291,6 +366,7 @@ class DPOTrainer(BaseTrainer):
             num_workers=0,
             pin_memory=True,
             worker_init_fn=worker_init,
+            collate_fn=collate,
         )
 
     def _build_model(self):
@@ -346,19 +422,40 @@ class DPOTrainer(BaseTrainer):
             self.global_step = extra.get("iter_num", 0)
             self.best_metric = extra.get("best_metric", float("inf"))
 
-    def _compute_logprobs(self, model: nn.Module, tokens: torch.Tensor) -> torch.Tensor:
-        """Return per-sequence log-prob for ``tokens`` under ``model``."""
+    def _compute_logprobs(
+        self,
+        model: nn.Module,
+        tokens: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Mean log-prob of the next token, restricted to the response mask.
+
+        ``model`` returns logits aligned with the input: position ``t`` predicts
+        ``tokens[:, t + 1]``. Scoring ``tokens[:, t]`` with ``logits[:, t]``
+        would train on the wrong token. Padding and prompt positions stay out
+        of the mean when ``mask`` marks only response tokens.
+        """
         with torch.no_grad() if model is self.ref_model else nullcontext():
             logits, _, _ = model(tokens)
-        return compute_sequence_logprob(logits, tokens)
+        target = tokens[:, 1:]
+        pred = logits[:, :-1, :]
+        if mask is None:
+            token_mask = torch.ones_like(target, dtype=torch.bool)
+        else:
+            token_mask = mask[:, 1:].to(dtype=torch.bool)
+        return compute_sequence_logprob(pred, target, token_mask)
 
     def _compute_loss(
-        self, chosen: torch.Tensor, rejected: torch.Tensor
+        self,
+        chosen: torch.Tensor,
+        rejected: torch.Tensor,
+        chosen_mask: torch.Tensor | None = None,
+        rejected_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        policy_chosen_logp = self._compute_logprobs(self.model, chosen)
-        policy_rejected_logp = self._compute_logprobs(self.model, rejected)
-        ref_chosen_logp = self._compute_logprobs(self.ref_model, chosen)
-        ref_rejected_logp = self._compute_logprobs(self.ref_model, rejected)
+        policy_chosen_logp = self._compute_logprobs(self.model, chosen, chosen_mask)
+        policy_rejected_logp = self._compute_logprobs(self.model, rejected, rejected_mask)
+        ref_chosen_logp = self._compute_logprobs(self.ref_model, chosen, chosen_mask)
+        ref_rejected_logp = self._compute_logprobs(self.ref_model, rejected, rejected_mask)
 
         if self.args.preference_loss == "dpo":
             loss, metrics = compute_dpo_loss(
@@ -404,12 +501,20 @@ class DPOTrainer(BaseTrainer):
         self.model.train(is_train)
         total_loss = 0.0
         num_batches = 0
-        for chosen, rejected in loader:
+        for batch in loader:
+            if len(batch) == 2:
+                chosen, rejected = batch
+                chosen_mask = None
+                rejected_mask = None
+            else:
+                chosen, rejected, chosen_mask, rejected_mask = batch
+                chosen_mask = chosen_mask.to(self.device, non_blocking=True)
+                rejected_mask = rejected_mask.to(self.device, non_blocking=True)
             chosen = chosen.to(self.device, non_blocking=True)
             rejected = rejected.to(self.device, non_blocking=True)
 
             with self.ctx:
-                loss, metrics = self._compute_loss(chosen, rejected)
+                loss, metrics = self._compute_loss(chosen, rejected, chosen_mask, rejected_mask)
 
             if is_train:
                 loss = loss / self.args.gradient_accumulation_steps
@@ -444,6 +549,7 @@ class DPOTrainer(BaseTrainer):
 
                     if self.global_step % self.args.eval_interval == 0:
                         val_loss = self._evaluate()
+                        self.model.train(True)
                         if self.master_process:
                             print(f"step {self.global_step}: val_loss={val_loss:.4f}")
                             self.log_scalars({"val/loss": val_loss}, self.global_step)
@@ -457,6 +563,15 @@ class DPOTrainer(BaseTrainer):
             num_batches += 1
 
             if self.master_process and is_train and num_batches % 10 == 0:
+                shown = {
+                    key: (value.item() if torch.is_tensor(value) else value)
+                    for key, value in metrics.items()
+                }
+                print(
+                    f"step {self.global_step}: loss={shown.get('loss', 0):.4f} "
+                    f"margin={shown.get('margin', shown.get('logits', 0)):.4f}",
+                    flush=True,
+                )
                 self.log_scalars({f"train/{k}": v for k, v in metrics.items()}, self.global_step)
 
         return total_loss / max(num_batches, 1)

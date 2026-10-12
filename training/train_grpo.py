@@ -301,6 +301,29 @@ class GRPOTrainer(BaseTrainer):
     def _batch_logprobs_impl(self, model, sequences, prompt_lens, response_lens):
         """Shared implementation for policy/ref log-prob computation."""
         B = len(sequences)
+        if B > 256 and not torch.is_grad_enabled():
+            lps, masks = [], []
+            for start in range(0, B, 256):
+                lp, mask = self._batch_logprobs_impl(
+                    model,
+                    sequences[start : start + 256],
+                    prompt_lens[start : start + 256],
+                    response_lens[start : start + 256],
+                )
+                lps.append(lp)
+                masks.append(mask)
+            max_t = max(item.size(1) for item in lps)
+
+            def _pad(item):
+                if item.size(1) == max_t:
+                    return item
+                out = item.new_zeros(item.size(0), max_t)
+                out[:, : item.size(1)] = item
+                return out
+
+            return torch.cat([_pad(item) for item in lps], 0), torch.cat(
+                [_pad(item) for item in masks], 0
+            )
         if B == 0:
             return torch.zeros(0, 0, device=self.device), torch.zeros(
                 0, 0, dtype=torch.bool, device=self.device
@@ -379,27 +402,35 @@ class GRPOTrainer(BaseTrainer):
         all_response_lens = []
 
         with torch.no_grad():
+            # One wide generate for every group member. A python loop of
+            # batch-sized decodes leaves the GPU waiting on kernel launches.
+            repeated_tokens = []
+            repeated_answers = []
             for _ in range(group_size):
-                responses, response_tokens_list = self._generate_responses_from_tokens(
-                    self.raw_model,
-                    prompt_tokens,
-                    max_response_len=args.max_response_len,
-                    gen_batch_size=args.batch_size,
-                )
-
-                rewards, fmt_scores, proc_scores, acc_scores = compute_reward_batch(
-                    responses, answers
-                )
-                all_rewards.append(rewards)
-                all_responses.append(responses)
-                all_response_ids.append(response_tokens_list)
-                # process_scores are available for logging/analysis if needed.
-                _ = proc_scores
-
-                prompt_lens_g = [len(toks) for toks in prompt_tokens]
-                response_lens_g = [len(resp_ids) for resp_ids in response_tokens_list]
+                repeated_tokens.extend(prompt_tokens)
+                repeated_answers.extend(answers)
+            gen_width = min(512, len(repeated_tokens))
+            responses, response_tokens_list = self._generate_responses_from_tokens(
+                self.raw_model,
+                repeated_tokens,
+                max_response_len=args.max_response_len,
+                gen_batch_size=gen_width,
+            )
+            rewards, fmt_scores, proc_scores, acc_scores = compute_reward_batch(
+                responses, repeated_answers
+            )
+            _ = fmt_scores, proc_scores, acc_scores
+            bsz = len(prompt_tokens)
+            prompt_lens_g = [len(toks) for toks in prompt_tokens]
+            for g in range(group_size):
+                start, end = g * bsz, (g + 1) * bsz
+                all_rewards.append(rewards[start:end])
+                all_responses.append(responses[start:end])
+                all_response_ids.append(response_tokens_list[start:end])
                 all_prompt_lens.append(prompt_lens_g)
-                all_response_lens.append(response_lens_g)
+                all_response_lens.append(
+                    [len(resp_ids) for resp_ids in response_tokens_list[start:end]]
+                )
 
         # Flatten all group sequences for a single batched logprob forward pass.
         flat_sequences = []
@@ -524,47 +555,146 @@ class GRPOTrainer(BaseTrainer):
                 flat_prompt_lens.append(rollout["prompt_lens"][g][b])
                 flat_response_lens.append(rollout["response_lens"][g][b])
 
-        new_logprobs, masks = self._batch_logprobs(
-            self.model, flat_sequences, flat_prompt_lens, flat_response_lens
-        )
+        # Keep each train forward near the G4 working set (about 256 sequences).
+        # Advantages still use the full group. Only the gradient graph is chunked.
+        seq_per_chunk = max(group_size, (256 // group_size) * group_size)
+        if group_size * batch_size <= seq_per_chunk:
+            return self._grpo_loss_from_flat(
+                rollout,
+                advantages,
+                rewards_t,
+                flat_sequences,
+                flat_prompt_lens,
+                flat_response_lens,
+                group_size,
+                batch_size,
+            )
 
-        # Reshape back to [G, B, T].
-        T = new_logprobs.size(1)
-        old_logp = rollout["old_logprobs"].detach().to(device).view(group_size, batch_size, T)
-        ref_logp = rollout["ref_logprobs"].detach().to(device).view(group_size, batch_size, T)
-        new_logp = new_logprobs.view(group_size, batch_size, T)
-        mask = masks.view(group_size, batch_size, T)
-        adv = advantages.unsqueeze(-1)  # [G, B, 1]
-
-        # PPO ratio and clipped surrogate.
-        ratio = torch.exp(new_logp - old_logp)
-        surr1 = ratio * adv
-        surr2 = torch.clamp(ratio, 1.0 - args.eps, 1.0 + args.eps) * adv
-        pg_loss = -torch.min(surr1, surr2)
-
-        # KL penalty: numerically stable reverse KL(ref || policy) = ref - new.
-        kl_term = compute_kl_divergence(ref_logp, new_logp, mask=mask, reduction="none")
-
-        total_tokens = mask.sum()
-        if total_tokens > 0:
-            loss = ((pg_loss + args.beta * kl_term) * mask.float()).sum() / total_tokens
-        else:
-            loss = torch.tensor(0.0, device=device, requires_grad=True)
-
-        # Per-component metrics (token-averaged).
-        with torch.no_grad():
-            policy_loss = (pg_loss * mask.float()).sum() / total_tokens.clamp_min(1)
-            kl_loss = compute_kl_divergence(ref_logp, new_logp, mask=mask, reduction="mean")
-
+        total_tokens = 0
+        for g in range(group_size):
+            for b in range(batch_size):
+                total_tokens += rollout["response_lens"][g][b]
+        total_tokens = max(total_tokens, 1)
+        prompt_chunk = max(1, 256 // group_size)
+        metrics_acc = []
+        for start in range(0, batch_size, prompt_chunk):
+            end = min(batch_size, start + prompt_chunk)
+            seqs, plens, rlens = [], [], []
+            for g in range(group_size):
+                for b in range(start, end):
+                    toks = rollout["prompt_tokens"][b]
+                    full_ids = toks + rollout["response_ids"][g][b]
+                    if len(full_ids) < 2:
+                        full_ids = full_ids + [self.eot_token]
+                    seqs.append(full_ids)
+                    plens.append(rollout["prompt_lens"][g][b])
+                    rlens.append(rollout["response_lens"][g][b])
+            adv_slice = advantages[:, start:end]
+            loss_c, metrics_c, tokens_c = self._grpo_surrogate(
+                rollout, adv_slice, seqs, plens, rlens, group_size, end - start, start
+            )
+            self._backward_loss(loss_c * (tokens_c / total_tokens))
+            metrics_acc.append(metrics_c)
         metrics = {
-            "policy_loss": policy_loss.item(),
-            "kl_loss": kl_loss.item(),
+            "policy_loss": float(np.mean([m["policy_loss"] for m in metrics_acc])),
+            "kl_loss": float(np.mean([m["kl_loss"] for m in metrics_acc])),
             "mean_reward": rewards_t.mean().item(),
             "std_reward": rewards_t.std().item(),
             "mean_advantage": advantages.mean().item(),
             "std_advantage": advantages.std().item(),
         }
+        logged = torch.tensor(metrics["policy_loss"], device=device)
+        return logged, metrics
+
+    def _grpo_loss_from_flat(
+        self,
+        rollout,
+        advantages,
+        rewards_t,
+        flat_sequences,
+        flat_prompt_lens,
+        flat_response_lens,
+        group_size,
+        batch_size,
+    ):
+        """Single-forward GRPO loss. Used when the whole group fits."""
+        new_logprobs, masks = self._batch_logprobs(
+            self.model, flat_sequences, flat_prompt_lens, flat_response_lens
+        )
+        T = new_logprobs.size(1)
+        device = new_logprobs.device
+        old_logp = rollout["old_logprobs"].detach().to(device).view(group_size, batch_size, T)
+        ref_logp = rollout["ref_logprobs"].detach().to(device).view(group_size, batch_size, T)
+        new_logp = new_logprobs.view(group_size, batch_size, T)
+        mask = masks.view(group_size, batch_size, T)
+        adv = advantages.unsqueeze(-1)
+        loss, metrics = self._surrogate_from_logprobs(
+            new_logp, old_logp, ref_logp, mask, adv, rewards_t, advantages
+        )
         return loss, metrics
+
+    def _grpo_surrogate(
+        self, rollout, advantages, seqs, plens, rlens, group_size, batch_size, prompt_start
+    ):
+        """Loss for one prompt slice. ``prompt_start`` indexes the flat logprob rows."""
+        new_logprobs, masks = self._batch_logprobs(self.model, seqs, plens, rlens)
+        T = new_logprobs.size(1)
+        device = new_logprobs.device
+        full_b = rollout["old_logprobs"].size(0) // group_size
+        rows = []
+        for g in range(group_size):
+            base = g * full_b + prompt_start
+            rows.append(slice(base, base + batch_size))
+        old_full = rollout["old_logprobs"].detach().to(device)
+        ref_full = rollout["ref_logprobs"].detach().to(device)
+        old_parts = [old_full[row, :T] for row in rows]
+        ref_parts = [ref_full[row, :T] for row in rows]
+        old_logp = torch.cat(old_parts, 0).view(group_size, batch_size, T)
+        ref_logp = torch.cat(ref_parts, 0).view(group_size, batch_size, T)
+        new_logp = new_logprobs.view(group_size, batch_size, T)
+        mask = masks.view(group_size, batch_size, T)
+        adv = advantages.unsqueeze(-1)
+        loss, metrics = self._surrogate_from_logprobs(
+            new_logp, old_logp, ref_logp, mask, adv, None, advantages
+        )
+        tokens = float(mask.detach().sum().item())
+        return loss, metrics, max(tokens, 1.0)
+
+    def _surrogate_from_logprobs(
+        self, new_logp, old_logp, ref_logp, mask, adv, rewards_t, advantages
+    ):
+        """Clipped surrogate plus KL, token-averaged over ``mask``."""
+        args = self.args
+        ratio = torch.exp(new_logp - old_logp)
+        surr1 = ratio * adv
+        surr2 = torch.clamp(ratio, 1.0 - args.eps, 1.0 + args.eps) * adv
+        pg_loss = -torch.min(surr1, surr2)
+        kl_term = compute_kl_divergence(ref_logp, new_logp, mask=mask, reduction="none")
+        total_tokens = mask.sum()
+        if total_tokens > 0:
+            loss = ((pg_loss + args.beta * kl_term) * mask.float()).sum() / total_tokens
+        else:
+            loss = new_logp.sum() * 0.0
+        with torch.no_grad():
+            policy_loss = (pg_loss * mask.float()).sum() / total_tokens.clamp_min(1)
+            kl_loss = compute_kl_divergence(ref_logp, new_logp, mask=mask, reduction="mean")
+        metrics = {
+            "policy_loss": policy_loss.item(),
+            "kl_loss": kl_loss.item(),
+        }
+        if rewards_t is not None:
+            metrics["mean_reward"] = rewards_t.mean().item()
+            metrics["std_reward"] = rewards_t.std().item()
+            metrics["mean_advantage"] = advantages.mean().item()
+            metrics["std_advantage"] = advantages.std().item()
+        return loss, metrics
+
+    def _backward_loss(self, loss):
+        """Backward through AMP when a scaler is enabled."""
+        if self.scaler is not None and self.scaler.is_enabled():
+            self.scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
     # ------------------------------------------------------------------
     #  Training loop
@@ -586,14 +716,12 @@ class GRPOTrainer(BaseTrainer):
             rollout = self.sample_group(prompts, answers, prompt_tokens=prompt_tokens)
             loss, metrics = self.compute_grpo_loss(rollout)
 
-            # --- gradient accumulation scaling ---
-            if accum_steps > 1:
-                loss = loss / accum_steps
-
-            if self.scaler is not None and self.scaler.is_enabled():
-                self.scaler.scale(loss).backward()
-            else:
-                loss.backward()
+            # Chunked groups already called backward. A live graph is the
+            # single-forward path.
+            if loss.requires_grad:
+                if accum_steps > 1:
+                    loss = loss / accum_steps
+                self._backward_loss(loss)
 
             # --- optimizer step only after accumulation is complete ---
             if (self.global_step + 1) % accum_steps == 0:
