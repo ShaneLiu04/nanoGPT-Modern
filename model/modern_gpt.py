@@ -718,6 +718,22 @@ class CausalSelfAttention(nn.Module):
                     kv_add.masked_fill_(~kv_valid.unsqueeze(1).unsqueeze(2), float("-inf"))
                     attn_mask = kv_add if attn_mask is None else attn_mask + kv_add
 
+                if attn_mask is not None and is_causal:
+                    # PyTorch 2.8 rejects is_causal=True together with an
+                    # explicit attn_mask. Fold causality into the mask so
+                    # padding and the causal constraint are both enforced.
+                    s_len = k_embed.shape[2]
+                    causal = torch.tril(
+                        torch.ones((T, s_len), device=x.device, dtype=torch.bool),
+                        diagonal=s_len - T,
+                    )
+                    if attn_mask.shape[-2] == 1:
+                        attn_mask = attn_mask.expand(
+                            attn_mask.shape[0], attn_mask.shape[1], T, s_len
+                        ).clone()
+                    attn_mask = attn_mask.masked_fill(~causal.view(1, 1, T, s_len), float("-inf"))
+                    is_causal = False
+
                 # GQA broadcast strategy — ``_gqa_mode`` is one of
                 # "native" / "raw" / "grouped" / "repeat".
                 # - "native": pass different head counts to SDPA with
