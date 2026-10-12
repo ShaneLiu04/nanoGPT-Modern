@@ -1,4 +1,4 @@
-﻿# nanoGPT-Modern 技术白皮书
+# nanoGPT-Modern 技术白皮书
 
 **面向技术决策者与核心研发团队的全栈架构技术报告**
 
@@ -1067,10 +1067,10 @@ KV Cache = 2 (K+V) × batch_size × n_kv_heads × seq_len × head_dim × 精度�
 
 | 编号 | 债务项 | 严重级别 | 影响范围 | 根因 | 当前状态 |
 |------|--------|----------|----------|------|----------|
-| TD-01 | 实验验证停留在小模型 demo | **P0** | 项目可信度 | 算力限制 | 待 50M 参数完整训练验证 |
+| TD-01 | 实验验证停留在小模型 demo | **P0** | 项目可信度 | 算力限制 | 2026-10-12 已在 OpenWebText 前缀上完成 50M、18000 step 七组对照，见 EXPERIMENTS.md §6。早先 −2.29% 的目标值未被这次测量支持 |
 | TD-02 | MoE 实现仅具示意性 | P2 | 模型性能 | 未实现 grouped GEMM | **已修复**：v0.3.0 专家权重堆叠 + `bmm` 向量化 |
 | TD-03 | RMSNorm 未使用 fused kernel (旧版本) | P1 | 训练效率 | 兼容性考虑 | 已修复：PyTorch 2.4+ 自动使用 `F.rms_norm` |
-| TD-04 | KV Cache 在小模型上未体现吞吐优势 | P1 | 推理性能 | 管理开销 > 计算节省 | 正常现象，待大模型验证 |
+| TD-04 | KV Cache 在小模型上未体现吞吐优势 | P1 | 推理性能 | 管理开销 > 计算节省 | 3.3M 短序列上仍然成立。50M 的 append 路径在 prompt 128–896 上已快于整段重算（EXPERIMENTS.md §6.4） |
 | TD-05 | 缺乏容器化与 CI/CD | P2 | 工程成熟度 | 项目阶段 | **已修复**：v0.3.0 GitHub Actions + Dockerfile + docker-compose |
 | TD-06 | 缺少分布式训练自动化测试 | P2 | 可靠性 | 单卡环境限制 | 建议引入多 GPU CI runner |
 | TD-07 | 类型注解覆盖不完整 | P3 | 可维护性 | 历史遗留 | 核心模块已通过 mypy，持续扩展中 |
@@ -1095,7 +1095,7 @@ KV Cache = 2 (K+V) × batch_size × n_kv_heads × seq_len × head_dim × 精度�
 
 | 任务 | 状态 | 说明 |
 |------|------|------|
-| 50M 模型完整训练验证 | 🔄 进行中 | 在真实 OpenWebText 上训练 18k iters，验证 README 目标指标 |
+| 50M 模型完整训练验证 | ✅ 已测量 | OpenWebText 前缀、18000 step、七组对照。modern-full val loss 3.573，baseline 3.612（−1.07%）。MHA 更低（3.540）。详见 EXPERIMENTS.md §6 |
 | MoE grouped GEMM | ✅ 已完成 | 专家权重堆叠 + `bmm` 向量化，消除 Python for-loop |
 | KV Cache 量化（INT8/FP8） | ✅ 已完成 | `QuantizedKVCacheManager` 显存节省 50% |
 | 全局数据 Shuffle | ✅ 已完成 | 预计算 `.shuffle.idx` 随机索引 |
