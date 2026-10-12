@@ -27,9 +27,97 @@
 
 1. **架构线**：`model/` 两个 GPT 变体 + [docs/adr/](docs/adr/README.md) 架构决策记录——每个组件为什么这么选、取舍依据是什么（GQA grouped-broadcast、MoE grouped GEMM、KV 量化、GRPO vs PPO）。
 2. **系统线**：`training/trainer_base.py` 模板方法训练基座（DDP/FSDP/AMP/EMA/checkpoint 生命周期，[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)）+ `inference/` 推理引擎（KV cache 家族、投机解码、连续批处理）——工程能力的主展示面。
-3. **证据线**：[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 实测记录 + [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md) 实验矩阵——所有架构声明都有对应实验（含负面结果与适用边界的诚实报告，例如小模型下 Python 级 cache 管理开销曾一度超过计算节省、FSDP 在 50M 规模下的分片开销分界）。
+3. **证据线**：[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 第 6 节是 2026-10-12 在 RTX 6000D 上的实测（OpenWebText 前缀、七组 18000 step）。负面结果保留在同一节：SwiGLU 没有超过 GELU，top-1 MoE 没有超过稠密模型，弱草稿的投机解码接受率为 0，单卡 FSDP 没有扩展收益。
 
 > 质量保障：628+ 回归测试（含确定性测试：固定种子 loss 曲线逐位一致）· CI 四检（pytest + mypy + black + ruff + CPU 冒烟训练）· 实验编排器支持断点续跑。
+
+## 云端实测
+
+2026-10-12，AutoDL RTX 6000D（86 GB）、PyTorch 2.8.0+cu128、bf16、seed 1337。语料是 OpenWebText 训练分片 0–10，1.244B GPT-2 token。每组 18000 step、batch 32、block 1024，共见到 5.90 亿 token，不到这批语料的一半。验证集是分片 79 的前 10000 篇（11,147,787 token）。
+
+| 变体 | val loss | 相对 baseline | 吞吐 |
+|------|----------|---------------|------|
+| baseline | 3.612 | — | 180k tok/s |
+| modern-full（GQA-2） | 3.573 | −1.07% | 146k tok/s |
+| no-rope | 3.626 | +0.39% | 157k tok/s |
+| no-swiglu（GELU） | 3.559 | −1.45% | 153k tok/s |
+| mha | 3.540 | −1.99% | 138k tok/s |
+| moe（top-1，4 专家） | 3.582 | −0.81% | 115k tok/s |
+| qk-norm | 3.556 | −1.55% | 133k tok/s |
+
+在这个预算下，验证损失最低的是完整 MHA（3.540）。GQA-2 比 MHA 高 0.033，KV cache 从 18432 B/token 降到 4608 B/token。去掉 RoPE 是唯一比 baseline 更差的改动（3.626）。SwiGLU 没有超过 GELU，top-1 MoE 没有超过稠密 modern。NTK-aware RoPE 在 4096 token 上的困惑度是 52.5，朴素外推是 214。append KV cache 在 prompt 128–896 上保持约 180 tok/s，整段重算降到 141 tok/s。bf16 训练吞吐是 fp32 的 2.10 倍。
+
+完整表、命令和每张图的读法在 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 第 6 节，复现步骤在 [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md)。
+
+![Validation loss curves](docs/assets/experiments/ea_val_loss_curves.png)
+
+七组验证损失都从 5 以上降到 3.5–3.6。MHA 最终最低，去掉 RoPE 的那条最高。
+
+![Best validation loss](docs/assets/experiments/ea_best_val_loss.png)
+
+![NTK perplexity](docs/assets/experiments/ea7_ntk_ppl.png)
+
+训练长度是 1024。放到 4096 时，朴素 RoPE 的困惑度是 214，NTK 是 52。
+
+![Decode throughput](docs/assets/experiments/eb_decode_throughput.png)
+
+![Decode memory](docs/assets/experiments/eb_decode_memory.png)
+
+append KV 在 prompt 128–896 上保持约 180 tok/s。paged 在这条单请求路径上更慢，prompt 越长越慢。int8 在这么短的上下文里几乎省不出显存，因为权重占了峰值的大部分。
+
+![Continuous batching](docs/assets/experiments/eb_continuous.png)
+
+16 条请求并发时，吞吐从单条的约 108 tok/s 升到约 1920 tok/s。
+
+![Speculative decoding, weak draft](docs/assets/experiments/eb_speculative.png)
+
+4 层 / 256 维、只训了 1200 step 的草稿，接受率是 0。换成 8 层 / 512 维、同宽度、4000 step 的草稿之后，draft 长度 2 / 4 / 8 的接受率是 53% / 38% / 33%。吞吐仍在 91–94 tok/s，低于 append 的约 180 tok/s。接受率回来了，验证开销还没被省掉的重算抵消。
+
+![Matched draft accept rate](docs/assets/experiments/eb_spec_matched.png)
+
+64 个新 token 上 torch.compile 是 94 tok/s，eager 是 182。放到 256 个新 token，compile 是 294 tok/s，eager 是 185，约 1.59 倍。短解码付的是编译成本，长解码才开始赚回来。
+
+![Training throughput](docs/assets/experiments/ec_train_throughput.png)
+
+bf16 的训练吞吐是 fp32 的 2.10 倍。单卡 FSDP 和 bf16 几乎相同，这里没有多卡扩展数据。
+
+![MoE kernel](docs/assets/experiments/ec3_moe_kernel.png)
+
+16 个专家时，分组 GEMM 是逐专家循环的 5.8 倍。这解释了实现选择。训练损失上，top-1 MoE 仍没有超过稠密 modern。
+
+![Format compliance](docs/assets/experiments/ed_format_pass.png)
+
+2000 条、2 个 epoch 之后，平均格式分是 0.45。这个分数的上限是 0.5，0.45 已经是上限的 90%。标签缺失率只有 0–2.5%。
+
+![GRPO reward](docs/assets/experiments/ed_grpo_reward.png)
+
+![Format score relative to its 0.5 ceiling](docs/assets/experiments/ed_sft_scale.png)
+
+![Group-size reward noise](docs/assets/experiments/ed_group_variance.png)
+
+120 step、batch 64 下，G4 / G8 / G16 的验证奖励在 step 20 之后都落在 0.63–0.65。
+
+![SFT, GRPO, DPO, IPO reward](docs/assets/experiments/ed_dpo_reward.png)
+
+同一份 SFT 上，GRPO-G8 的平均规则奖励是 0.634，DPO 是 0.624，IPO 是 0.623，SFT 是 0.572。准确率没有跟着升。
+
+![Reward against the SFT log-ratio](docs/assets/experiments/ed_dpo_kl.png)
+
+## 面试时怎么讲这些结果
+
+仓库要回答的是「这个组件在什么预算下值不值得」，不是「现代组件全部更好」。四条容易被追问的结果，对应的说法如下。
+
+**SwiGLU 和 top-1 MoE 没有赢。** 在 12 层 / 512 维、18000 step、大约半个 epoch 上，GELU 的 val loss 是 3.559，SwiGLU 是 3.573；激活参数对齐的 4 专家 MoE 是 3.582，稠密 modern 是 3.573。分组 GEMM 把专家前向从随专家数变慢变成几乎持平，所以 MoE 的实现是成立的，缺的是这个规模上的损失收益。面试里把「kernel 更快」和「损失更低」分成两句话。
+
+**GQA 是一笔显存交易。** 损失最低的是 MHA（3.540）。GQA-2 高 0.033，KV 从 18432 B/token 降到 4608 B/token。要省的是推理时的 KV，不是训练损失。
+
+**推理路径要看场景。** 单条、几十个新 token：用 append KV。很多短请求拼在一起：连续批处理几乎按并发放大吞吐。4 层弱草稿的接受率是 0；同宽度的 8 层草稿把接受率做到 53%（draft 长度 2），吞吐仍低于 append。torch.compile 在 64 token 上更慢，在 256 token 上是 eager 的 1.59 倍。
+
+**对齐预算决定你能声称什么。** 格式分满分是 0.5。2000 条 SFT 的平均分 0.45，是满分的 90%；标签缺失率 0–2.5%，二元遵从率已经超过 97%。同一条数据再训到 8 个 epoch，分数停在 0.45。把每档样本加到 8000 和 20000，分数升到 0.478 和 0.492，也就是上限的 95% 和 98%，easy 准确率从 8% 升到 14%。算术本身仍然大部分不会。120 step 的 GRPO 没有把组大小变成奖励差距。单独测组内奖励噪声时，组均值的标准误从 G4 的 0.033 降到 G16 的 0.022，均值奖励仍在 0.56–0.57。组更大，基线估计更稳；它不会凭空变出更高的奖励。
+
+**规则奖励升高要拆开看。** 用 SFT 自己的 8 条采样做成 1333 对偏好（打平率 13%，chosen 比 rejected 高 0.281），再训 DPO 和 IPO。和三组 GRPO 放在同一套 80 条评测上：奖励都在 0.623–0.634，SFT 是 0.572。格式分从 0.457 掉到大约 0.30，过程分从 0.076 顶到 0.30。过程分只奖励答案前面的推导记号。准确率从 SFT 的 3.9% 降到 DPO 的 2.6%。离线 DPO 没有比在线 GRPO 更高效，0.63 的奖励也不是学会了算术。图上的横轴是策略自己采样上的 `log π_SFT - log π_θ`，不是 KL；五个对齐模型都落在 -0.75 到 -0.79。
+
+后续补测（更长的 SFT 数据预算、组内奖励噪声、同宽度草稿）记在同一节，数字以 `docs/results/` 里的 JSON 为准。
 
 ## 核心亮点
 
@@ -102,6 +190,8 @@
 | ModernGPT GQA-4KV | 51.7M | 26.0M | 9,216 **(-50%)** |
 | ModernGPT GQA-2KV | 50.5M | 24.8M | 4,608 **(-75%)** |
 | ModernGPT GQA-2KV + KV-INT8 | 50.5M | 24.8M | 2,304 **(-87.5%)** |
+
+上表是按权重绑定估算的设计值。2026-10-12 编排器的 `get_num_params` 原始计数更高（baseline 64.1M，modern-full 59.6M，mha 64.3M，moe 总参数 137.4M / 激活 59.6M），因为绑定的 embedding 可能被 `parameters()` 计了两次。组间差值以同一次计数为准，见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §6.1。
 
 ---
 
@@ -348,7 +438,7 @@ docker-compose up train    # 仅训练
 | **KV decode 显存平坦化**（GPU 演练修复） | 峰值显存斜率 12,335 → **~0 B/token**（SDPA GQA head-expansion 物化 bug 修复，单步瞬时分配 57.7MB→0.5MB @L=4096，**114x**），长上下文/batch 不再 OOM | Quadro RTX 5000 |
 | 单卡 DDP / FSDP 全链路 | DDP（static_graph + gradient_as_bucket_view）与 FSDP（FULL_STATE_DICT gather + resume round-trip）GPU 构造/训练/checkpoint 全通，并修复 ReduceOp.AVG gloo 兼容等 2 个分布式 bug | Quadro RTX 5000 |
 
-> 50M 规格的组件消融矩阵（baseline / modern-full / no-rope / no-swiglu / mha / moe / qk-norm 七组，18k iters）与推理效率扫描（KV 家族/量化/投机解码/连续批处理）规划在 [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md)，待云 GPU 实例执行——编排器已就绪（断点续跑 + 抢占恢复 + 摘要聚合）。
+50M 七组消融、NTK、推理扫描和训练系统微基准已经在 RTX 6000D 上跑完，数字和读法在文首「云端实测」以及 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 第 6 节。3.3M 合成数据的结果只说明链路能跑，不参与架构比较。
 
 ---
 

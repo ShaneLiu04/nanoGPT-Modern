@@ -29,12 +29,13 @@
 
 ```bash
 python run_component_ablations.py \
+  --config config/pretrain_cloud.yaml \
   --out_root out/ablations --stage all \
-  --max_iters 18000 --batch_size 32 --device cuda
-# E-A-7（外推评测，可独立于矩阵）：
-python evaluation/eval_benchmark.py \
-  --checkpoint out/ablations/modern-full/best_ckpt.pt \
-  --context_lengths 1024 2048 4096 --output_json out/ablations/ntk_eval.json
+  --max_iters 18000
+# E-A-7 用训练好的 modern-full checkpoint，而不是 eval_benchmark 的 context_lengths 参数：
+python tools/experiments/run_ntk_eval.py \
+  --checkpoint out/ablations/ablation-modern-full/best_ckpt.pt \
+  --output_json out/cloud/ntk_eval.json
 ```
 
 ### B 组：推理效率对比（上下文长度扫描）
@@ -103,7 +104,7 @@ pip cache purge; conda clean -a -y                          # 包缓存（通常
 # 旧环境仅在确认不用后删除：conda env list -> conda env remove -n <name>
 ```
 
-验收：数据盘剩余空间 >= 120 GB（数据 17.1 + checkpoints 峰值 ~60 + 环境 ~15）。
+2026-10-12 这台实例的数据盘配额是 50 GB，装不下手册初稿假设的 120 GB（全量 17 GB 语料 + 七份完整 checkpoint）。实际做法是流式下载 OpenWebText parquet、tokenize 后删除分片，只保留每组的 best/latest checkpoint，Python 依赖装到数据盘。50 GB 够用：跑完七组后约 24 GB 已用。全量 80 个分片仍然需要更大的盘。
 
 ### 2.2 环境重建
 
@@ -158,19 +159,26 @@ scp -P <PORT> -r root@<REGION>.autodl.com:/root/autodl-tmp/nanoGPT-Modern/out/ab
 
 | 编号 | 状态 | AR 版本 | 执行环境 | 产出位置 |
 |------|------|---------|----------|----------|
-| E-A-1..6 | planned（云实例待租） | AR-v0.4.0（矩阵定义）/ AR-v0.5.0（编排器加固） | 云 GPU 50M 18k iters | `out/ablations/<group>/experiments/` |
-| E-A-7 | planned | AR-v0.4.0 | 云 GPU（依赖 E-A-1 checkpoint） | `out/ablations/ntk_eval.json` |
-| E-B-1 | part-done（本机 sm75：显存平坦已验证，吞吐数据待云测） | AR-v0.5.0 + GPU 演练修复（2026-10-11） | 本机 Quadro RTX 5000 -> 云 | MIGRATION.md §8.2 / 待 `out/ablations/inf/` |
-| E-B-2..5 | planned | — | 云 GPU | 待定 |
-| E-C-1..4 | planned | AR-v0.5.0（DDP/FSDP 栈就绪） | 云 GPU | 待定 |
-| E-C-5 | part-done（本机：12,335 -> -1,090 B/token；云 flash 后端对照待测） | GPU 演练修复（2026-10-11） | 本机 -> 云 | MIGRATION.md §8.2 |
-| E-D-1 | done（3.3M 快速验证：88-100% 遵从率） | AR-v0.3.0 | RTX 4060 Laptop | EXPERIMENTS.md §5.1 |
-| E-D-2 | done（G4, 50 steps 曲线） | AR-v0.3.0 | RTX 4060 Laptop | EXPERIMENTS.md §5.2 |
-| E-D-3 | planned | — | 云（依赖 A 组 checkpoint） | 待定 |
+| E-A-1..6 | reported | AR-v0.4.0 / AR-v0.5.0 | RTX 6000D，18000 step，OpenWebText 前缀 | `docs/results/ablation-summary.json`，EXPERIMENTS.md §6.2 |
+| E-A-7 | reported | AR-v0.4.0 | 同上，modern-full checkpoint | `docs/results/ntk_eval.json`，EXPERIMENTS.md §6.3 |
+| E-B-1 | reported | AR-v0.5.0 | RTX 6000D，prompt 128/512/896 | `docs/results/inference.json`，EXPERIMENTS.md §6.4 |
+| E-B-2 | reported | — | int8 KV；短上下文上显存差很小 | 同上 |
+| E-B-3 | reported | — | 弱草稿，接受率 0 | 同上 |
+| E-B-4 | reported | — | 并发 1/4/16 | 同上 |
+| E-B-5 | reported | — | 64 token 解码上 compile 更慢 | 同上 |
+| E-C-1 | reported | AR-v0.5.0 | 300 iter，bf16 为 fp32 的 2.10 倍 | `docs/results/system.json`，EXPERIMENTS.md §6.6 |
+| E-C-2 | reported | — | 累积步数与 iter 计数未对齐，见 §6.6 | 同上 |
+| E-C-3 | reported | — | 16 专家时分组 GEMM 5.8 倍 | `docs/results/moe_kernel.json` |
+| E-C-4 | reported（单卡） | AR-v0.5.0 | 单卡 FSDP 与 bf16 几乎相同，没有强扩展数据 | `docs/results/system.json` |
+| E-C-5 | part-done | GPU 演练修复（2026-10-11） | 修复前后斜率仍以本机 MIGRATION.md §8.2 为准；云端只测了修复后的 append 显存 | MIGRATION.md §8.2 |
+| E-D-1 | reported | AR-v0.3.0 + 云端复测 | 格式分上限 0.5；2000 条平均分 0.45（上限的 90%），invalid 0–2.5%。加到 20000 条后平均分 0.492 | EXPERIMENTS.md §6.5 |
+| E-D-2 | reported | AR-v0.3.0 + 云端 G4/G8/G16 | RTX 6000D，各 120 step | `docs/results/alignment.json`，EXPERIMENTS.md §6.5 |
+| E-D-3 | reported | — | 同一 SFT 上的 DPO/IPO，1333 对；奖励升、准确率不升 | `docs/results/dpo_compare.json`，EXPERIMENTS.md §6.5 |
 
 ### 更新历史
 
 | 日期 | AR / 事件 | 更新内容 |
 |------|-----------|----------|
 | 2026-10-11 | GPU 演练（ST 遗留清单） | 手册创建；E-B-1/E-C-5 记录本机修复成果（SDPA GQA 物化 bug） |
-| (下次) | (AR 归档时) | (按维护规则更新状态表与命令) |
+| 2026-10-12 | 云端实测 | RTX 6000D 上跑完 E-A、E-B、E-C 与 E-D-1/E-D-2。数据是 12.44 亿 token 前缀，不是全量 17 GB。多卡扩展仍未测。解读在 EXPERIMENTS.md §6 |
+| 2026-10-12 | E-D-3 | 在 RTX PRO 6000 Blackwell 上用冻结的 SFT 采样做 DPO/IPO。奖励上升来自过程分，准确率没有上升 |

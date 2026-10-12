@@ -1,0 +1,44 @@
+# Cloud pretraining config for the component-ablation matrix.
+# Same 12L/8H/512D recipe as config/pretrain.yaml, with the batch size
+# named in docs/RUNNING_EXPERIMENTS.md and a cheaper eval budget.
+# 20 eval batches x batch 32 x 1024 tokens is about 0.66M tokens per split
+# per eval point (standard error of the mean loss well below 0.01).
+model: modern
+out_dir: out/ablations
+
+vocab_size: 50257
+block_size: 1024
+n_layer: 12
+n_head: 8
+n_embd: 512
+n_kv_head: 2
+dropout: 0.0
+
+use_ring_attention: false
+ring_block_size_q: 64
+ring_block_size_kv: 64
+attn_backend: auto
+
+batch_size: 32
+learning_rate: 6.0e-4
+min_lr: 6.0e-5
+max_iters: 18000
+warmup_iters: 2000
+lr_decay_iters: 18000
+weight_decay: 0.1
+grad_clip: 1.0
+
+data_dir: data/openwebtext
+num_workers: 0
+use_packing: false
+
+eval_interval: 1000
+eval_iters: 20
+eval_batch_size: 32
+log_interval: 20
+use_wandb: false
+
+seed: 1337
+device: cuda
+compile: false
+precision: bf16
