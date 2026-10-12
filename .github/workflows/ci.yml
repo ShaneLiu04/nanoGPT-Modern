@@ -51,17 +51,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,eval,quant,hf,server]"
 
-      - name: Run pytest (full regression, 234 tests)
+      - name: Run pytest (full regression)
         run: pytest -xvs --tb=short
 
       - name: Run mypy type checking
-        run: mypy model/ training/ inference/ evaluation/ utils/ data/ rewards/ tools/export/ api_server.py
+        run: mypy model/ training/ inference/ evaluation/ utils/ data/ rewards/ tools/export/ tools/experiments/ tools/plotting/ api_server.py
 
       - name: Run black format check
-        run: black --check model/ training/ inference/ evaluation/ utils/ data/ rewards/ tools/export/ api_server.py
+        run: black --check model/ training/ inference/ evaluation/ utils/ data/ rewards/ tools/export/ tools/experiments/ tools/plotting/ api_server.py
 
       - name: Run ruff lint check
-        run: ruff check model/ training/ inference/ evaluation/ utils/ data/ rewards/ tools/export/ api_server.py
+        run: ruff check model/ training/ inference/ evaluation/ utils/ data/ rewards/ tools/export/ tools/experiments/ tools/plotting/ api_server.py
 
   smoke-test:
     runs-on: ubuntu-latest
