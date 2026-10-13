@@ -71,6 +71,13 @@
 - 顺带发现（审查外）：tests/test_infra_math.py 存量 I001（import 分组缺空行；tests/ 不在 CI lint 范围故 T003 未暴露）——已 ruff --fix + black 修复
 - 修复后：41 passed（39+2 新用例）+ 三绿 + 全量 683 passed / 2 skipped 零回归
 
+### 2026-10-13 审查记录（第 2 轮，PASS）
+
+- 复审结果：PASS（S1/S4/D1/D2/D4 全 YES，证据闭合）
+- 审查代理独立复算：scores 增量公式（2·H·T 元素/token/层 × L × tokens × dtype）与 ut-mem-scores 差值断言精确吻合；_validate_device 三段一致且先于张量构建；summarize 签名双记录（design §4.3.2 + docstring）；GELU 8d 三处（design/实现/手册）一致；手册 §3.3 交叉引用指向 §4.2 正确
+- 可运行验证复跑：41 passed / ruff+black+mypy 三绿；未发现修复引入的新问题
+- 至此 AR-v0.6.0 开发 + 审查全部完成，进入 ST 验收（sdd-task-st）
+
 ## 阶段门控记录
 
 > 由 sdd-phase-gate skill 在阶段门控审查后追加，记录每轮审查结果（PASS/FAIL + 轮次）。格式见 sdd-phase-gate SKILL.md Step 6。
