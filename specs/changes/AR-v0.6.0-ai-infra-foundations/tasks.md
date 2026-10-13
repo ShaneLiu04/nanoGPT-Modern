@@ -15,9 +15,9 @@
 | T002 | FR2 docs/ai-infra/memory-flops-arithmetic.md 显存/算力心算手册（五项分解推导 + FLOPs + roofline + 本仓数据逐条验证） | T001 | passing | 2026-10-13 完成；含 §3.3 单开关组间差经验分解（swiglu +1.52/GQA −0.62/qk-norm +1.89 公式闭合 ≈1.0GB 下界）与 §7 心算卡（7~9GB vs 实测 26.26GB 的诚实残差注记） |
 | T003 | FR3 utils/infra_math.py 计算器（param_count/training_memory_breakdown/inference_kv_bytes/gqa_kv_materialization_slope/flops_per_token/step/arithmetic_intensity + CLI `python -m`） | - | passing | 2026-10-13 完成；TDD Red（子代理 31 用例）→ Green（2 轮修复：MoE 增量漏乘层数、CLI precision 改函数校验）；31 passed + black/ruff/mypy 三绿 + 覆盖率 96%（目标 ≥95%）；锚点全部精确断言通过 |
 | T004 | FR4 tools/infra/run_roofline.py 本机微实验（三段式：GEMM 尺寸扫描跨 L2 4MB + GEMV 对照 + decode 步带宽反推；--quick ≤5min；CPU fallback 可测；结果 docs/results/roofline.json + EXPERIMENTS.md 记录） | T003 | passing | 2026-10-13 完成；TDD Red（子代理 8 用例，测试契约 bug 修复 gemm_flops(2,3,4)=48 非 24）→ Green（B023 partial 闭包 + abort 不写部分 JSON + cpu-smoke）；实测 --quick 10 点 <1min：GEMM 8.5→9825.7 GFLOPs/s（1160×，cache-bound 可见）、GEMV 349.2 GB/s=77.9% 规格、decode 4.81 GB/s=1.1%（bound=memory 方向成立，绝对利用率受启动开销主导已注记）；MIGRATION.md「8GB」→16 GiB ×2 处；ci.yml 三行加 tools/infra/；EXPERIMENTS §6.8+§8+§10 索引 |
-| T005 | FR5 RUNNING_EXPERIMENTS.md 新增 F 组 SOP（E-F-1 通信带宽 / E-F-2 多卡 roofline+MFU / E-F-3 KV 物化 GPU 复测；环境/命令/产物/判据四要素 + 状态表登记） | T003 | 待高算力 GPU 执行，本期仅文档 |
-| T006 | FR6 README 文档索引挂载 ai-infra 系列（不破坏三条阅读线） | T001, T002 | |
-| T007 | FR7 质量收口：全量回归零回归 + mypy/black/ruff 三绿（新文件入 CI 范围） + gitee 同步 + RUNNING_EXPERIMENTS 状态表更新 + T001 索引链接存在性终检 + README badge 测试数陈旧（628+ → 640+）顺带修正 | T001-T006 | 基线口径：640 passed / 2 skipped / 2 deselected（2026-10-13 实测） |
+| T005 | FR5 RUNNING_EXPERIMENTS.md 新增 F 组 SOP（E-F-1 通信带宽 / E-F-2 多卡 roofline+MFU / E-F-3 KV 物化 GPU 复测；环境/命令/产物/判据四要素 + 状态表登记） | T003 | passing | 2026-10-13 完成；F 组表 + 三实验各四要素段（E-F-1 内联 torchrun 脚本不新增仓库文件、总线带宽 2(N-1)/N 口径；E-F-2 复用 FR4 工具；E-F-3 复用 profile_inference，判据 ±5%）；状态表 3 行（E-F-2 part-done：本机 --quick 已跑）+ 更新历史登记 |
+| T006 | FR6 README 文档索引挂载 ai-infra 系列（不破坏三条阅读线） | T001, T002 | passing | 2026-10-13 完成；「文档索引」表插入 ai-infra/ 与心算手册两行（MIGRATION 之后）；「实验与结果」段挂 F 组指引并把 14→17 个实验口径同步；badge 与质量保障行 628+→681+ ×3 处 |
+| T007 | FR7 质量收口：全量回归零回归 + mypy/black/ruff 三绿（新文件入 CI 范围） + gitee 同步 + RUNNING_EXPERIMENTS 状态表更新 + T001 索引链接存在性终检 + README badge 测试数陈旧（628+ → 640+）顺带修正 | T001-T006 | passing | 2026-10-13 完成；全量 681 passed / 2 skipped 零回归（新基线口径 681 = 640 + infra_math 31 + roofline 8 + 会话增量 2）；CI 新范围本地三绿（82 文件）；链接终检 25 相对链接全存在（修复 1 处 `./adr/`→`../adr/`）；badge 修正至 681+（口径顺带更新）；gitee 同步见会话记录 |
 
 ## 状态说明
 
@@ -51,6 +51,14 @@
 - 顺带交付：MIGRATION.md「8GB」→ 16 GiB 修正 ×2 处（门控 W5 兑现）；ci.yml mypy/black/ruff 三行加 tools/infra/（lint 契约扩展，T007 验收项）；EXPERIMENTS.md §6.8 记录节 + §8 复现命令 + §10 索引行
 - 质量门：39 passed（8 roofline + 31 infra_math）+ 三绿（black/ruff/mypy）
 - 修改文件：tools/infra/__init__.py、tools/infra/run_roofline.py、tests/test_roofline_script.py、docs/results/roofline.json、docs/EXPERIMENTS.md、docs/MIGRATION.md、.github/workflows/ci.yml、tasks.md
+
+### 2026-10-13 开发会话记录（T005-T007，AR 收口）
+
+- T005：RUNNING_EXPERIMENTS.md 新增 F 组（E-F-1 通信带宽 / E-F-2 多卡 roofline+MFU / E-F-3 KV 物化复测）：矩阵表 + 三实验各四要素段；E-F-1 内联 torchrun 脚本（总线带宽 2(N-1)/N 口径）不新增仓库文件；E-F-2/E-F-3 复用本 AR 交付工具（run_roofline.py / profile_inference.py）；状态表 3 行（E-F-2 part-done）+ 更新历史登记
+- T006：README 挂载——「文档索引」表 +2 行（ai-infra/ 索引、心算手册）；「实验与结果」段 14→17 实验口径 + F 组指引；三条阅读线未动
+- T007：全量回归 681 passed / 2 skipped 零回归（新基线 681，原口径 640 + 本 AR 新增测试）；CI 新范围（含 tools/infra/）本地三绿 82 文件；T001 索引链接存在性终检 25/25（修复 ai-infra/README.md 第 4 步 `./adr/`→`../adr/` 1 处）；README badge 与质量保障行 628+→681+ ×3；RUNNING_EXPERIMENTS 状态表已在 T005 内更新
+- 事故与修复：① PowerShell 管道向 git commit 传中文变 `?`（$OutputEncoding 陷阱）——amend 改用 `-F <UTF-8 文件>` 修复，此后提交一律走文件；② edit 替换标题行吞标题 ×2（EXPERIMENTS §7、tasks 门控记录）——均在当步发现补回
+- 修改文件：docs/RUNNING_EXPERIMENTS.md、README.md、docs/ai-infra/README.md（链接修复）、tasks.md
 
 ## 阶段门控记录
 
