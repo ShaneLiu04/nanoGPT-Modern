@@ -60,6 +60,17 @@
 - 事故与修复：① PowerShell 管道向 git commit 传中文变 `?`（$OutputEncoding 陷阱）——amend 改用 `-F <UTF-8 文件>` 修复，此后提交一律走文件；② edit 替换标题行吞标题 ×2（EXPERIMENTS §7、tasks 门控记录）——均在当步发现补回
 - 修改文件：docs/RUNNING_EXPERIMENTS.md、README.md、docs/ai-infra/README.md（链接修复）、tasks.md
 
+### 2026-10-13 审查记录（第 1 轮，FAIL → 修复）
+
+- 审查结果：FAIL（S1/S4/D1/D2/D4 NO；S2/S3/S5/D3/C1-C3 YES）；审查代理独立复跑三绿/39 用例/全量 681+2perf/CLI/锚点 25 项存在性/roofline.json 数值比对
+- Major（S1/D2/D4）：激活逐张量模型缺 attn scores [B,H,T,T] 项（srs FR2 期望行为 1 + design §4.1 表均有）——修复：`_activation_bytes_per_token_per_layer` 与 `training_memory_breakdown` 增加 `materialize_scores` 开关（默认 False=fused SDPA 不物化口径；True=math 后端 2·n_head·T B/token/层），design §4.1 scores 行改两口径、手册 §3.1 表补行，新增 ut-mem-scores 用例（增量精确断言）
+- Minor（S4/D1）：design §4.3.2「非法 device → ValueError」未实现——修复：三段函数加 `_validate_device` 白名单校验（先于 torch.device 的 RuntimeError），新增 ut-invalid-device 用例
+- Minor（D1/D4）：`summarize` 签名细化未记录——修复：docstring + design §4.3.2 同步记录（mode 为 schema 必需键、三段分参便于单测）
+- Minor（D2/D4）：GELU 口径实现 8d（两张量）vs design 初稿 I=4d——修复：design §4.1 行更正为 8d 并注明「审查修正，与手册 §3.1 一致」
+- Minor（S1 文档质量）：手册 §3.3 交叉引用 §5.2 → §4.2（KV 物化机理实际位置）已更正
+- 顺带发现（审查外）：tests/test_infra_math.py 存量 I001（import 分组缺空行；tests/ 不在 CI lint 范围故 T003 未暴露）——已 ruff --fix + black 修复
+- 修复后：41 passed（39+2 新用例）+ 三绿 + 全量 683 passed / 2 skipped 零回归
+
 ## 阶段门控记录
 
 > 由 sdd-phase-gate skill 在阶段门控审查后追加，记录每轮审查结果（PASS/FAIL + 轮次）。格式见 sdd-phase-gate SKILL.md Step 6。

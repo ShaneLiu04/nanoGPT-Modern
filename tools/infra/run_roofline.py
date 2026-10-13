@@ -79,6 +79,12 @@ def effective_bandwidth_gbs(num_bytes: float, seconds: float) -> float:
     return num_bytes / seconds / 1e9
 
 
+def _validate_device(device: str) -> None:
+    """函数级入参校验（design §4.3.2 异常契约）：只收 "cpu" / "cuda*"。"""
+    if device != "cpu" and not device.startswith("cuda"):
+        raise ValueError(f"device 仅支持 'cpu' 或 'cuda*'，收到 {device!r}")
+
+
 def _time_ms(fn, device: str, warmup: int = 3, iters: int = 10) -> float:
     """计时辅助：CUDA 用事件，CPU 用 perf_counter；返回均值毫秒。"""
     for _ in range(warmup):
@@ -104,6 +110,7 @@ def _time_ms(fn, device: str, warmup: int = 3, iters: int = 10) -> float:
 
 def gemm_sweep(device: str, sizes: list[int], iters: int = 10) -> list[dict]:
     """段1：GEMM 尺寸扫描（fp32 方阵），每尺寸返回耗时/算力/工作集。"""
+    _validate_device(device)
     if not sizes:
         raise ValueError("sizes 不能为空（快速失败，不静默）")
     dev = torch.device(device)
@@ -125,6 +132,7 @@ def gemm_sweep(device: str, sizes: list[int], iters: int = 10) -> list[dict]:
 
 def gemv_bandwidth(device: str, shapes: list[tuple[int, int]], iters: int = 10) -> list[dict]:
     """段2：GEMV [N,K]x[K] 对照（强度约 1，memory-bound 方向验证）。"""
+    _validate_device(device)
     if not shapes:
         raise ValueError("shapes 不能为空（快速失败，不静默）")
     dev = torch.device(device)
@@ -152,6 +160,7 @@ def decode_step_bandwidth(device: str, n_layer: int = DECODE_N_LAYERS) -> dict:
     batch=1 时每个权重只参与一次 MAC：强度 = 2N/权重字节 约 0.5（远低于
     ridge），bound 恒为 memory（方向判定；小模型绝对利用率另见手册 §6.1 注）。
     """
+    _validate_device(device)
     from model.modern_gpt import ModernGPT, ModernGPTConfig
 
     dev = torch.device(device)
@@ -188,6 +197,9 @@ def summarize(
     """组装 roofline.json（version/mode/gpu_name/spec_bandwidth_gbs/segments）。
 
     spec_bandwidth_gbs 只在卡名子串命中 GPU_SPECS 时给出（不猜分母）。
+    签名较 design §4.3.2 初稿 ``(segments, gpu_name)`` 细化为五参：mode 是
+    schema 必需键（cpu-smoke/full/quick 三态），gemm/gemv/decode 三段分参
+    便于单测直接喂列表字面量（审查记录 D1，偏离已记 tasks.md）。
     """
     spec_bandwidth_gbs: float | None = None
     if gpu_name:

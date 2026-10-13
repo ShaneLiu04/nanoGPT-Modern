@@ -151,12 +151,18 @@ def _activation_bytes_per_token_per_layer(
     intermediate_size: int | None,
     num_experts: int,
     dtype_bytes: int,
+    seq_len: int = 1024,
+    materialize_scores: bool = False,
 ) -> float:
     """逐张量激活模型（design §4.1 表，fp32 口径给出、dtype 缩放）。
 
     覆盖：norm 输入/输出（2d）+ q/k/v 投影（d + 2·n_kv·hd）+ RoPE 旋转副本
     （d + n_kv·hd）+ SDPA 输出（d）+ o_proj/残差（2d）+ 第二个 norm（2d）
-    + FFN 中间（SwiGLU 3I / GELU 8d）+ FFN 输出/残差（2d）。
+    + FFN 中间（SwiGLU 3I / GELU 8d，h+gelu(h) 两张量）+ FFN 输出/残差（2d）。
+
+    attn scores 两口径（design §4.1）：fused SDPA（flash/mem-efficient 后端，
+    本仓训练默认）不物化 [B,H,T,T]，不计；``materialize_scores=True`` 走
+    math 后端口径，计 softmax 前后各一份 = 2·n_head·T B/token/层。
     """
     kv_dim = (n_head if n_kv_head is None else n_kv_head) * (n_embd // n_head)
     intermediate = _intermediate_size(n_embd, ffn_variant, intermediate_size)
@@ -175,6 +181,8 @@ def _activation_bytes_per_token_per_layer(
     )
     if num_experts > 1:
         per_element += num_experts  # router logits [B,T,E]（top-1 激活近似不变）
+    if materialize_scores:
+        per_element += 2 * n_head * seq_len  # scores [B,H,T,T] 前后各一，per token
     return per_element * dtype_bytes
 
 
@@ -192,12 +200,16 @@ def training_memory_breakdown(
     num_experts: int = 1,
     dtype_bytes: int = 4,
     vocab_size: int = 50257,
+    materialize_scores: bool = False,
 ) -> dict[str, float]:
     """训练显存五项分解（GB；口径表见模块 docstring / 手册 §2-§3）。
 
     返回键：params_gb / gradients_gb / optimizer_gb / activations_gb /
     kv_eval_gb / total_static_gb / total_gb。
     grad_ckpt=True 时激活 = 层边界（L·d·B·T）+ 单层重算峰值 + logits。
+    materialize_scores=True 时激活额外计 attn scores [B,H,T,T]（softmax
+    前后各一 = 2·n_head·T B/token/层）；默认 False 对应本仓 fused SDPA
+    训练路径（不物化 scores，两口径见 design §4.1）。
     """
     if precision not in PRECISION_BYTES:
         raise ValueError(f"precision 必须是 {sorted(PRECISION_BYTES)} 之一，收到 {precision!r}")
@@ -213,7 +225,15 @@ def training_memory_breakdown(
 
     tokens = seq_len * batch
     per_layer = _activation_bytes_per_token_per_layer(
-        n_embd, n_head, n_kv_head, ffn_variant, None, num_experts, dtype_bytes
+        n_embd,
+        n_head,
+        n_kv_head,
+        ffn_variant,
+        None,
+        num_experts,
+        dtype_bytes,
+        seq_len=seq_len,
+        materialize_scores=materialize_scores,
     )
     if grad_ckpt:
         # 只存层边界 hidden + 反向重算单层峰值；logits 仍需保留

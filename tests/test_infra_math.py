@@ -20,6 +20,7 @@ Red 先行：``utils/infra_math.py`` 尚未实现，本模块在收集阶段即�
 """
 
 import pytest
+
 from utils.infra_math import (
     arithmetic_intensity,
     flops_per_step,
@@ -306,6 +307,32 @@ def test_training_memory_grad_ckpt_reduces_activations():
     full = training_memory_breakdown(MODERN_FULL_PARAMS, grad_ckpt=False, **common)
     ckpt = training_memory_breakdown(MODERN_FULL_PARAMS, grad_ckpt=True, **common)
     assert full["activations_gb"] > ckpt["activations_gb"] > 0
+
+
+def test_training_memory_scores_materialization_two_regimes():
+    """ut-mem-scores：attn scores 两口径（design §4.1 审查修正）。
+
+    默认 materialize_scores=False 对应 fused SDPA（不物化 [B,H,T,T]）；
+    True 对应 math 后端：激活增量 = 2·n_head·T B/token/层 × L 层 × tokens。
+    """
+    common = dict(
+        n_layer=2,
+        n_embd=64,
+        n_head=4,
+        seq_len=8,
+        batch=2,
+        precision="amp",
+        dtype_bytes=4,
+    )
+    fused = training_memory_breakdown(1_000_000, materialize_scores=False, **common)
+    math = training_memory_breakdown(1_000_000, materialize_scores=True, **common)
+    # 静态项与 KV 项不受开关影响，只有激活变
+    assert fused["params_gb"] == math["params_gb"]
+    assert fused["kv_eval_gb"] == math["kv_eval_gb"]
+    tokens = common["seq_len"] * common["batch"]
+    expected_bytes = 2 * common["n_head"] * common["seq_len"] * common["n_layer"] * tokens * 4
+    delta_gb = math["activations_gb"] - fused["activations_gb"]
+    assert abs(delta_gb - expected_bytes / (1024**3)) < 1e-12
 
 
 def test_training_memory_invalid_precision():

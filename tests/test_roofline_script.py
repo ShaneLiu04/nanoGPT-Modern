@@ -174,6 +174,20 @@ def test_segment_invalid_inputs():
         gemv_bandwidth("cpu", [])
 
 
+def test_segment_invalid_device():
+    """ut-invalid-device：非法 device → ValueError（design §4.3.2 异常契约）。
+
+    不依赖 torch.device 的 RuntimeError：函数级白名单校验先于张量构建，
+    三段函数一致（gemm/gemv/decode）。
+    """
+    with pytest.raises(ValueError, match="device"):
+        gemm_sweep("bogus", [64])
+    with pytest.raises(ValueError, match="device"):
+        gemv_bandwidth("tpu", [(2, 2)])
+    with pytest.raises(ValueError, match="device"):
+        roofline.decode_step_bandwidth("mps")
+
+
 # ---------------------------------------------------------------------------
 # main：CPU 冒烟路径（monkeypatch torch.cuda，CI 无 GPU 也能验收）
 # ---------------------------------------------------------------------------
