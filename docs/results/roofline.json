@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "mode": "quick",
+  "gpu_name": "Quadro RTX 5000",
+  "spec_bandwidth_gbs": 448.0,
+  "segments": {
+    "gemm": [
+      {
+        "size": 64,
+        "ms": 0.0619,
+        "gflops_per_s": 8.47,
+        "working_set_bytes": 49152
+      },
+      {
+        "size": 128,
+        "ms": 0.0463,
+        "gflops_per_s": 90.55,
+        "working_set_bytes": 196608
+      },
+      {
+        "size": 256,
+        "ms": 0.0485,
+        "gflops_per_s": 691.9,
+        "working_set_bytes": 786432
+      },
+      {
+        "size": 512,
+        "ms": 0.0735,
+        "gflops_per_s": 3654.37,
+        "working_set_bytes": 3145728
+      },
+      {
+        "size": 1024,
+        "ms": 0.299,
+        "gflops_per_s": 7181.95,
+        "working_set_bytes": 12582912
+      },
+      {
+        "size": 1536,
+        "ms": 0.8031,
+        "gflops_per_s": 9024.47,
+        "working_set_bytes": 28311552
+      },
+      {
+        "size": 2048,
+        "ms": 2.1746,
+        "gflops_per_s": 7900.35,
+        "working_set_bytes": 50331648
+      },
+      {
+        "size": 4096,
+        "ms": 15.2646,
+        "gflops_per_s": 9003.75,
+        "working_set_bytes": 201326592
+      },
+      {
+        "size": 6144,
+        "ms": 47.8714,
+        "gflops_per_s": 9689.65,
+        "working_set_bytes": 452984832
+      },
+      {
+        "size": 8192,
+        "ms": 111.902,
+        "gflops_per_s": 9825.66,
+        "working_set_bytes": 805306368
+      }
+    ],
+    "gemv": [
+      {
+        "n": 2048,
+        "k": 2048,
+        "ms": 0.0683,
+        "bytes_moved": 16793600,
+        "gbps": 245.72
+      },
+      {
+        "n": 4096,
+        "k": 4096,
+        "ms": 0.1923,
+        "bytes_moved": 67141632,
+        "gbps": 349.21
+      },
+      {
+        "n": 8192,
+        "k": 8192,
+        "ms": 0.8664,
+        "bytes_moved": 268500992,
+        "gbps": 309.9
+      }
+    ],
+    "decode": {
+      "n_params": 7286016,
+      "weight_bytes": 29144064,
+      "step_ms": 6.0547,
+      "effective_gbps": 4.81,
+      "bound": "memory"
+    }
+  }
+}
