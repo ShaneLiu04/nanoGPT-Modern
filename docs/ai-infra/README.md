@@ -42,7 +42,7 @@ AR-v0.9.0         主题6 推理服务 + 主题7 RLHF 系统工程
 - **第 1 步**：本目录主题 1（手册 + 计算器 + roofline）
 - **第 2 步**：[TECH_REPORT.md](../TECH_REPORT.md) + [EXPERIMENTS.md](../EXPERIMENTS.md)（看实测数字如何支撑设计决策）
 - **第 3 步**：[MIGRATION.md](../MIGRATION.md)（从 nanoGPT 到现代架构的每一处改动及理由）
-- **第 4 步**：[adr/](./adr/)（7 篇架构决策记录：GQA/KV 量化/GRPO/MoE grouped GEMM 等）
+- **第 4 步**：[adr/](../adr/)（7 篇架构决策记录：GQA/KV 量化/GRPO/MoE grouped GEMM 等）
 - **第 5 步**：[RUNNING_EXPERIMENTS.md](../RUNNING_EXPERIMENTS.md)（亲手复现：A-D 组已执行，F 组待高算力 GPU）
 
 ## 贡献约定

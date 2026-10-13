@@ -82,6 +82,64 @@ python inference/generate.py --checkpoint out/ablations/modern-full/best_ckpt.pt
 | E-D-2 | GRPO 组大小 | G4 vs G8 vs G16 | 更大组优势估计方差更低，reward 曲线更平稳 | reward 曲线族 + 最终胜率 |
 | E-D-3 | GRPO vs DPO | 同源轨迹的 DPO/GRPO | DPO 样本效率更高，GRPO 探索性更强（胜率-训练步数） | 胜率曲线 + KL-Reward 散点（对齐 tax 图） |
 
+### F 组：AI infra 微基准（AR-v0.6.0 新增，待多卡/高算力 GPU 执行）
+
+> 来源：AR-v0.6.0-ai-infra-foundations（T005）。本组不训练模型，全部是分钟级微基准，
+> 用于补齐手册（`docs/ai-infra/memory-flops-arithmetic.md`）心算口径的实测锚点：
+> 手算总量只到量级（§7 残差 7~9 GB vs 26.26 GB），结构归因靠本组 + profiler。
+> 四要素齐备才可登记 `running`：环境 / 命令 / 产物 / 判据。
+
+| 编号 | 实验 | 对比项 | 假设 | 图表产出 |
+|------|------|--------|------|----------|
+| E-F-1 | NCCL 通信带宽 | all-reduce 实测带宽 vs PCIe/NVLink 规格值 | 集合通信达到链路规格的 70%+；无 NVLink 时 PCIe 是多卡扩展的真实瓶颈 | all-reduce 带宽-消息大小曲线（8B..256MB） |
+| E-F-2 | 多卡 roofline + MFU | `tools/infra/run_roofline.py` 全量 + 训练 MFU（`utils/infra_math.py` flops 口径） | 云卡 GEMM 稳态算力达规格 80%+；50M 训练 MFU 落在 30-60% 区间（amp 口径） | roofline 三段表 + MFU 单点（对照手册 §5/§7 残差） |
+| E-F-3 | KV 物化 GPU 复测 | 手册 §4 案例（hd=96：18,432→4,608 B/token）与本仓主配置（hd=64：12,288 B/token） | GPU 上逐层分配实测斜率与公式闭合（±5%），修复后曲线平坦（对照 MIGRATION §8.2） | 斜率表（公式 vs 实测）+ 显存-长度曲线 |
+
+**E-F-1 通信带宽**（环境：≥2 卡同型号实例，nccl；命令：临时脚本，不新增仓库文件）
+
+```bash
+# torchrun 2 进程，各绑一卡；消息 8B..256MB 对数扫描，每档 warmup 3 + 计时 10
+cat > /tmp/bench_allreduce.py <<'EOF'
+import os, torch, torch.distributed as dist
+dist.init_process_group("nccl"); torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+for nbytes in [8, 1<<10, 1<<20, 16<<20, 64<<20, 256<<20]:
+    x = torch.empty(nbytes // 4, dtype=torch.float32, device="cuda")
+    for _ in range(3): dist.all_reduce(x)
+    torch.cuda.synchronize(); dist.barrier()
+    t0 = torch.cuda.Event(enable_timing=True); t1 = torch.cuda.Event(enable_timing=True)
+    t0.record()
+    for _ in range(10): dist.all_reduce(x)
+    t1.record(); torch.cuda.synchronize()
+    ms = t0.elapsed_time(t1) / 10
+    if dist.get_rank() == 0:
+        # 总线带宽口径：环形 all-remove 每卡收发 2*(N-1)/N 倍消息
+        n = dist.get_world_size(); print(f"{nbytes:>12} B  {ms:10.3f} ms  {2*(n-1)/n*nbytes/ms*1e3/1e9:8.1f} GB/s")
+dist.destroy_process_group()
+EOF
+torchrun --standalone --nproc_per_node=2 /tmp/bench_allreduce.py
+```
+
+产物：`docs/results/nccl_bw.json`（可后续把脚本固化进 tools/infra/）。判据：峰值带宽 ≥ 链路规格 70% 记 PASS；低于 40% 先查拓扑（`nvidia-smi topo -m`）再下结论。
+
+**E-F-2 多卡 roofline + MFU**（环境：任一云卡；命令：本仓工具，FR4 交付物）
+
+```bash
+python tools/infra/run_roofline.py --out docs/results/roofline_<gpu>.json   # 全量 13 点
+# MFU：用 infra_math 口径算 50M 训练一步的理论 FLOPs，除以 (实测 step 时间 x 卡规格算力)
+python -m utils.infra_math   # param/flops/显存分解（口径见手册 §3/§5）
+```
+
+产物：`docs/results/roofline_<gpu>.json` + MFU 记录进 EXPERIMENTS.md。判据：GEMM 稳态（8192³ 档）≥ 规格 fp32 算力 80%；MFU 单点给出即可，不设阈值（50M 小模型 MFU 低是常态，重点是口径闭合）。
+
+**E-F-3 KV 物化复测**（环境：任一 GPU；命令：本仓推理路径）
+
+```bash
+python tools/profiling/profile_inference.py --checkpoint <ckpt> \
+  --context_lengths 512 1024 2048 4096 --use_cache append   # 峰值显存-长度斜率
+```
+
+产物：斜率表（公式 12,288 B/token @ hd=64 fp32 vs 实测；修复前 12,335 对照 MIGRATION §8.2）。判据：实测斜率与公式差 ±5% 内 PASS；显著偏离先查 dtype/头数参数集再下结论（手册 §4「看数字先问参数集」）。
+
 ---
 
 ## 2. AutoDL 云端 SOP（服务器就绪后逐项执行）
@@ -174,6 +232,9 @@ scp -P <PORT> -r root@<REGION>.autodl.com:/root/autodl-tmp/nanoGPT-Modern/out/ab
 | E-D-1 | reported | AR-v0.3.0 + 云端复测 | 格式分上限 0.5；2000 条平均分 0.45（上限的 90%），invalid 0–2.5%。加到 20000 条后平均分 0.492 | EXPERIMENTS.md §6.5 |
 | E-D-2 | reported | AR-v0.3.0 + 云端 G4/G8/G16 | RTX 6000D，各 120 step | `docs/results/alignment.json`，EXPERIMENTS.md §6.5 |
 | E-D-3 | reported | — | 同一 SFT 上的 DPO/IPO，1333 对；奖励升、准确率不升 | `docs/results/dpo_compare.json`，EXPERIMENTS.md §6.5 |
+| E-F-1 | planned | AR-v0.6.0 | 需 ≥2 卡实例（nccl）；脚本见 F 组 SOP 内联 | `docs/results/nccl_bw.json`（待产出） |
+| E-F-2 | part-done | AR-v0.6.0 | 本机 Quadro RTX 5000 已跑 --quick（EXPERIMENTS.md §6.8）；全量 13 点 + MFU 待云卡 | `docs/results/roofline.json`；`roofline_<gpu>.json`（待产出） |
+| E-F-3 | planned | AR-v0.6.0 | 任一 GPU；公式口径 hd=64 fp32 = 12,288 B/token | 斜率表（待产出；本机修复记录 MIGRATION.md §8.2） |
 
 ### 更新历史
 
@@ -182,3 +243,4 @@ scp -P <PORT> -r root@<REGION>.autodl.com:/root/autodl-tmp/nanoGPT-Modern/out/ab
 | 2026-10-11 | GPU 演练（ST 遗留清单） | 手册创建；E-B-1/E-C-5 记录本机修复成果（SDPA GQA 物化 bug） |
 | 2026-10-12 | 云端实测 | RTX 6000D 上跑完 E-A、E-B、E-C 与 E-D-1/E-D-2。数据是 12.44 亿 token 前缀，不是全量 17 GB。多卡扩展仍未测。解读在 EXPERIMENTS.md §6 |
 | 2026-10-12 | E-D-3 | 在 RTX PRO 6000 Blackwell 上用冻结的 SFT 采样做 DPO/IPO。奖励上升来自过程分，准确率没有上升 |
+| 2026-10-13 | AR-v0.6.0（T005） | 新增 F 组（E-F-1/2/3）微基准 SOP：通信带宽/多卡 roofline+MFU/KV 物化复测，四要素齐备；E-F-2 本机 --quick 部分完成（§6.8） |
