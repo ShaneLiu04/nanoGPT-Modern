@@ -335,6 +335,29 @@ MoE 前向微基准（4096 token，bf16）：专家数 2 / 4 / 8 / 16 时，分�
 
 不能说的：modern 组件的组合在任何规模都优于 GPT-2 块；SwiGLU 或 top-1 MoE 在这个预算下降低了损失；paged cache 或 4 层弱草稿带来了加速；同宽度草稿目前的接受率已经够把吞吐超过 append；单卡 FSDP 有扩展收益；把格式分 0.45 说成 45% 的通过率。格式分的上限是 0.5，二元标签遵从率在这次 SFT 里已经高于 97%。torch.compile 只在更长的解码（这里是 256 token）上快过 eager。不能说 DPO 比 GRPO 样本效率更高，也不能把 0.63 的规则奖励说成模型学会了算术。
 
+### 6.8 roofline 本机微基准（AR-v0.6.0 / T004）
+
+环境：Quadro RTX 5000（16 GiB GDDR6，规格带宽 448 GB/s，L2 4 MiB，sm75），fp32，`python tools/infra/run_roofline.py --quick`（10 尺寸点，<1 分钟；产物 `docs/results/roofline.json`，schema version 1）。
+
+段1 GEMM 尺寸扫描（方阵，工作集 0.05 MiB → 768 MiB 跨过 L2）：
+
+| size | ms | GFLOPs/s | 工作集 |
+|------|----|----------|--------|
+| 64 | 0.0619 | 8.5 | 0.05 MiB |
+| 256 | 0.0485 | 691.9 | 0.75 MiB |
+| 512 | 0.0735 | 3654.4 | 3.0 MiB |
+| 1024 | 0.299 | 7182.0 | 12.0 MiB |
+| 4096 | 15.2646 | 9003.8 | 192.0 MiB |
+| 8192 | 111.902 | 9825.7 | 768.0 MiB |
+
+小→大 GFLOPs/s 提升 1160 倍：64³ 时 kernel 启动开销主导（8.5 GFLOPs/s），工作集进入显存段后稳定在 9–9.8 TFLOPs/s，接近本卡 fp32 规格峰值（约 11 TFLOPS）。cache-bound 区间肉眼可见。
+
+段2 GEMV 对照（强度约 1）：4096×4096 达 349.2 GB/s，为规格带宽的 77.9%（2048² 54.8%、8192² 69.2%）——访存受限方向验证成立，且小矩阵吃不满带宽。
+
+段3 decode 步反推（tiny ModernGPT，4 层 / d=128，7,286,016 参数，fp32 权重 27.8 MiB）：单 token 前向 6.05 ms，反推有效带宽 4.81 GB/s，只有规格的 1.1%。bound=memory 的方向判定成立（batch=1 强度约 0.5，远低于 ridge），但绝对利用率被 kernel 启动与 Python 调度开销主导——小模型 decode 慢在「跑不满带宽」，不是「带宽不够」。这与手册 §7 心算残差（7~9 GB 心算 vs 26.26 GB 实测）指向同一结论：总量靠心算到量级，归因靠 profiler。
+
+能说的：本卡 GEMM 稳态算力约 9.8 TFLOPs/s、GEMV 稳态带宽约 350 GB/s、L2 边界前后算力差 3 个数量级。不能说的：把 tiny 模型的 1.1% 带宽利用率外推到生产规模 decode——大模型权重驻留显存，单步读满全部权重，利用率量级完全不同。
+
 ## 7. 关键结论与限制
 
 1. 3.3M 合成数据实验只证明链路能跑通。架构比较以第 6 节的 OpenWebText 前缀为准。
@@ -379,6 +402,9 @@ python evaluation/eval_benchmark.py --checkpoint out/pretrain/best_ckpt.pt --dat
 
 # 8. 回归测试
 python -m pytest tests/ -q
+
+# 9. roofline 微基准（6.8 节）
+python tools/infra/run_roofline.py --quick
 ```
 
 ---
@@ -407,5 +433,6 @@ python -m pytest tests/ -q
 | NTK | `docs/results/ntk_eval.json` |
 | 推理 | `docs/results/inference.json` |
 | 训练系统 / MoE kernel | `docs/results/system.json`, `docs/results/moe_kernel.json` |
+| roofline | `docs/results/roofline.json` |
 | 预训练与 SFT 评测 | `docs/results/pretrain_eval.json`, `docs/results/sft_eval.json` |
 | GRPO 曲线 | `docs/results/alignment.json` |

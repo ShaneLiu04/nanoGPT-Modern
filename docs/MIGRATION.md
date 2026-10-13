@@ -5,7 +5,7 @@
 >
 > **演练记录（2026-10-08，Windows 本机）**：干净 venv `uv sync` 1m20s → 数据验证 27s → 50 步冒烟 30s，核心链路合计 **2m17s**（≤1h 达标）。两个平台差异已固化到排障表：Windows PyPI torch 为 CPU-only（云 Linux manylinux wheel 自带 cu128 不受影响）；Windows 需 `--num_workers 0`（spawn 竞态已知问题）。
 >
-> **GPU 演练记录（2026-10-11，Windows 本机 Quadro RTX 5000 8GB / sm75）**：见 §8。四项演练全部 PASS：① torch.compile recompile 计数验证（dynamo 层）；② KV 显存斜率抓到并修复 SDPA GQA head-expansion 物化 bug（decode 峰值显存平坦化）；③ 单卡 DDP（FR9a）全链路 + 修复 ReduceOp.AVG gloo 兼容与 DDP device_ids CPU 兼容 2 个真 bug；④ 单卡 FSDP（FR9b）GPU 全链路含 FULL_STATE_DICT gather + resume round-trip。多卡真分片留待云实例。
+> **GPU 演练记录（2026-10-11，Windows 本机 Quadro RTX 5000 16 GiB / sm75）**：见 §8。四项演练全部 PASS：① torch.compile recompile 计数验证（dynamo 层）；② KV 显存斜率抓到并修复 SDPA GQA head-expansion 物化 bug（decode 峰值显存平坦化）；③ 单卡 DDP（FR9a）全链路 + 修复 ReduceOp.AVG gloo 兼容与 DDP device_ids CPU 兼容 2 个真 bug；④ 单卡 FSDP（FR9b）GPU 全链路含 FULL_STATE_DICT gather + resume round-trip。多卡真分片留待云实例。
 
 ## 0. 前置检查
 
@@ -148,7 +148,7 @@ python data/validate.py data/openwebtext/train.bin   # 对照 §3 判据
 | DDP 报 `device_ids and output_device arguments only work with ... GPU or CPU modules` | 已修复（§8.3）：CPU 模块下 device_ids 传 None；GPU 不受影响 |
 | Windows 下 `torchrun` 报 `use_libuv was requested but PyTorch was build without libuv support` | elastic agent 的 TCPStore 硬编码 use_libuv=True（Python 默认参数，env 不生效）。改用进程内 env-init（`RANK/LOCAL_RANK/WORLD_SIZE/MASTER_ADDR/MASTER_PORT` + `USE_LIBUV=0`，同 tests/test_fsdp_checkpoint.py 模式）；云 Linux build 自带 libuv 无此问题 |
 
-## 8. GPU 演练记录（本机 Quadro RTX 5000 8GB，2026-10-11）
+## 8. GPU 演练记录（本机 Quadro RTX 5000 16 GiB，2026-10-11）
 
 ST-024 遗留 GPU 迁移演练清单的本机执行结果。云实例（sm_80+）预期更优：flash 后端原生 GQA + 匹配 triton。
 
