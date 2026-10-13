@@ -102,6 +102,7 @@ MoE 比 modern-full 多 77.88M 参数 → 静态增量 = 77,881,344 × 16 B = 1,
 | ln_1 输入/输出 + rstd | [B,T,d]×2~3 | 2d~3d |
 | q / k / v 投影输出 | [B,T,d] / [B,T,n_kv·hd]×2 | d + 2·n_kv·hd |
 | RoPE 旋转后的 q,k 副本 | 同上 | ≈同上 |
+| attn scores（softmax 前后各一，**仅 math 后端物化**） | [B,H,T,T] | 2·n_head·T（T=1024 时 16,384）；fused SDPA（flash/mem-efficient，本仓训练默认）不物化，记 0 |
 | SDPA 输出 | [B,T,d] | d |
 | o_proj 输出 + 残差 | [B,T,d]×2 | 2d |
 | FFN（SwiGLU）：gate, up, silu(gate), 乘积 | [B,T,I]×3~4 | 3I~4I（I=1408） |
@@ -121,7 +122,7 @@ MoE 比 modern-full 多 77.88M 参数 → 静态增量 = 77,881,344 × 16 B = 1,
 | 开关（相对 modern-full 26.26 GB） | 实测 Δ | 公式能解释的部分 | 残差 |
 |------|--------|------------------|------|
 | +SwiGLU（vs no-swiglu 24.74） | **+1.52 GB** | SwiGLU 存 3~4×I=1408 vs GELU 存 2×2048：+0.5~6 KB/token/层 → +0.2~2.4 GB，实测落在区间内 | 0 |
-| +MHA（vs mha 26.88） | **−0.62 GB**（GQA 省） | k/v 投影输出 2×512 vs 2×128：−3,072 B/token/层 → **−1.21 GB** | 实测只省一半：SDPA `enable_gqa` 路径在内核内部把 KV 头扩展物化（§5.2 同机理），吃掉了一半收益 |
+| +MHA（vs mha 26.88） | **−0.62 GB**（GQA 省） | k/v 投影输出 2×512 vs 2×128：−3,072 B/token/层 → **−1.21 GB** | 实测只省一半：SDPA `enable_gqa` 路径在内核内部把 KV 头扩展物化（§4.2 同机理），吃掉了一半收益 |
 | +QK-Norm（vs qk-norm 28.15） | **+1.89 GB** | 归一化后的 q[B,8,T,64]+k[B,2,T,64] 副本：2,560 B/token/层 → **−1.01 GB 下界** + rstd/中间量 | ≈0.9 |
 | RoPE（vs no-rope 26.25） | **±0** | 旋转是逐头小量，learned PE 表也不进激活 | 0 |
 | +MoE（29.27） | **+3.00 GB** | 静态 +1.25 GB（§2.2）+ 专家 FFN 激活近似持平（top-1） | ≈1.75 GB 分组 GEMM 工作区/路由索引 |
