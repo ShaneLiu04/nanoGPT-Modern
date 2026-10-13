@@ -68,9 +68,9 @@ ROOF --> 学习者: roofline 表 + bound 判定
 | --- | --- | --- |
 | 层边界 hidden（grad-ckpt 只存此项） | [B,T,d] | d |
 | QKV 投影输出（Q d + KV 2·n_kv·hd） | [B,T,d+2n_kv·hd] | d+2n_kv·hd |
-| attn scores（softmax 前后各一） | [B,H,T,T] | 2·n_head·T |
+| attn scores（softmax 前后各一；**仅 math 后端物化**） | [B,H,T,T] | math 后端 2·n_head·T；fused SDPA（flash/mem-efficient，本仓训练默认）不物化，记 0（`materialize_scores` 开关区分两口径，审查修正记录于 tasks.md） |
 | attn 输出 + out proj | [B,T,2d] | 2d |
-| FFN 中间：SwiGLU gate+up+act / GELU h | [B,T,I]/[B,T,I] | swiglu: 3I（I=8d/3 对齐 128）/ gelu: I（I=4d） |
+| FFN 中间：SwiGLU gate+up+act / GELU h+gelu(h) | [B,T,I]/[B,T,I] | swiglu: 3I（I=8d/3 对齐 128）/ gelu: 8d（I=4d，h 与 gelu(h) 两张量均需保留；审查修正，与手册 §3.1 一致） |
 | 两条 norms 残差副本 | ~[B,T,4d] | ~4d |
 
 梯度检查点：仅存层边界 [B,T,d]×L + 重算峰值 1 层全量（手册给出重算 vs 存储的权衡公式）。
@@ -181,6 +181,7 @@ def training_memory_breakdown(
     precision: str = "amp", grad_ckpt: bool = False,
     ffn_variant: str = "swiglu", num_experts: int = 1,
     dtype_bytes: int = 4, vocab_size: int = 50257,
+    materialize_scores: bool = False,
 ) -> dict[str, float]
 ```
 - 返回：`{"params_gb", "gradients_gb", "optimizer_gb", "activations_gb", "kv_eval_gb", "total_static_gb", "total_gb"}`（GB，两位小数由调用方处理，函数返回全精度 float）
@@ -240,7 +241,9 @@ def get_args(argv=None) -> argparse.Namespace          # --quick/--sizes/--out/-
 def gemm_sweep(device, sizes, iters) -> list[dict]      # 段1: GFLOPs/s + 工作集 bytes
 def gemv_bandwidth(device, shapes, iters) -> list[dict] # 段2: 有效 GB/s
 def decode_step_bandwidth(device, n_layer=4) -> dict    # 段3: tiny 模型单步 → GB/s + bound 判定
-def summarize(segments, gpu_name) -> dict               # roofline.json schema 组装
+def summarize(gemm, gemv, decode, gpu_name, mode) -> dict  # roofline.json schema 组装
+                                                           # （签名自初稿 (segments, gpu_name) 细化：
+                                                           #  mode 为 schema 必需键、三段分参便于单测，审查记录 D1）
 def main(argv=None) -> int
 ```
 - 产物：`docs/results/roofline.json`（schema：`{"version", "mode", "gpu_name", "spec_bandwidth_gbs"|"null", "segments": {"gemm": [...], "gemv": [...], "decode": {...}}}`）
