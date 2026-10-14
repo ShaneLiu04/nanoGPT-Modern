@@ -17,7 +17,7 @@
 | T004 | FR3 验收+FR5：本机实测三 kernel（≤5min）→ docs/results/triton_kernels.json；EXPERIMENTS.md 新增记录节（含能说/不能说边界）；RUNNING_EXPERIMENTS.md 新增 E-F-4 inductor 云端 SOP（四要素+状态表+更新历史） | T003 | passing | 2026-10-14 完成：全量 bench 18 组（3 kernel×3 档×2 dtype）全 allclose，<2min；§6.9 三教学点（RMSNorm 反超 1.3-2.9× / 朴素 GEMM 0.12× / GQA 随 S 劣化）+诚实边界；E-F-4 四要素+状态表+更新历史齐备 |
 | T005 | FR6a 索引更新：ai-infra/README.md 主题 2/3 转「已交付」+挂手册链接；修正「7 篇 ADR」→6 篇笔误；链接存在性检查 | T001, T002 | passing | 2026-10-14 完成：主题 2/3 转本期已交付（锚点换 attention/compile 手册+Triton 微实验+§6.9+E-F-4）；L45 7→6 篇；路线图 AR-v0.7.0 标本期；14 个引用文件 Test-Path 全 OK（ADR 实数 6：docs/adr 001-006 + 目录 README） |
 | T006 | FR6b README.md 文档索引挂两本新手册 + badge 测试数更新（681+→实际值） | T005 | passing | 2026-10-14 完成：文档索引表新增 attention-kernels/compile-stack 两行（L535 后）；badge+L32+L167 681+→711+；L510 600+→700+ |
-| T007 | FR7 质量收口：全量回归零回归（基线 683 passed / 2 skipped）+ 三绿（新文件已在 CI 范围）+ gitee 同步 + 链接终检 | T001-T006 | pending | 基线口径 2026-10-13 实测 |
+| T007 | FR7 质量收口：全量回归零回归（基线 683 passed / 2 skipped）+ 三绿（新文件已在 CI 范围）+ gitee 同步 + 链接终检 | T001-T006 | passing | 2026-10-14 完成：711 passed / 2 skipped 零回退（147.85s）；black 164 files unchanged / ruff All checks passed / mypy 零新增（19 处遗留全在 gitee_mirror.py+run_component_ablations.py，db3b7ff 前旧账）；链接终检含 E-F-4 命令目标（profile_inference.py/test_moe_vectorized.py::test_compile_no_recompile_growth）全过；gitee：分叉处理——云端应急 checkpoint 450f8ca 钉 _cloud_ckpt 后 force-push main=ef8359a（镜像 89b0787），_sm1..228 清理完毕，远端剩 main/_cloud_ckpt/_cloud_origin/_mirror_side/notes |
 
 ## 状态说明
 
