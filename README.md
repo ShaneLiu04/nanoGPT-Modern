@@ -7,7 +7,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
   <a href="requirements.txt"><img src="https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C.svg" alt="PyTorch 2.0+"></a>
-  <img src="https://img.shields.io/badge/tests-711%2B%20passing-brightgreen.svg" alt="711+ tests">
+  <img src="https://img.shields.io/badge/tests-757%2B%20passing-brightgreen.svg" alt="757+ tests">
   <img src="https://img.shields.io/badge/version-0.5.0-8B5CF6.svg" alt="v0.5.0">
 </p>
 
@@ -531,10 +531,13 @@ nanogpt-modern/
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 训练基座设计：BaseTrainer 模板方法链、DDP/FSDP/AMP/EMA/Checkpoint、监控降级、5 训练器差异矩阵 |
 | [docs/GRPO_NOTES.md](docs/GRPO_NOTES.md) | RLHF 家族对比：GRPO / Iterative GRPO / DPO 的优势计算、参考更新、KL 三维度 |
 | [docs/MIGRATION.md](docs/MIGRATION.md) | 云租用 GPU 实例迁移 Runbook（环境重建、冒烟、实验矩阵启动、GPU 演练记录与排障速查） |
-| [docs/ai-infra/](docs/ai-infra/README.md) | AI infra 学习路径索引：7 主题地图（参数量/显存/算力/通信/编译/推理/RLHF 工程）、4-AR 路线图、本仓锚点 |
+| [docs/ai-infra/](docs/ai-infra/README.md) | AI infra 学习路径索引：10 主题地图（参数量/显存/算力/通信/编译/推理/RLHF/精度/scaling/数据管道）、6-AR 路线图、本仓锚点 |
 | [docs/ai-infra/memory-flops-arithmetic.md](docs/ai-infra/memory-flops-arithmetic.md) | 显存/算力心算手册：参数量精确账、三精度口径、逐张量激活分解、KV 物化、FLOPs、roofline、心算卡（本仓实测逐条验证） |
 | [docs/ai-infra/attention-kernels.md](docs/ai-infra/attention-kernels.md) | Attention kernel 深潜手册：SDPA 后端与 is_causal 折叠、GQA 两路径、在线 softmax 与 ring attention 对照、KV 物化全案、MoE 5.8× |
 | [docs/ai-infra/compile-stack.md](docs/ai-infra/compile-stack.md) | torch.compile 手册：三层架构、三处调用面、dynamo 内联实验、版本断裂教学案例、1.59× 与负结果归因、E-F-4 云端 SOP |
+| [docs/ai-infra/numerical-precision.md](docs/ai-infra/numerical-precision.md) | 数值精度手册：四精度表示学、AMP autocast 逐行、fp32 分块累加 vs bf16 差 5 个数量级、loss scaling、fp8 展望（precision_probe 互证） |
+| [docs/ai-infra/scaling-laws.md](docs/ai-infra/scaling-laws.md) | Scaling laws 手册：Kaplan vs Chinchilla、B_crit、记账三件套口径、七点拟合三局限与病态诚实降级（fit_scaling 互证） |
+| [docs/ai-infra/data-pipeline.md](docs/ai-infra/data-pipeline.md) | 数据管道手册：语料/去重/打包/污染防御全链路、EOT/doc 统计判据、MIGRATION §3 复盘（data_probe 互证） |
 | [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md) | 实验运行手册：17 个对比实验矩阵（A-F 六组）、云端 SOP、图表与报告规范、状态跟踪（AR 更新联动） |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | v0.2.0 → v0.3.0 变更日志、42 项改进清单、已知限制 |
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | 实验记录、复现命令、关键结论 |
