@@ -134,13 +134,16 @@ budget.json 的三个 token 数，**回答不同问题**：
    是消融的副作用而非受控扫参——拟合出的 α 不具备跨架构外推力；
 3. **7 个点**：任何幂律用 7 个点拟合，参数不确定度都很大——工具报告协方差传播的
    参数标准差（fit_quality.param_uncertainty），教学价值在「拟合方法与诚实报告」，
-   不在参数值本身。
+   不在参数值本身。本仓真实数据实测即落入退化最优：R²≈0 且 Jacobian 病态时，
+   `param_uncertainty.reliable=false`——pinv 在不可辨识方向给出**虚假小标准差**
+   （α_std≈1e-11 的「高置信」是数值假象），此时参数值与不确定度都不应被引用。
 
 ### 6.4 与工具互证
 
 本节数字与 `docs/results/scaling_fit.json` 一一对应：`repo_budget_review.bookkeeping`
 = §6.1 三件套；`tokens_per_param` = §6.2 两口径；`kaplan_fit.params_m/val_loss/fitted`
-= §6.3 表；`fit_quality.limitations` = §6.3 三条。外推预测（predictions）与预算计算器
+= §6.3 表；`fit_quality.limitations` = §6.3 三条（真实数据加第四条：R²≈0 病态
+拟合诚实标注）。外推预测（predictions）与预算计算器
 （budget_calculator，含按本仓吞吐口径换算的训练时长）的算例解读见 EXPERIMENTS 记录节。
 
 ## 7. 能说 / 不能说
