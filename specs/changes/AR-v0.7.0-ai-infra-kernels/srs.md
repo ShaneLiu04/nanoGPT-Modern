@@ -13,7 +13,7 @@
 AR-v0.6.0 交付了主题 1（显存/算力心算）三件套并归档。深度缺口分析（2026-10-13，三路
 子代理盘点文档/代码/数据资产）确认：
 
-- **代码在、教学缺**密度最高的区域是主题 2（attention kernel）与主题 5（compile 栈）：
+- **代码在、教学缺**密度最高的区域是主题 2（attention kernel）与主题 3（compile/Triton 栈）：
   GQA 三种 kernel 路径（grouped-broadcast / enable_gqa / 手写 decode）、ring_attention
   分块参照实现、MoE padded grouped-GEMM、torch.compile 全链路（含 fullgraph decode 编译）
   代码全部就位，但无一篇手册进入 kernel/编译器内部；
@@ -86,7 +86,7 @@ AR-v0.6.0 交付了主题 1（显存/算力心算）三件套并归档。深度�
 
 **验收标准：**
 - Given 手册中 flash/online-softmax 推导，When 与 ring_attention.py 实现对照，Then 每个推导步骤有对应代码行锚点
-- Given 手册引用的存量数据（5.8×/12,335/−75%），When 追溯 moe_kernel.json/MIGRATION §8.2/ablation-summary.json，Then 数值一致
+- Given 手册引用的存量数据（5.8×/12,335/−75%），When 追溯 moe_kernel.json/MIGRATION §8.2/EXPERIMENTS.md，Then 数值一致
 - Given GQA 三路径，When 与 modern_gpt.py:163-297 对照，Then 语义一致（何时走哪条路径的判定条件与代码一致）
 
 ### 3.2 FR2 手册《compile-stack.md》
