@@ -44,6 +44,15 @@
 
 > 每个开发会话结束后追加，记录完成情况。
 
+### 2026-10-14 审查记录（sdd-task-review）
+
+- 审查结果：PASS（第 2 轮）
+- 第 1 轮 FAIL（S5/D4 Medium、C3 Medium、D4 Low×3）：S5——design §6.1「实验中途异常→退出 1 不写部分 JSON」用例三工具各 1 例缺失（子进程替代方案未实际验证中断漏斗）；C3——test_data_probe.py:254-255 black 冗余括号；D4——3 处 schema 偏差未登记（meta.torch/字段名/路径口径）
+- 修复（commit 24e613c）：三测试文件各补 `test_abort_mid_experiment_no_partial_json`（in-process monkeypatch 注入仿 test_roofline_script.py:214 先例：exp_dtype_limits/chinchilla_synthetic_demo/exp_contamination_demo，断言 rc==1+无 JSON+无 .tmp）；black 冗余括号消除；tasks.md 新增「设计偏差记录」节
+- 第 2 轮复审：S5/D4/C3/回归四项全 YES（49 passed/1 skipped 含三新用例；black 3 files unchanged），无遗留
+- 审查代理：general 子代理（独立上下文），两轮
+
+
 ## 阶段门控记录
 
 > 由 sdd-phase-gate skill 在阶段门控审查后追加，记录每轮审查结果（PASS/FAIL + 轮次）。格式见 sdd-phase-gate SKILL.md Step 6。
