@@ -86,6 +86,8 @@ def fit_kaplan(points: list[tuple[float, float]]) -> dict:
     r_squared = 0.0
     result_E = result_A = result_alpha = None
     stds: tuple[float | None, float | None, float | None] = (None, None, None)
+    cond: float | None = None
+    uncertainty_reliable = False
     note = ""
     degenerate: list[str] = []
 
@@ -121,14 +123,23 @@ def fit_kaplan(points: list[tuple[float, float]]) -> dict:
             fitted = [float(v) for v in (result_E + result_A / n**result_alpha)]
             dof = len(n) - 3
             try:
-                cov = np.linalg.pinv(best.jac.T @ best.jac) * (ss_res / dof)
+                jtj = best.jac.T @ best.jac
+                eigvals = np.linalg.eigvalsh(jtj)
+                cond = float(eigvals[-1] / eigvals[0]) if eigvals[0] > 0 else np.inf
+                cov = np.linalg.pinv(jtj) * (ss_res / dof)
                 stds = (
                     float(np.sqrt(cov[2, 2])),  # alpha std
                     float(result_A * np.sqrt(cov[1, 1])),  # A std (log-space mapped)
                     float(np.sqrt(cov[0, 0])),  # E std
                 )
+                # Honest reliability flag: pinv on a rank-deficient Jacobian
+                # produces deceptively tiny stds (the unidentifiable-direction
+                # trap); parameters from such a fit must not be quoted.
+                uncertainty_reliable = bool(cond < 1e8 and r_squared > 0.1)
             except (np.linalg.LinAlgError, ValueError):
                 stds = (None, None, None)
+                cond = None
+                uncertainty_reliable = False
         else:
             degenerate.append("multi-start least_squares did not converge")
     else:
@@ -148,6 +159,8 @@ def fit_kaplan(points: list[tuple[float, float]]) -> dict:
         "alpha_std": stds[0],
         "A_std": stds[1],
         "E_std": stds[2],
+        "jacobian_condition": cond,
+        "uncertainty_reliable": uncertainty_reliable,
         "params_m": params_m,
         "val_loss": val_loss,
         "fitted": fitted,
@@ -333,10 +346,16 @@ def _summary_md(meta: dict, fit_quality: dict, review: dict) -> str:
         f"R2={fit_quality['r_squared']:.4f}, n={fit_quality['n_points']}"
     )
     if fit_quality["converged"]:
-        lines.append(
-            f"- Kaplan params: alpha={fit_quality['kaplan_alpha']:.4f} "
-            f"(+/-{fit_quality['param_uncertainty']['alpha_std']:.4f})"
-        )
+        if fit_quality["param_uncertainty"]["reliable"]:
+            lines.append(
+                f"- Kaplan params: alpha={fit_quality['kaplan_alpha']:.4f} "
+                f"(+/-{fit_quality['param_uncertainty']['alpha_std']:.4f})"
+            )
+        else:
+            lines.append(
+                f"- Kaplan params: not meaningful (R2={fit_quality['r_squared']:.4f}, "
+                "degenerate optimum; see limitations)"
+            )
     tpp = review["tokens_per_param"]
     if tpp:
         lines.append(
@@ -379,6 +398,16 @@ def main(argv: list[str] | None = None) -> int:
         ]
         if not fit["converged"]:
             limitations.append(f"拟合未收敛/退化: {fit['degenerate_notes']}")
+        elif not fit["uncertainty_reliable"]:
+            cond_note = (
+                f"Jacobian condition ~{fit['jacobian_condition']:.1e}"
+                if fit["jacobian_condition"]
+                else "Jacobian 奇异"
+            )
+            limitations.append(
+                f"R2≈0 且 Jacobian 病态（{cond_note}）：拟合参数与不确定度"
+                "不具引用价值（pinv 在不可辨识方向给出虚假小 std，诚实标注）"
+            )
 
         fit_quality = {
             "n_points": len(points),
@@ -393,6 +422,8 @@ def main(argv: list[str] | None = None) -> int:
                 "alpha_std": fit["alpha_std"],
                 "A_std": fit["A_std"],
                 "E_std": fit["E_std"],
+                "reliable": fit["uncertainty_reliable"],
+                "jacobian_condition": fit["jacobian_condition"],
                 "method": "least_squares Jacobian covariance (pinv(J^T J) * s^2/dof)",
             },
             "limitations": limitations,

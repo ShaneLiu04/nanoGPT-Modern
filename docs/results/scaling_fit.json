@@ -1,0 +1,190 @@
+{
+  "meta": {
+    "tool": "fit_scaling",
+    "device": "cpu",
+    "timestamp": "2026-10-14T10:41:09.414569+00:00",
+    "quick": false,
+    "numpy": "2.4.6",
+    "data_sources": [
+      "D:\\nanoGPT-Modern\\docs\\results\\ablation-summary.json",
+      "D:\\nanoGPT-Modern\\docs\\results\\budget.json"
+    ]
+  },
+  "fit_quality": {
+    "n_points": 7,
+    "method": "scipy.optimize.least_squares(multi-start, log-space A)",
+    "identifiability_note": "D \u6052\u5b9a\uff087 \u7ec4\u540c\u9884\u7b97\u8bad\u7ec3\uff09\uff0cB/D^beta \u4e0d\u53ef\u8fa8\u8bc6\uff0c\u4e3b\u62df\u5408\u4e3a Kaplan \u5f0f L(N)",
+    "converged": true,
+    "r_squared": -1.6950063574938667e-10,
+    "kaplan_alpha": 1.3626065201410822,
+    "param_uncertainty": {
+      "alpha_std": 4.489563690006455e-11,
+      "A_std": 0.0,
+      "E_std": 0.014368867266450609,
+      "reliable": false,
+      "jacobian_condition": Infinity,
+      "method": "least_squares Jacobian covariance (pinv(J^T J) * s^2/dof)"
+    },
+    "limitations": [
+      "7 \u70b9\u975e\u53d7\u63a7\u626b\u53c2\uff08\u67b6\u6784\u6d88\u878d\u6df7\u5165 N \u53d8\u5316\uff0c\u65e0\u8de8\u67b6\u6784\u5916\u63a8\u529b\uff09",
+      "\u6559\u5b66\u62df\u5408\u800c\u975e scaling study\uff08\u6837\u672c\u70b9\u5c11\uff0c\u53c2\u6570\u4e0d\u786e\u5b9a\u5ea6\u5927\uff09",
+      "R2\u22480 \u4e14 Jacobian \u75c5\u6001\uff08Jacobian condition ~inf\uff09\uff1a\u62df\u5408\u53c2\u6570\u4e0e\u4e0d\u786e\u5b9a\u5ea6\u4e0d\u5177\u5f15\u7528\u4ef7\u503c\uff08pinv \u5728\u4e0d\u53ef\u8fa8\u8bc6\u65b9\u5411\u7ed9\u51fa\u865a\u5047\u5c0f std\uff0c\u8bda\u5b9e\u6807\u6ce8\uff09"
+    ]
+  },
+  "kaplan_fit": {
+    "E": 3.5782822212998844,
+    "A": 6.180964953055881,
+    "alpha": 1.3626065201410822,
+    "r_squared": -1.6950063574938667e-10,
+    "params_m": [
+      64.086,
+      59.561,
+      60.085,
+      58.775,
+      64.28,
+      137.442,
+      59.562
+    ],
+    "val_loss": [
+      3.611790895462036,
+      3.573040723800659,
+      3.6258492469787598,
+      3.5593342781066895,
+      3.5397377014160156,
+      3.58243727684021,
+      3.5557854175567627
+    ],
+    "fitted": [
+      3.5782822214422842,
+      3.5782822214572256,
+      3.5782822214553587,
+      3.5782822214600998,
+      3.578282221441699,
+      3.5782822213502348,
+      3.578282221457222
+    ]
+  },
+  "chinchilla_synthetic_demo": {
+    "true_params": {
+      "E": 3.0,
+      "A": 1000.0,
+      "alpha_n": 0.34,
+      "B": 1000.0,
+      "alpha_d": 0.28
+    },
+    "recovered_params": {
+      "E": 3.056800869891778,
+      "A": 1032.2527753262889,
+      "alpha_n": 0.34221673237608935,
+      "B": 1162.630257360216,
+      "alpha_d": 0.28770999353483756
+    },
+    "grid": {
+      "n_points": 25,
+      "noise": 0.002,
+      "seed": 1337
+    }
+  },
+  "predictions": [
+    {
+      "name": "10x-params-chinchilla-20to1",
+      "N": 500000000.0,
+      "D": 10000000000.0,
+      "pred_loss": 3.5782822213085494,
+      "interval": [
+        3.2204539991776944,
+        4.115024554504831
+      ],
+      "method": "kaplan-fit"
+    },
+    {
+      "name": "50x-params-chinchilla-20to1",
+      "N": 2500000000.0,
+      "D": 50000000000.0,
+      "pred_loss": 3.578282221300851,
+      "interval": [
+        3.220453999170766,
+        4.115024554495979
+      ],
+      "method": "kaplan-fit"
+    },
+    {
+      "name": "100x-params-chinchilla-20to1",
+      "N": 5000000000.0,
+      "D": 100000000000.0,
+      "pred_loss": 3.5782822213002605,
+      "interval": [
+        3.2204539991702346,
+        4.1150245544952995
+      ],
+      "method": "kaplan-fit"
+    },
+    {
+      "name": "1000x-params-chinchilla-20to1",
+      "N": 50000000000.0,
+      "D": 1000000000000.0,
+      "pred_loss": 3.578282221299901,
+      "interval": [
+        3.220453999169911,
+        4.115024554494886
+      ],
+      "method": "kaplan-fit"
+    }
+  ],
+  "budget_calculator": {
+    "cases": [
+      {
+        "name": "repo-budget",
+        "flops_budget": 3.733393311e+17,
+        "N_star": 55777783.14436672,
+        "D_star": 1115555662.8873343,
+        "D_over_N": 20.0,
+        "train_iters_at_repo_throughput": 34044.05709495039,
+        "train_hours_at_repo_throughput": 1.726288701882942,
+        "tokens_vs_repo_corpus": 0.8964142563821085
+      },
+      {
+        "name": "10x-budget",
+        "flops_budget": 3.733393311e+18,
+        "N_star": 176384837.57114726,
+        "D_star": 3527696751.422945,
+        "D_over_N": 20.0,
+        "train_iters_at_repo_throughput": 107656.76121285843,
+        "train_hours_at_repo_throughput": 5.459004196965498,
+        "tokens_vs_repo_corpus": 2.834710777213592
+      },
+      {
+        "name": "100x-budget",
+        "flops_budget": 3.733393311e+19,
+        "N_star": 557777831.4436672,
+        "D_star": 11155556628.873344,
+        "D_over_N": 20.0,
+        "train_iters_at_repo_throughput": 340440.5709495039,
+        "train_hours_at_repo_throughput": 17.26288701882942,
+        "tokens_vs_repo_corpus": 8.964142563821087
+      }
+    ],
+    "flops_per_token_formula": "6*N*D (per-token cost ~ 6N; cf. utils/infra_math.py)",
+    "literature_defaults": {
+      "alpha_n": 0.34,
+      "alpha_d": 0.28,
+      "d_over_n": 20.0
+    },
+    "throughput_anchor": {
+      "tokens_per_sec": 179504.49,
+      "source": "docs/results/ablation-summary.json baseline mean_tokens_per_sec"
+    }
+  },
+  "repo_budget_review": {
+    "train_tokens": 1244464437,
+    "params_m": 50,
+    "tokens_per_param": 24.88928874,
+    "chinchilla_ref": 20.0,
+    "verdict": "\u6559\u5b66\u9884\u7b97\uff1a\u8bed\u6599\u914d\u6bd4\uff08corpus \u53e3\u5f84 tokens/param\u224824.9\uff09\u7565\u504f\u6570\u636e\u4fa7\uff1b\u5b9e\u9645\u6d88\u8017\u4e0d\u8db3\u4e00\u7eaa\u5143\uff0cconsumed \u53e3\u5f84\u22489.9 t/p \u5c5e\u6b20\u8bad\u7ec3\u2014\u2014\u89c1 scaling-laws.md \u00a76.2 \u4e24\u53e3\u5f84\u8bda\u5b9e\u89e3\u8bfb",
+    "bookkeeping": {
+      "corpus_tokens": 1244464437,
+      "consumed_tokens": 589824000,
+      "note": "corpus=\u4e00\u7eaa\u5143\u5168\u91cf\uff1bconsumed=max_iters\u00d7tokens_per_iter \u5b9e\u9645\u5582\u5165\uff1bone_epoch_iters \u5bf9\u5e94 train split\uff08\u224895%\uff09\u2014\u2014scaling-laws.md \u00a76.1 \u8bb0\u8d26\u4e09\u4ef6\u5957"
+    }
+  }
+}
