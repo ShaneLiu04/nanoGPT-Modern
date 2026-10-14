@@ -1,0 +1,531 @@
+{
+  "meta": {
+    "device": "Quadro RTX 5000",
+    "torch": "2.5.1+cu121",
+    "triton": "3.8.0",
+    "allow_tf32": false,
+    "timestamp": "2026-10-14T04:29:58.996819+00:00",
+    "quick": false,
+    "timing": "cuda-event median of 50 after 10 warmup"
+  },
+  "measurements": [
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 1024,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "float32",
+      "triton_ms": 2.55239999294281,
+      "eager_ms": 0.3936160057783127,
+      "speedup": 0.1542140757195701,
+      "triton_ms_mean": 2.7806688165664672,
+      "eager_ms_mean": 0.40084159791469576,
+      "intensity_flops_per_byte": 205.1
+    },
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 1024,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "bfloat16",
+      "triton_ms": 2.16646409034729,
+      "eager_ms": 0.4646400064229965,
+      "speedup": 0.21446928591764172,
+      "triton_ms_mean": 2.383902740478516,
+      "eager_ms_mean": 0.48802943766117096,
+      "intensity_flops_per_byte": 410.2
+    },
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 4096,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "float32",
+      "triton_ms": 8.370368003845215,
+      "eager_ms": 1.1426080465316772,
+      "speedup": 0.1365063096397651,
+      "triton_ms_mean": 9.177519969940185,
+      "eager_ms_mean": 1.237715837955475,
+      "intensity_flops_per_byte": 293.0
+    },
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 4096,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "bfloat16",
+      "triton_ms": 8.470144271850586,
+      "eager_ms": 1.5667200088500977,
+      "speedup": 0.18496969574141567,
+      "triton_ms_mean": 9.287439403533936,
+      "eager_ms_mean": 1.7096537590026855,
+      "intensity_flops_per_byte": 586.0
+    },
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 16384,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "float32",
+      "triton_ms": 36.21609687805176,
+      "eager_ms": 4.339823961257935,
+      "speedup": 0.11983135498756693,
+      "triton_ms_mean": 36.72277229309082,
+      "eager_ms_mean": 4.699746580123901,
+      "intensity_flops_per_byte": 328.16
+    },
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 16384,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "bfloat16",
+      "triton_ms": 36.23297691345215,
+      "eager_ms": 5.96016001701355,
+      "speedup": 0.16449545482421382,
+      "triton_ms_mean": 36.7385823059082,
+      "eager_ms_mean": 6.489028482437134,
+      "intensity_flops_per_byte": 656.32
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 1024,
+        "N": 1024
+      },
+      "dtype": "float32",
+      "triton_ms": 0.105359997600317,
+      "eager_ms": 0.13948800414800644,
+      "speedup": 1.3239180649676359,
+      "triton_ms_mean": 0.10460159972310067,
+      "eager_ms_mean": 0.20292992070317267,
+      "intensity_flops_per_byte": 0.6246949731576379
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 1024,
+        "N": 1024
+      },
+      "dtype": "bfloat16",
+      "triton_ms": 0.1143999993801117,
+      "eager_ms": 0.14764799922704697,
+      "speedup": 1.2906293708661978,
+      "triton_ms_mean": 0.11298304006457328,
+      "eager_ms_mean": 0.16016447983682155,
+      "intensity_flops_per_byte": 1.2493899463152758
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 4096,
+        "N": 1024
+      },
+      "dtype": "float32",
+      "triton_ms": 0.14614399522542953,
+      "eager_ms": 0.35017600655555725,
+      "speedup": 2.3961025974102115,
+      "triton_ms_mean": 0.14938048034906387,
+      "eager_ms_mean": 0.38604799687862396,
+      "intensity_flops_per_byte": 0.6249237153667765
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 4096,
+        "N": 1024
+      },
+      "dtype": "bfloat16",
+      "triton_ms": 0.09830400347709656,
+      "eager_ms": 0.26894399523735046,
+      "speedup": 2.7358396985328337,
+      "triton_ms_mean": 0.09820224091410637,
+      "eager_ms_mean": 0.2875705587863922,
+      "intensity_flops_per_byte": 1.249847430733553
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 16384,
+        "N": 1024
+      },
+      "dtype": "float32",
+      "triton_ms": 0.4538560062646866,
+      "eager_ms": 1.2980480194091797,
+      "speedup": 2.86004371759303,
+      "triton_ms_mean": 0.4833158373832703,
+      "eager_ms_mean": 1.458997118473053,
+      "intensity_flops_per_byte": 0.6249809270957307
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 16384,
+        "N": 1024
+      },
+      "dtype": "bfloat16",
+      "triton_ms": 0.23916800320148468,
+      "eager_ms": 0.6949439942836761,
+      "speedup": 2.905672936936416,
+      "triton_ms_mean": 0.24177472084760665,
+      "eager_ms_mean": 0.7270854437351226,
+      "intensity_flops_per_byte": 1.2499618541914614
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 512
+      },
+      "dtype": "float32",
+      "triton_ms": 0.1916320025920868,
+      "eager_ms": 0.16553600132465363,
+      "speedup": 0.8638223213531727,
+      "triton_ms_mean": 0.19391936153173447,
+      "eager_ms_mean": 0.18808448031544686,
+      "intensity_flops_per_byte": 0.9941747572815534
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 512
+      },
+      "dtype": "bfloat16",
+      "triton_ms": 0.20479999482631683,
+      "eager_ms": 0.19808000326156616,
+      "speedup": 0.9671875403588284,
+      "triton_ms_mean": 0.24609919875860214,
+      "eager_ms_mean": 0.20482688039541244,
+      "intensity_flops_per_byte": 1.9883495145631067
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 2048
+      },
+      "dtype": "float32",
+      "triton_ms": 0.5756159722805023,
+      "eager_ms": 0.26211200654506683,
+      "speedup": 0.4553591616066858,
+      "triton_ms_mean": 0.6353702402114868,
+      "eager_ms_mean": 0.2634726405143738,
+      "intensity_flops_per_byte": 0.9985372988785958
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 2048
+      },
+      "dtype": "bfloat16",
+      "triton_ms": 0.5792319774627686,
+      "eager_ms": 0.4076640009880066,
+      "speedup": 0.703800924067957,
+      "triton_ms_mean": 0.6320390355587006,
+      "eager_ms_mean": 0.41565055906772613,
+      "intensity_flops_per_byte": 1.9970745977571915
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 8192
+      },
+      "dtype": "float32",
+      "triton_ms": 2.1249920129776,
+      "eager_ms": 0.8294399976730347,
+      "speedup": 0.3903261718667824,
+      "triton_ms_mean": 2.3117267084121704,
+      "eager_ms_mean": 0.9258592057228089,
+      "intensity_flops_per_byte": 0.999633923123856
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 8192
+      },
+      "dtype": "bfloat16",
+      "triton_ms": 2.125663995742798,
+      "eager_ms": 1.4038400053977966,
+      "speedup": 0.6604242289512153,
+      "triton_ms_mean": 2.311926407814026,
+      "eager_ms_mean": 1.5542099165916443,
+      "intensity_flops_per_byte": 1.999267846247712
+    }
+  ],
+  "consistency": [
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 1024,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "float32",
+      "allclose": true,
+      "max_abs_err": 7.450580596923828e-09,
+      "atol": 1e-05,
+      "rtol": 0.0001
+    },
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 1024,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "bfloat16",
+      "allclose": true,
+      "max_abs_err": 0.000244140625,
+      "atol": 0.01,
+      "rtol": 0.01
+    },
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 4096,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "float32",
+      "allclose": true,
+      "max_abs_err": 7.450580596923828e-09,
+      "atol": 1e-05,
+      "rtol": 0.0001
+    },
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 4096,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "bfloat16",
+      "allclose": true,
+      "max_abs_err": 0.00048828125,
+      "atol": 0.01,
+      "rtol": 0.01
+    },
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 16384,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "float32",
+      "allclose": true,
+      "max_abs_err": 7.450580596923828e-09,
+      "atol": 1e-05,
+      "rtol": 0.0001
+    },
+    {
+      "kernel": "swiglu",
+      "size": {
+        "M": 16384,
+        "N": 1024,
+        "K": 512
+      },
+      "dtype": "bfloat16",
+      "allclose": true,
+      "max_abs_err": 0.00048828125,
+      "atol": 0.01,
+      "rtol": 0.01
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 1024,
+        "N": 1024
+      },
+      "dtype": "float32",
+      "allclose": true,
+      "max_abs_err": 9.5367431640625e-07,
+      "atol": 1e-05,
+      "rtol": 0.0001
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 1024,
+        "N": 1024
+      },
+      "dtype": "bfloat16",
+      "allclose": true,
+      "max_abs_err": 0.03125,
+      "atol": 0.01,
+      "rtol": 0.01
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 4096,
+        "N": 1024
+      },
+      "dtype": "float32",
+      "allclose": true,
+      "max_abs_err": 1.430511474609375e-06,
+      "atol": 1e-05,
+      "rtol": 0.0001
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 4096,
+        "N": 1024
+      },
+      "dtype": "bfloat16",
+      "allclose": true,
+      "max_abs_err": 0.0625,
+      "atol": 0.01,
+      "rtol": 0.01
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 16384,
+        "N": 1024
+      },
+      "dtype": "float32",
+      "allclose": true,
+      "max_abs_err": 1.430511474609375e-06,
+      "atol": 1e-05,
+      "rtol": 0.0001
+    },
+    {
+      "kernel": "rmsnorm",
+      "size": {
+        "M": 16384,
+        "N": 1024
+      },
+      "dtype": "bfloat16",
+      "allclose": true,
+      "max_abs_err": 0.0625,
+      "atol": 0.01,
+      "rtol": 0.01
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 512
+      },
+      "dtype": "float32",
+      "allclose": true,
+      "max_abs_err": 3.203749656677246e-07,
+      "atol": 1e-05,
+      "rtol": 0.0001
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 512
+      },
+      "dtype": "bfloat16",
+      "allclose": true,
+      "max_abs_err": 0.001953125,
+      "atol": 0.01,
+      "rtol": 0.01
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 2048
+      },
+      "dtype": "float32",
+      "allclose": true,
+      "max_abs_err": 2.3096799850463867e-07,
+      "atol": 1e-05,
+      "rtol": 0.0001
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 2048
+      },
+      "dtype": "bfloat16",
+      "allclose": true,
+      "max_abs_err": 0.00146484375,
+      "atol": 0.01,
+      "rtol": 0.01
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 8192
+      },
+      "dtype": "float32",
+      "allclose": true,
+      "max_abs_err": 2.3096799850463867e-07,
+      "atol": 1e-05,
+      "rtol": 0.0001
+    },
+    {
+      "kernel": "gqa_decode",
+      "size": {
+        "B": 8,
+        "n_head": 16,
+        "n_kv": 8,
+        "D": 64,
+        "S": 8192
+      },
+      "dtype": "bfloat16",
+      "allclose": true,
+      "max_abs_err": 0.00048828125,
+      "atol": 0.01,
+      "rtol": 0.01
+    }
+  ]
+}
