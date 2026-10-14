@@ -68,3 +68,16 @@
 - 事实核查：抽查 16 项（数据 6 + 行号锚点 9 组 + 环境 1）100% 与仓库一致
 - 遗留 Minor（不阻塞）：W1——包装层 dtype/device ValueError 两条契约的负向用例在 T003 TDD 实施时以参数化并入 invalid_shape 用例；W2——srs FR1-AC2 溯源列表含 ablation-summary.json 为 srs 侧笔误（−75% 实录在 EXPERIMENTS.md L52），AR 归档时回勘
 - 审查代理：sdd-gate-reviewer
+
+## Review 记录
+
+### 2026-10-14 审查记录
+
+- 审查结果：PASS（第 2 轮；第 1 轮 FAIL 1 Major，修复后复审 PASS）
+- 审查方式：独立子 Agent 全量合规审查（S1-S5 / D1-D4 / C1-C3 / 手册数值抽查 M 13 项），实测复跑 28/28、全量 711/2、三绿、git diff 影响范围、行号锚点逐点抽查
+- S 维度：S2-S5 全 PASS；S1 首轮 NO——E-F-4 命令③引用 profile_inference.py 不存在的 `--context_lengths`/`--new_tokens` 参数（`--compile` 为 store_true），SOP「命令」要素失效（Major）→ 修复为 `python -m tools.experiments.run_inference_suite --checkpoint <ckpt> --output_json docs/results/inductor_cloud.json --prompt_lengths 128 256 --new_tokens 64`（参数经 argparse 定义核验、`-m` 形式实机可解析、含 variant=compile/eager 对照行），复审 PASS
+- D 维度：D1-D4 全 PASS（D1-D7 决策逐条核验闭环；D3 影响范围恰为声明 12 文件，model/training/utils 零改动）
+- C 维度：C1-C3 全 PASS（三绿实测复现；E741 规避 grep 证实）
+- M 数值抽查：13 项中 12 项一致（MoE 5.8×/KV 12,335→−1,090/114×/GQA-2 −75%/roofline 1160×·77.9%/compile 1.59×·294 vs 185·64tok 负结果/§6.9 全部数值/E-F-4 判据），1 项即上述 E-F-4 命令缺陷
+- 遗留 Minor（不阻塞，记录待办）：①E-F-3 命令同源问题（profile_inference.py 无 `--context_lengths`，v0.6.0 遗留）——建议后续 lite AR 对全文 profile_inference.py 调用块做参数一致性扫描；②design §4.3.3 文字「mean/min 同时记入 JSON」与 §4.3.4 schema（仅 mean）不一致，实现从 schema——AR 归档时勘误 design 文字；③rmsnorm N 非 2 的幂档无专测（现有 CUDA 用例 N=64/1024 均为 2 的幂，掩码尾部路径未被实际触发）；④gqa_decode_bytes 将 q 计为 2× 元素量（docstring 自述，物理偏保守，k/v 项主导，强度值不受实质影响）
+- 审查代理：合规审查子 Agent（2 轮）
