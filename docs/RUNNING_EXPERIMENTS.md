@@ -94,6 +94,7 @@ python inference/generate.py --checkpoint out/ablations/modern-full/best_ckpt.pt
 | E-F-1 | NCCL 通信带宽 | all-reduce 实测带宽 vs PCIe/NVLink 规格值 | 集合通信达到链路规格的 70%+；无 NVLink 时 PCIe 是多卡扩展的真实瓶颈 | all-reduce 带宽-消息大小曲线（8B..256MB） |
 | E-F-2 | 多卡 roofline + MFU | `tools/infra/run_roofline.py` 全量 + 训练 MFU（`utils/infra_math.py` flops 口径） | 云卡 GEMM 稳态算力达规格 80%+；50M 训练 MFU 落在 30-60% 区间（amp 口径） | roofline 三段表 + MFU 单点（对照手册 §5/§7 残差） |
 | E-F-3 | KV 物化 GPU 复测 | 手册 §4 案例（hd=96：18,432→4,608 B/token）与本仓主配置（hd=64：12,288 B/token） | GPU 上逐层分配实测斜率与公式闭合（±5%），修复后曲线平坦（对照 MIGRATION §8.2） | 斜率表（公式 vs 实测）+ 显存-长度曲线 |
+| E-F-4 | inductor 全链路验证 | 云端配套 torch/triton 下复跑 dynamo 层实测（compile-stack.md §4）与 decode 编译路径 | inductor 后端下 recompile 计数与 dynamo 层一致（图行为不因 backend 改变）；256 token 编译路径吞吐 ≥ eager（64 token 允许仍为负，与本机摊平边界一致） | recompile 计数表 + compile/eager 吞吐对照（回填 compile-stack.md §7） |
 
 **E-F-1 通信带宽**（环境：≥2 卡同型号实例，nccl；命令：临时脚本，不新增仓库文件）
 
@@ -139,6 +140,17 @@ python tools/profiling/profile_inference.py --checkpoint <ckpt> \
 ```
 
 产物：斜率表（公式 12,288 B/token @ hd=64 fp32 vs 实测；修复前 12,335 对照 MIGRATION §8.2）。判据：实测斜率与公式差 ±5% 内 PASS；显著偏离先查 dtype/头数参数集再下结论（手册 §4「看数字先问参数集」）。
+
+**E-F-4 inductor 全链路验证**（环境：云 Linux + 官方配套 torch/triton（如 torch 2.5.1 + triton 3.1.0）+ CUDA GPU；命令：本仓测试与推理路径；来源：AR-v0.7.0 T004，本机 triton 3.8 vs torch 2.5.1 inductor 断裂为教学案例（compile-stack.md §5），云端空闲后执行，非本 AR 阻塞项）
+
+```bash
+pip install "triton==3.1.0"                    # 配套 torch 2.5.1（版本矩阵见 compile-stack.md §5.1）
+python -m pytest tests/test_moe_vectorized.py -k recompile -q   # inductor 后端下 recompile 计数
+python tools/profiling/profile_inference.py --checkpoint <ckpt> \
+  --context_lengths 128 256 --new_tokens 64 256 --compile fullgraph   # 摊平边界对照
+```
+
+产物：`docs/results/inductor_cloud.json`（compile/eager 吞吐 + recompile 计数 + torch/triton 版本），结论回填 compile-stack.md §7。判据：inductor 下 recompile 计数与 dynamo 层（`backend="eager"`，MIGRATION §8.1）一致；256 token 编译路径 ≥ eager 吞吐；64 token 允许仍为负——与本机 EXPERIMENTS §6.4 摊平边界（64~256 之间）一致。
 
 ---
 
@@ -235,6 +247,7 @@ scp -P <PORT> -r root@<REGION>.autodl.com:/root/autodl-tmp/nanoGPT-Modern/out/ab
 | E-F-1 | planned | AR-v0.6.0 | 需 ≥2 卡实例（nccl）；脚本见 F 组 SOP 内联 | `docs/results/nccl_bw.json`（待产出） |
 | E-F-2 | part-done | AR-v0.6.0 | 本机 Quadro RTX 5000 已跑 --quick（EXPERIMENTS.md §6.8）；全量 13 点 + MFU 待云卡 | `docs/results/roofline.json`；`roofline_<gpu>.json`（待产出） |
 | E-F-3 | planned | AR-v0.6.0 | 任一 GPU；公式口径 hd=64 fp32 = 12,288 B/token | 斜率表（待产出；本机修复记录 MIGRATION.md §8.2） |
+| E-F-4 | planned | AR-v0.7.0 | 云 Linux + 配套 triton（本机断裂为教学案例）；Triton 三件套本机已测（EXPERIMENTS.md §6.9） | `docs/results/inductor_cloud.json`（待产出） |
 
 ### 更新历史
 
@@ -244,3 +257,4 @@ scp -P <PORT> -r root@<REGION>.autodl.com:/root/autodl-tmp/nanoGPT-Modern/out/ab
 | 2026-10-12 | 云端实测 | RTX 6000D 上跑完 E-A、E-B、E-C 与 E-D-1/E-D-2。数据是 12.44 亿 token 前缀，不是全量 17 GB。多卡扩展仍未测。解读在 EXPERIMENTS.md §6 |
 | 2026-10-12 | E-D-3 | 在 RTX PRO 6000 Blackwell 上用冻结的 SFT 采样做 DPO/IPO。奖励上升来自过程分，准确率没有上升 |
 | 2026-10-13 | AR-v0.6.0（T005） | 新增 F 组（E-F-1/2/3）微基准 SOP：通信带宽/多卡 roofline+MFU/KV 物化复测，四要素齐备；E-F-2 本机 --quick 部分完成（§6.8） |
+| 2026-10-14 | AR-v0.7.0（T004） | 新增 E-F-4 inductor 全链路验证 SOP（四要素齐备）；Triton 微实验三件套本机实测完成（EXPERIMENTS.md §6.9，`docs/results/triton_kernels.json`） |

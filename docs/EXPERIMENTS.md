@@ -358,6 +358,30 @@ MoE 前向微基准（4096 token，bf16）：专家数 2 / 4 / 8 / 16 时，分�
 
 能说的：本卡 GEMM 稳态算力约 9.8 TFLOPs/s、GEMV 稳态带宽约 350 GB/s、L2 边界前后算力差 3 个数量级。不能说的：把 tiny 模型的 1.1% 带宽利用率外推到生产规模 decode——大模型权重驻留显存，单步读满全部权重，利用率量级完全不同。
 
+### 6.9 Triton 微实验三件套（AR-v0.7.0 / T004）
+
+环境：Quadro RTX 5000（sm75），torch 2.5.1+cu121，triton 3.8.0，fp32 + bf16 两口径，`python tools/infra/triton_kernels.py`（3 kernel × 3 尺寸档 × 2 dtype = 18 组，<2 分钟；产物 `docs/results/triton_kernels.json`）。计时：cuda.Event，10 预热 50 迭代取中位数；一致性 fp32 atol=1e-5/rtol=1e-4、bf16 1e-2/1e-2，**18 组 allclose 全过**。
+
+加速比（triton_ms 中位数 / eager_ms 中位数，fp32 口径）：
+
+| kernel | 尺寸（M,N,K / M,N / B,H,KV,D,S） | eager ms | triton ms | speedup | 强度 FLOP/B |
+|--------|----------------------------------|----------|-----------|---------|-------------|
+| swiglu | 16384,1024,512 | 4.34 | 36.22 | **0.12×** | 328 |
+| rmsnorm | 1024,1024 | 0.14 | 0.11 | 1.32× | 0.6 |
+| rmsnorm | 16384,1024 | 1.30 | 0.45 | **2.86×** | 0.6 |
+| gqa_decode | 8,16,8,64,512 | 0.17 | 0.19 | 0.86× | 1.0 |
+| gqa_decode | 8,16,8,64,8192 | 0.83 | 2.13 | **0.39×** | 1.0 |
+
+（完整 18 组含 bf16 档与 4096 档见 JSON；舍入口径：表内为 fp32 中位数 4 位有效数字。）
+
+三个教学点，和 [attention-kernels.md](ai-infra/attention-kernels.md) / [compile-stack.md](ai-infra/compile-stack.md) 直接互相印证：
+
+1. **手写 RMSNorm 反超 eager 1.3-2.9×**：eager 参照是「平方→均值→rsqrt→两次乘」多趟逐元素 kernel（中间结果落显存），手写 kernel 单遍完成——低强度（0.6 FLOP/B）纯带宽型算子上，「消灭中间落盘」足以赢过框架调度。这是 fusion 的全部意义（compile-stack.md §5.2）。
+2. **手写 GEMM 打不过 cuBLAS 一个数量级**（swiglu 0.12×，且尺寸越大越差）：16×16×16 的朴素 tiling 远未到 cuBLAS 的分块/流水/向量化水平。教学级 kernel 的价值在「算得对」与「讲得清」，不在性能；生产 GEMM 交给库或 inductor max-autotune。
+3. **GQA decode 随 S 变长劣化**（512 档 0.86× → 8192 档 0.39×）：kernel 沿 S 串行分块，而 eager 是两个批量 GEMM（cuBLAS 吃满并行度）。「分块省显存」与「并行吃算力」的取舍在 S 增大时倾向后者——FlashAttention 真正的生产实现靠更激进的并行策略（多 SM 分摊 S 维）两头兼得，本仓教学版刻意不做（sm75 无 TMA，价值/风险比不划算）。
+
+能说的：教学级 kernel 在本机的相对表现与归因（fusion 收益真实存在；朴素 tiling 与生产库差距真实存在）。不能说的：任何绝对性能结论外推——kernel 未做 autotune/向量化调优，bf16 档未用 tensor core（加载即升 fp32，刻意求逐位可解释）；加速比不设阈值、诚实报告（AR-v0.7.0 需求裁定）。
+
 ## 7. 关键结论与限制
 
 1. 3.3M 合成数据实验只证明链路能跑通。架构比较以第 6 节的 OpenWebText 前缀为准。
