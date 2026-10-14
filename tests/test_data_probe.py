@@ -251,8 +251,8 @@ def test_dedup_semantics_full_dup_and_independent(probe_result):
     killed (detected stays close to the actual dup rate at the low end)."""
     exp = get_experiment(probe_result, "minhash_dedup_curve")
     pairs = sorted(zip(exp["dup_rates"], exp["detected_rates"]))
-    (min_dup, det_at_min) = pairs[0]
-    (max_dup, det_at_max) = pairs[-1]
+    min_dup, det_at_min = pairs[0]
+    max_dup, det_at_max = pairs[-1]
     assert det_at_max >= 0.9
     assert det_at_min <= min_dup + 0.1
 
@@ -275,3 +275,32 @@ def test_doc_boundary_stats_bounds(probe_result):
     assert exp["source"] == "synthetic"
     assert exp["docs_per_block_mean"] >= 1.0
     assert 0.0 <= exp["cross_doc_fraction"] <= 1.0
+
+
+def test_abort_mid_experiment_no_partial_json(tmp_path, monkeypatch):
+    """ut-abort：实验中途异常（in-process 注入）→ 退出 1 且不写部分 JSON。
+
+    design §6.1 共有用例组第 1 项：仿 tests/test_roofline_script.py 先例以
+    进程内 monkeypatch 注入（子进程无法打桩）；原子写（tmp+rename）保证
+    半截结果绝不落盘。--bin 指向不存在路径走真实剖析守卫降级，
+    exp_contamination_demo 注入 RuntimeError 触发单一 exit-1 漏斗。
+    """
+    import tools.infra.data_probe as data_probe
+
+    def boom():
+        raise RuntimeError("simulated mid-experiment failure")
+
+    monkeypatch.setattr(data_probe, "exp_contamination_demo", boom)
+    out = tmp_path / "data_probe.json"
+    rc = data_probe.main(
+        [
+            "--bin",
+            str(tmp_path / "nonexistent.bin"),
+            "--quick",
+            "--output-json",
+            str(out),
+        ]
+    )
+    assert rc == 1
+    assert not out.exists(), "中断后不得留下部分 JSON"
+    assert not out.with_suffix(out.suffix + ".tmp").exists(), "不得留下 .tmp 残件"

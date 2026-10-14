@@ -23,6 +23,12 @@
 | T010 | FR8b README.md 文档索引挂三手册 + badge 测试数更新；纯增量不破坏结构 | T009 | passing | 2026-10-14 完成：索引挂 numerical-precision/scaling-laws/data-pipeline 三行（含一句话内容摘要+互证工具注）；ai-infra 索引行 7 主题→10 主题/4-AR→6-AR 同步；badge 711+→757+（T011 全量实测 757 passed/3 skipped 回填，W1 兑现）；纯增量零结构改动 |
 | T011 | FR8c 质量收口：全量回归零回归（基线 711 passed / 2 skipped）+ 三绿（black/ruff/mypy 零新增）+ gitee slim-mirror 同步 + 链接终检（含 B 组勘误命令目标核验） | T010 | passing | 2026-10-14 完成：全量 757 passed/3 skipped（+46 passed/+1 skip vs 基线，零回归）；三绿 CI 口径全过（black 86 files unchanged/ruff all pass/mypy Success 0 issues in 86 files）；链接终检 9 文档 119 引用 0 缺失；B 组命令目标已逐参核对（T008）；gitee 同步完成（102 链元素 ≤70KB 分批推送，main push ok，head 164c048d） |
 
+## 设计偏差记录（review D4 勘记）
+
+- **meta.torch 字段**（design §4.3.2 草案要求三工具必含）：fit_scaling/data_probe 实际不依赖 torch（纯 numpy/scipy），meta 按实际依赖记录、无 torch 字段；precision_probe 依赖 torch 故保留。偏差合理但未在实现期登记，此处补记。
+- **budget_calculator.cases 字段名**：实现为 `tokens_vs_repo_corpus`，design 草案为 `train_tokens_vs_repo_budget`——以测试契约（tests/test_fit_scaling.py BUDGET_CASE_KEYS）为准。
+- **repo_budget_review.data_sources 路径口径**：实现落盘绝对路径（实测可复现性优先），design 草案为相对路径。
+
 ## 延迟项（登记不修）
 
 - **quantize_model 生产调用方缺失**（model/quantization.py L182，导出于 model/__init__.py，仅 tests/test_quantization.py 引用，无训练/推理路径调用）：归 v0.9.0 量化总论（与 numerical-precision.md §8 fp8 展望、ADR-004 KV 量化一并处理）。本 AR 仅登记（srs §4 明确排除）。
