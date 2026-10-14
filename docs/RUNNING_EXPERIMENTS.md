@@ -146,8 +146,9 @@ python tools/profiling/profile_inference.py --checkpoint <ckpt> \
 ```bash
 pip install "triton==3.1.0"                    # 配套 torch 2.5.1（版本矩阵见 compile-stack.md §5.1）
 python -m pytest tests/test_moe_vectorized.py -k recompile -q   # inductor 后端下 recompile 计数
-python tools/profiling/profile_inference.py --checkpoint <ckpt> \
-  --context_lengths 128 256 --new_tokens 64 256 --compile fullgraph   # 摊平边界对照
+python -m tools.experiments.run_inference_suite --checkpoint <ckpt> \
+  --output_json docs/results/inductor_cloud.json \
+  --prompt_lengths 128 256 --new_tokens 64    # 摊平边界对照；再跑一次 --new_tokens 256
 ```
 
 产物：`docs/results/inductor_cloud.json`（compile/eager 吞吐 + recompile 计数 + torch/triton 版本），结论回填 compile-stack.md §7。判据：inductor 下 recompile 计数与 dynamo 层（`backend="eager"`，MIGRATION §8.1）一致；256 token 编译路径 ≥ eager 吞吐；64 token 允许仍为负——与本机 EXPERIMENTS §6.4 摊平边界（64~256 之间）一致。
