@@ -109,9 +109,11 @@ def f(x, w):
 x, w = torch.randn(8, 16), torch.randn(16, 32)
 exp = dynamo.explain(f)(x, w)
 print(exp.graph_count)              # 捕获出的图数量（1 = 无断裂）
-print(exp.graph_break_reasons)      # 每处断裂的原因与代码行
+print(exp.break_reasons)            # 每处断裂的原因与代码行
 print(exp.ops_per_graph)            # 每张图的算子数
 ```
+
+> 属性名以 torch 2.5.1 实测为准：`ExplainOutput` 暴露的是 `break_reasons`（不是 `graph_break_reasons`）。本机实测输出：`graph_count=1`、`break_reasons=[]`、`ops_per_graph=[[matmul, relu, mul]]`。
 
 `graph_count > 1` 即存在 graph break——逐条看 reason 决定「容忍（fallback 也正确）」还是「消除」。
 
@@ -124,28 +126,32 @@ import torch._dynamo as dynamo
 def g(x):
     return x * 2 if x.shape[0] <= 4 else x * 3     # 数据依赖分支
 
-compiled = dynamo.run(g)
+dynamo.reset()
+compiled = torch.compile(g, backend="eager")       # 计数走 compile 路径
 for n in (2, 4, 8, 8, 8):
     compiled(torch.randn(n, 3))
     print(n, dynamo.utils.counters["stats"]["unique_graphs"])
 ```
 
-预期：`n=2/4` 命中同一张图；`n=8` 分支翻到另一侧 → guard 失败 → **重编译**，计数 +1；之后 `n=8` 不再涨。同形状重复步进计数稳定不增长 = 「无形状/dict 诱导的重编译」，这正是 MIGRATION §8.1 对向量化 MoE 的验证（`tests/test_moe_vectorized.py::test_compile_no_recompile_growth`：`backend="eager"` 下 100 步 `unique_graphs` 稳定）。
+本机（torch 2.5.1）实测输出：`2→1`、`4→2`、`8→3`，之后 `n=8` 稳定在 3 不再涨（计数器是进程累计值——同一会话先跑过 §4.1 会整体 +1，模式不变）。两个教学点：
+
+1. **计数器必须走 `torch.compile` 路径才会填充**——`dynamo.run(g)` 在 2.5.1 下不 populate `counters["stats"]`（恒 0），这正是 MIGRATION §8.1 用 `backend="eager"` 计数的原因（dynamo 层指标与 backend 无关，但入口必须是 `torch.compile`）。
+2. **每个不同的 shape[0] 都触发一次重编译**：默认 `dynamic=False` 下 dynamo 按形状特化生成 guard，形状一变 guard 即失败 → 重编译（+1）——与分支翻不翻面无关。真正稳定的是**同形状重复步进计数不增长**，这就是 MIGRATION §8.1 对向量化 MoE 的验证语义（`tests/test_moe_vectorized.py::test_compile_no_recompile_growth`：`backend="eager"` 下 100 步 `unique_graphs` 稳定）。想避免形状诱导的重编译需 `dynamic=True` 或 `torch._dynamo.mark_dynamic`（§3.2 的 generate 用 `dynamic=True` 正是此理）。
 
 ### 4.3 fullgraph 约束感受一下
 
 ```python
 import torch
-import torch._dynamo as dynamo
 
 def h(x):
     if x.sum() > 0:          # 数据依赖分支：dynamo 无法静态化
         return x + 1
     return x - 1
 
+torch._dynamo.reset()
 try:
-    dynamo.run(h, nopython=True)(torch.randn(4))   # nopython=True 等价 fullgraph
-except dynamo.TorchDynamoException as e:
+    torch.compile(h, fullgraph=True, backend="eager")(torch.randn(4))
+except torch._dynamo.exc.TorchDynamoException as e:
     print("graph break:", e)
 ```
 
