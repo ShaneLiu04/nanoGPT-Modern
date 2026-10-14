@@ -1,0 +1,134 @@
+{
+  "meta": {
+    "tool": "data_probe",
+    "device": "cpu",
+    "timestamp": "2026-10-14T10:34:34.714250+00:00",
+    "quick": false,
+    "bin_path": "D:\\nanoGPT-Modern\\data\\openwebtext\\train.bin",
+    "bin_available": true
+  },
+  "experiments": [
+    {
+      "name": "bin_profile",
+      "source": "real",
+      "size_bytes": 17853806718,
+      "dtype": "uint16",
+      "total_tokens": 8926903359,
+      "sampled_tokens": 200003,
+      "stride": 44634,
+      "value_range": [
+        0,
+        50256
+      ],
+      "eot_freq": 0.000919986200206997,
+      "top_tokens": [
+        [
+          11,
+          0.037084443733344
+        ],
+        [
+          262,
+          0.036424453633195505
+        ],
+        [
+          13,
+          0.034449483257751136
+        ],
+        [
+          198,
+          0.03425448618270726
+        ],
+        [
+          284,
+          0.01931471027934581
+        ],
+        [
+          286,
+          0.018514722279165813
+        ],
+        [
+          290,
+          0.017204741928871066
+        ],
+        [
+          257,
+          0.015519767203491948
+        ],
+        [
+          287,
+          0.012834807477887832
+        ],
+        [
+          447,
+          0.011654825177622336
+        ]
+      ]
+    },
+    {
+      "name": "doc_length_dist",
+      "source": "real",
+      "mean": 1138.397950469684,
+      "p50": 724.0,
+      "p99": 7922.309999999996,
+      "n_docs": 14052,
+      "note": "doc length = gap between EOT positions (contiguous windows)"
+    },
+    {
+      "name": "contamination_demo",
+      "source": "synthetic",
+      "needle": [
+        9001,
+        7007,
+        5003
+      ],
+      "n_docs": 20,
+      "n_planted": 3,
+      "needle_hit_rate": 1.0,
+      "false_positive_rate": 0.0,
+      "note": "detection = substring search + threshold; see data-pipeline.md section 9"
+    },
+    {
+      "name": "minhash_dedup_curve",
+      "source": "synthetic",
+      "dup_rates": [
+        0.0,
+        0.25,
+        0.5,
+        0.75,
+        1.0
+      ],
+      "detected_rates": [
+        0.0,
+        0.25,
+        0.5,
+        0.6666666666666667,
+        0.9166666666666666
+      ],
+      "band_widths": [
+        8,
+        16
+      ],
+      "num_hashes": 128,
+      "threshold": 0.85,
+      "implementation": "data/dedup.py MinHashDeduplicator (production, read-only)"
+    },
+    {
+      "name": "greedy_packing",
+      "source": "synthetic",
+      "block_size": 1024,
+      "n_docs": 300,
+      "n_blocks": 31,
+      "fill_ratio": 0.9438004032258065,
+      "padding_waste": 0.056199596774193505,
+      "note": "padding = block capacity not covered by doc tokens; cf. PackingDataset._build_samples (data/openwebtext.py:349)"
+    },
+    {
+      "name": "doc_boundary_stats",
+      "source": "synthetic",
+      "block_size": 1024,
+      "docs_per_block_mean": 9.67741935483871,
+      "cross_doc_fraction": 1.0,
+      "note": "cross_doc_fraction = blocks containing >=2 documents; the document_ids tensor masks attention across these boundaries"
+    }
+  ]
+}

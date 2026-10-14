@@ -1,0 +1,106 @@
+{
+  "meta": {
+    "tool": "precision_probe",
+    "device": "cpu",
+    "torch": "2.5.1+cu121",
+    "timestamp": "2026-10-14T10:33:30.734889+00:00",
+    "quick": false,
+    "tolerance_refs": {
+      "bf16_atol": 0.01,
+      "bf16_rtol": 0.01,
+      "source": "docs/results/triton_kernels.json"
+    }
+  },
+  "experiments": [
+    {
+      "name": "dtype_limits",
+      "dtypes": {
+        "float32": {
+          "max": 3.4028234663852886e+38,
+          "min": -3.4028234663852886e+38,
+          "eps": 1.1920928955078125e-07,
+          "smallest_normal": 1.1754943508222875e-38,
+          "ulp_at_1": 1.1920928955078125e-07
+        },
+        "bfloat16": {
+          "max": 3.3895313892515355e+38,
+          "min": -3.3895313892515355e+38,
+          "eps": 0.0078125,
+          "smallest_normal": 1.1754943508222875e-38,
+          "ulp_at_1": 0.0078125
+        },
+        "float16": {
+          "max": 65504.0,
+          "min": -65504.0,
+          "eps": 0.0009765625,
+          "smallest_normal": 6.103515625e-05,
+          "ulp_at_1": 0.0009765625
+        }
+      }
+    },
+    {
+      "name": "rne_rounding",
+      "cases": [
+        {
+          "value": 2049.0,
+          "rounded": 2048.0,
+          "expected_even": 2048.0
+        },
+        {
+          "value": 2051.0,
+          "rounded": 2052.0,
+          "expected_even": 2052.0
+        },
+        {
+          "value": 2053.0,
+          "rounded": 2052.0,
+          "expected_even": 2052.0
+        },
+        {
+          "value": 2055.0,
+          "rounded": 2056.0,
+          "expected_even": 2056.0
+        },
+        {
+          "value": 2057.0,
+          "rounded": 2056.0,
+          "expected_even": 2056.0
+        },
+        {
+          "value": 2059.0,
+          "rounded": 2060.0,
+          "expected_even": 2060.0
+        }
+      ],
+      "tie_to_even_hits": 1.0
+    },
+    {
+      "name": "relative_error_grid",
+      "fp32_vs_bf16": {
+        "max": 0.003885328769683838,
+        "mean": 0.0014431121526286006,
+        "p99": 0.0034960524644702673
+      },
+      "fp32_vs_fp16": {
+        "max": 0.0004873276920989156,
+        "mean": 0.00018011608335655183,
+        "p99": 0.00043789035407826304
+      }
+    },
+    {
+      "name": "accumulation_precision",
+      "k_dim": 4096,
+      "chunk": 32,
+      "fp32_accum_rel_err": 1.234022524611207e-07,
+      "bf16_accum_rel_err": 0.013351619243204509
+    },
+    {
+      "name": "loss_scaling_simulation",
+      "grad_scale": 65536.0,
+      "naive_fp16_zero_fraction": 0.9960159659385681,
+      "scaled_recover_fraction": 0.5836653113365173,
+      "unscaled_overflow_detected": true,
+      "n_gradients": 2008
+    }
+  ]
+}
