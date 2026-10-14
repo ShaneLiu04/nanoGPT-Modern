@@ -500,7 +500,7 @@ def test_too_few_points_degrades(tmp_path):
 
 
 def test_empty_groups_degrades(tmp_path):
-    """ut-empty-groups：空 groups 数组 → 同降级路径，不抛未捕获异常、退出 0
+    """ut-empty-groups：空 groups 数组走同降级路径，不抛未捕获异常、退出 0
     （§6.4 边界行）。"""
     data_path = write_ablation_file(tmp_path / "empty-ablation.json", [])
     budget_path = copy_budget_file(tmp_path / "budget.json")
@@ -510,3 +510,30 @@ def test_empty_groups_degrades(tmp_path):
     )
     _assert_honest_degradation(result, out)
     print("[OK] empty groups: converged=false, exit 0, no crash")
+
+
+def test_abort_mid_experiment_no_partial_json(tmp_path, monkeypatch):
+    """ut-abort：实验中途异常（in-process 注入）→ 退出 1 且不写部分 JSON。
+
+    design §6.1 共有用例组第 1 项：仿 tests/test_roofline_script.py 先例以
+    进程内 monkeypatch 注入（子进程无法打桩）；原子写（tmp+rename）保证
+    半截结果绝不落盘。fit_kaplan 正常收敛后 chinchilla_synthetic_demo 注入
+    RuntimeError——验证的正是「中段实验失败」而非数据源守卫分支。
+    """
+    import tools.infra.fit_scaling as fit_scaling
+
+    data_path = write_ablation_file(tmp_path / "ablation.json", _synthetic_kaplan_groups())
+    budget_path = copy_budget_file(tmp_path / "budget.json")
+    out = tmp_path / "scaling_fit.json"
+
+    def boom():
+        raise RuntimeError("simulated mid-experiment failure")
+
+    monkeypatch.setattr(fit_scaling, "chinchilla_synthetic_demo", boom)
+    rc = fit_scaling.main(
+        ["--data", str(data_path), "--budget", str(budget_path), "--output-json", str(out)]
+    )
+    assert rc == 1
+    assert not out.exists(), "中断后不得留下部分 JSON"
+    assert not out.with_suffix(out.suffix + ".tmp").exists(), "不得留下 .tmp 残件"
+    print("[OK] mid-experiment abort: rc=1, no partial JSON")

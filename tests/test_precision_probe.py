@@ -103,9 +103,10 @@ def test_cli_help_succeeds():
 def test_cli_quick_smoke_exits_zero_and_writes_json(quick_run: dict):
     """--quick smoke: exit 0, JSON on disk, under the 60 s budget, stdout summary.
 
-    Together with the missing-parent-dir case below this also substitutes the
-    interrupt-branch behavior assertion (exit 0 + atomic write vs. exit 2 +
-    nothing written): monkeypatching a subprocess is not possible.
+    The mid-experiment interrupt branch itself (exit 1 + no partial JSON) is
+    covered by the in-process injection test at the bottom of this module;
+    this smoke plus the missing-parent-dir case below pin the exit-0/exit-2
+    paths that the subprocess harness can reach.
     """
     proc = quick_run["proc"]
     assert proc.returncode == 0, proc.stderr
@@ -291,3 +292,24 @@ def test_loss_scaling_rescues_fp16_underflow(probe_json: dict):
     assert naive_zero > 1.0 - recover
     # Unscale-then-check-inf semantics (GradScaler infskip loop) must be exercised.
     assert exp["unscaled_overflow_detected"] is True
+
+
+def test_abort_mid_experiment_no_partial_json(tmp_path, monkeypatch):
+    """ut-abort：实验中途异常（in-process 注入）→ 退出 1 且不写部分 JSON。
+
+    design §6.1 共有用例组第 1 项：仿 tests/test_roofline_script.py 先例以
+    进程内 monkeypatch 注入（子进程无法打桩）；原子写（tmp+rename）保证
+    半截结果绝不落盘——部分 JSON 会污染可追溯的 docs/results 结果链。
+    exp_dtype_limits 注入 RuntimeError 触发单一 exit-1 漏斗。
+    """
+    import tools.infra.precision_probe as probe
+
+    def boom():
+        raise RuntimeError("simulated mid-experiment failure")
+
+    monkeypatch.setattr(probe, "exp_dtype_limits", boom)
+    out = tmp_path / "precision_probe.json"
+    rc = probe.main(["--quick", "--output-json", str(out)])
+    assert rc == 1
+    assert not out.exists(), "中断后不得留下部分 JSON"
+    assert not out.with_suffix(out.suffix + ".tmp").exists(), "不得留下 .tmp 残件"
