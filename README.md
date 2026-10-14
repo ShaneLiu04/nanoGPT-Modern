@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/cover.png" alt="nanoGPT-Modern — 轻量级 LLM 全栈框架">
+  <img src="docs/assets/cover_v2.png" alt="nanoGPT-Modern — 轻量级 LLM 全栈框架">
 </p>
 
 <p align="center">
