@@ -237,6 +237,20 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    # Preflight the atomic-write target: an unwritable location (e.g. a
+    # read-only parent dir on POSIX) is a usage error, not a mid-run
+    # interrupt -- fail fast with exit 2 before any measurement starts.
+    probe = output.with_suffix(output.suffix + ".tmp")
+    try:
+        probe.touch()
+        probe.unlink()
+    except OSError as exc:
+        print(
+            f"error: --output-json is not writable: {output} ({exc})",
+            file=sys.stderr,
+        )
+        return 2
+
     try:
         experiments = run_experiments(args.quick)
         meta: dict = {
