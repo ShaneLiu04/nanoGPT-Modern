@@ -149,7 +149,7 @@ def eager_gqa_decode(q, k, v, scale=None) -> Tensor  # 逻辑对齐 _decode_gqa_
 #### 4.3.3 Bench 设计（含 CPU 冒烟降级路径）
 
 **CUDA 完整路径（本机 GPU）**：
-- 计时：`torch.cuda.Event` 成对计时；每 (kernel, size) 先 `n_warmup=10` 预热再 `n_iter=50` 取**中位数**（抗异常值，mean/min 同时记入 JSON）
+- 计时：`torch.cuda.Event` 成对计时；每 (kernel, size) 先 `n_warmup=10` 预热再 `n_iter=50` 取**中位数**（抗异常值；mean 一并记入 JSON，与 §4.3.4 schema 一致）
 - 尺寸表（`--quick` 缩减为 1 档，全量 3 档）：
   - swiglu：M∈{1024, 4096, 16384}，N=1024，K=512
   - rmsnorm：M∈{1024, 4096, 16384}，N=1024
