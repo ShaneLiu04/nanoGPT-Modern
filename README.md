@@ -7,7 +7,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
   <a href="requirements.txt"><img src="https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C.svg" alt="PyTorch 2.0+"></a>
-  <img src="https://img.shields.io/badge/tests-757%2B%20passing-brightgreen.svg" alt="757+ tests">
+  <img src="https://img.shields.io/badge/tests-700%2B%20passing-brightgreen.svg" alt="700+ tests">
   <img src="https://img.shields.io/badge/version-0.5.0-8B5CF6.svg" alt="v0.5.0">
 </p>
 
