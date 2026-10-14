@@ -7,7 +7,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
   <a href="requirements.txt"><img src="https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C.svg" alt="PyTorch 2.0+"></a>
-  <img src="https://img.shields.io/badge/tests-681%2B%20passing-brightgreen.svg" alt="681+ tests">
+  <img src="https://img.shields.io/badge/tests-711%2B%20passing-brightgreen.svg" alt="711+ tests">
   <img src="https://img.shields.io/badge/version-0.5.0-8B5CF6.svg" alt="v0.5.0">
 </p>
 
@@ -29,7 +29,7 @@
 2. **系统线**：`training/trainer_base.py` 模板方法训练基座（DDP/FSDP/AMP/EMA/checkpoint 生命周期，[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)）+ `inference/` 推理引擎（KV cache 家族、投机解码、连续批处理）——工程能力的主展示面。
 3. **证据线**：[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 第 6 节是 2026-10-12 在 RTX 6000D 上的实测（OpenWebText 前缀、七组 18000 step）。负面结果保留在同一节：SwiGLU 没有超过 GELU，top-1 MoE 没有超过稠密模型，弱草稿的投机解码接受率为 0，单卡 FSDP 没有扩展收益。
 
-> 质量保障：681+ 回归测试（含确定性测试：固定种子 loss 曲线逐位一致）· CI 四检（pytest + mypy + black + ruff + CPU 冒烟训练）· 实验编排器支持断点续跑。
+> 质量保障：711+ 回归测试（含确定性测试：固定种子 loss 曲线逐位一致）· CI 四检（pytest + mypy + black + ruff + CPU 冒烟训练）· 实验编排器支持断点续跑。
 
 ## 云端实测
 
@@ -164,7 +164,7 @@ bf16 的训练吞吐是 fp32 的 2.10 倍。单卡 FSDP 和 bf16 几乎相同，
 - **配置系统** — YAML + argparse 双向覆盖 · Hydra 可组合配置 · Pydantic 结构化校验（`n_head % n_kv_head == 0` 等规则）
 - **数据管道** — 全局 Shuffle（预计算索引）· 质量评分过滤 · MinHash+LSH 增量去重 · 多语言（tiktoken/SentencePiece + 语言检测加权采样）· 代码数据（AST 语法过滤）· 文档边界 / Packing（跨文档 mask）· 对话模板（chatml/llama-2/gemma）
 - **生态互操作** — HuggingFace 格式导出/加载（round-trip）· GGUF 导出（f32/f16/q8_0，内置无依赖 writer）· ONNX 导出（动态轴 + Runtime 验证）
-- **质量保障** — 681+ 回归测试（含确定性测试：固定种子 loss 曲线完全一致）· CI（pytest + mypy + black + ruff + CPU 冒烟训练）· 多阶段 Docker（训练 + TensorBoard + API）· pre-commit · 6 篇 ADR
+- **质量保障** — 711+ 回归测试（含确定性测试：固定种子 loss 曲线完全一致）· CI（pytest + mypy + black + ruff + CPU 冒烟训练）· 多阶段 Docker（训练 + TensorBoard + API）· pre-commit · 6 篇 ADR
 - **HPC 就绪（v0.5.0）** — 单卡到多卡的完整分布式路径（DDP `static_graph + gradient_as_bucket_view` / FSDP full-grad-no 分片 + per-block auto-wrap + `use_orig_params`）· 组件消融编排器（断点续跑 + 抢占恢复）· 云迁移 Runbook（uv 精确复现 + 数据校验 + GPU 冒烟）· 本机 GPU 演练已验证全链路并修复 3 个真实 bug（SDPA GQA 显存物化、ReduceOp.AVG gloo 兼容、DDP device_ids CPU 兼容）
 
 ---
@@ -507,7 +507,7 @@ nanogpt-modern/
 │   ├── dpo_utils.py         # DPO/IPO/KTO 损失
 │   ├── monitoring.py        # Loss Spike 检测 / 梯度范数分层
 │   └── profiler.py          # PyTorch Profiler + Chrome trace
-├── tests/                   # 600+ 回归测试
+├── tests/                   # 700+ 回归测试
 ├── docs/                    # 白皮书 / 变更日志 / 实验记录 / 6 篇 ADR
 ├── tools/export/            # 导出/互操作脚本（export_to_hf / load_from_hf / export_gguf / export_to_onnx）
 ├── api_server.py            # FastAPI OpenAI 兼容服务
@@ -533,6 +533,8 @@ nanogpt-modern/
 | [docs/MIGRATION.md](docs/MIGRATION.md) | 云租用 GPU 实例迁移 Runbook（环境重建、冒烟、实验矩阵启动、GPU 演练记录与排障速查） |
 | [docs/ai-infra/](docs/ai-infra/README.md) | AI infra 学习路径索引：7 主题地图（参数量/显存/算力/通信/编译/推理/RLHF 工程）、4-AR 路线图、本仓锚点 |
 | [docs/ai-infra/memory-flops-arithmetic.md](docs/ai-infra/memory-flops-arithmetic.md) | 显存/算力心算手册：参数量精确账、三精度口径、逐张量激活分解、KV 物化、FLOPs、roofline、心算卡（本仓实测逐条验证） |
+| [docs/ai-infra/attention-kernels.md](docs/ai-infra/attention-kernels.md) | Attention kernel 深潜手册：SDPA 后端与 is_causal 折叠、GQA 两路径、在线 softmax 与 ring attention 对照、KV 物化全案、MoE 5.8× |
+| [docs/ai-infra/compile-stack.md](docs/ai-infra/compile-stack.md) | torch.compile 手册：三层架构、三处调用面、dynamo 内联实验、版本断裂教学案例、1.59× 与负结果归因、E-F-4 云端 SOP |
 | [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md) | 实验运行手册：17 个对比实验矩阵（A-F 六组）、云端 SOP、图表与报告规范、状态跟踪（AR 更新联动） |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | v0.2.0 → v0.3.0 变更日志、42 项改进清单、已知限制 |
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | 实验记录、复现命令、关键结论 |
