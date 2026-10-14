@@ -1,8 +1,16 @@
 # ADR-006: 采用 MoE grouped GEMM 优化替代 Python 循环
 
-**状态**: Accepted  
+**状态**: Accepted（决策第 4 条已被取代，见下方注记）  
 **日期**: 2026-06  
 **作者**: nanoGPT-Modern Team
+
+> **Superseded 注记（2026-10，AR-v0.7.5 T008 勘误）**：本 ADR 决策第 4 条「保留
+> `for` 循环作为外层调度（因 PyTorch 不原生支持 grouped GEMM）」已被取代——
+> `model/modern_gpt.py` MoE 前向现为 **padded grouped-GEMM 全向量化实现**（stable sort
+> 分派 + 静态形状 `[E, capacity, C]` 缓冲 + 批量 matmul，无外层 Python 循环），
+> 与逐专家循环的对照实测见 EXPERIMENTS.md §6.6（16 专家 5.8×，Flat
+> `docs/results/moe_kernel.json`）。决策第 1-3 条（bincount 辅助 loss、专家权重预堆叠、
+> 向量化计算）仍有效且已由 tests/test_moe_vectorized.py 契约锁定。
 
 ---
 

@@ -1050,6 +1050,15 @@ KV Cache = 2 (K+V) × batch_size × n_kv_heads × seq_len × head_dim × 精度�
 = 2 MB per sequence
 ```
 
+> **口径交叉注（2026-10，AR-v0.7.5 T008）**：本节为简化心算口径——「模型参数
+> 50M×2B」用名义参数量与 bf16 字节数，「优化器状态 = 2×模型参数」隐含 m+v 亦按
+> 2 B 计。本仓实际训练口径不同：modern-full 实际参数 59.56M（非名义 50M），AMP
+> autocast 下参数即 fp32 主权重，Adam m+v 为 fp32——训练静态显存 = 参数+梯度+优化器
+> = **16 B/param**（59.56M×16B≈0.95 GB，与精度开关无关），比本节估算约大一倍。
+> 精确五项分解（含激活/KV 与三种精度口径表）以
+> [ai-infra/memory-flops-arithmetic.md](ai-infra/memory-flops-arithmetic.md) §1-§2
+> 与计算器 `utils/infra_math.py` 为准。
+
 ### 10.4 未来 6-12 个月扩容预测
 
 | 时间 | 目标 | 资源需求 | 技术调整 |

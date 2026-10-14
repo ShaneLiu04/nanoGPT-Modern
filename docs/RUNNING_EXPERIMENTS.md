@@ -58,10 +58,12 @@ greedy decode、`--num_samples 30`。产出「吞吐-长度」「显存-长度�
 # E-B-1/E-B-2：多长度 x 多 cache 变体
 python run_ablations.py --mode inference \
   --checkpoint out/ablations/modern-full/best_ckpt.pt --output_dir out/ablations/inf
-# E-B-3：投机解码消融
-python inference/generate.py --checkpoint out/ablations/modern-full/best_ckpt.pt \
-  --speculative --draft_model out/ablations/modern-full/draft_ckpt.pt \
-  --draft_len 2 4 8 --num_samples 30 --output_json out/ablations/spec.json
+# E-B-3：投机解码消融（suite 内部自动训 4 层 draft 并扫 draft_len 2/4/8；
+# inference/generate.py CLI 不暴露 speculative 参数，勿用它跑 E-B-3）
+python tools/experiments/run_inference_suite.py \
+  --checkpoint out/ablations/modern-full/best_ckpt.pt \
+  --output_json out/ablations/inf_suite.json \
+  --draft_iters 1200 --draft_out out/ablations/draft
 ```
 
 ### C 组：训练系统效率（同规模 500 iters 短程对比）
