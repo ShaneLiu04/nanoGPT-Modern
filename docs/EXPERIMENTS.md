@@ -382,6 +382,40 @@ MoE 前向微基准（4096 token，bf16）：专家数 2 / 4 / 8 / 16 时，分�
 
 能说的：教学级 kernel 在本机的相对表现与归因（fusion 收益真实存在；朴素 tiling 与生产库差距真实存在）。不能说的：任何绝对性能结论外推——kernel 未做 autotune/向量化调优，bf16 档未用 tensor core（加载即升 fp32，刻意求逐位可解释）；加速比不设阈值、诚实报告（AR-v0.7.0 需求裁定）。
 
+### 6.10 纯 CPU 三件套：精度 / 拟合 / 数据探针（AR-v0.7.5 / T004-T007）
+
+环境：纯 CPU（无 GPU 依赖），full 模式三工具合计 11 秒（precision 3s / scaling 1s / data 7s，17.8GB train.bin memmap 跳跃抽样不整页加载）。产物 `docs/results/{precision_probe,scaling_fit,data_probe}.json`，与 [numerical-precision.md](ai-infra/numerical-precision.md) / [scaling-laws.md](ai-infra/scaling-laws.md) / [data-pipeline.md](ai-infra/data-pipeline.md) 三手册互证。
+
+**precision_probe**（fp32 基准，n=2008 梯度、K=4096 累加、chunk=32）：
+
+| 实验 | 实测 | 手册锚点 |
+|------|------|----------|
+| 相对误差网格 | bf16 max **3.89e-3**（≈2^-8）、fp16 max 4.87e-4（≈2^-11） | §2 尾数位数即误差阶 |
+| RNE tie-to-even | 6/6 命中（fp16 [2048,4096) 奇数平局） | §2.1 舍入确定性 |
+| 累加精度 K=4096 | fp32 1.23e-7 vs bf16 **1.34e-2**（差 5 个数量级） | §3 分块 fp32 累加的全部理由 |
+| loss scaling | 朴素 fp16 梯度 **99.6% 下溢为零**；固定 scale 65536 恢复 58.4% + 溢出被检出 | §4 动态 scaling 的必要性 |
+
+容差链：tolerance_refs 直接读 `triton_kernels.json` 的 bf16 atol/rtol=1e-2——本节 bf16 max 3.89e-3 < 1e-2，与 6.9 节 Triton bf16 档容差同源闭环。
+
+**fit_scaling**（真实 7 点 + 合成演示 + 预算对照）：
+
+- 真实 7 点 Kaplan 拟合**诚实降级**：converged=True 但 R²≈-1.7e-10、Jacobian 条件数=inf → `param_uncertainty.reliable=false`，summary 报 "not meaningful"。这是 scaling-laws.md §6.3 不可辨识陷阱的**活例**——pinv 在病态方向给出 α_std≈4.5e-11 的虚假高置信，工具检测并拒绝引用（7 组同预算 D 恒定 + 架构消融混入 N，拟合无解释力）；
+- 合成联合式 25 点网格（0.2% 噪声）：恢复 α_N=0.3422（真 0.34，**0.65% 误差**）、α_D=0.2877（真 0.28，2.75%）——拟合器本身正确，真实数据的问题在数据不在代码；
+- 预算对照：corpus 口径 tokens/param=24.9（名义 50M；实际 59.56M 口径 20.9 贴 Chinchilla 20，见手册 §6.2 双口径），consumed 589,824,000 t（半个纪元）→ 实际训练欠 compute-optimal 一半数据。
+
+**data_probe**（真实剖析 source=real + 合成实验 source=synthetic）：
+
+| 实验 | 实测 | 互证锚点 |
+|------|------|----------|
+| bin_profile（200,003 token 跳跃采样） | dtype uint16 ✓、值域 [0, 50256] ✓、EOT 频率 **9.20e-4** | MIGRATION §3 判据 8.87e-4（偏差 4%，同量级）✓ |
+| doc_length_dist（14,052 docs） | mean 1138.4 / p50 724 / p99 7922 | 手册 §3「doc 均长 ~1128」贴线 ✓ |
+| contamination_demo | 注入 needle 检出 100%、误报 0% | data-pipeline.md §5 污染检测演示 |
+| minhash_dedup_curve | dup=[0,0.25,0.5,0.75,1.0] → 检出=[0,0.25,0.5,0.667,**0.917**] 单调 | 生产 MinHashDeduplicator 实调用（keep/drop mask 语义） |
+| greedy_packing（300 docs，U[50,150]） | fill_ratio **0.944**、padding 浪费 5.6% | 手册 §4 packing 教学算例 |
+| doc_boundary_stats | 9.68 docs/block、跨文档块占比 100% | document_ids 掩码注意力的存在理由 |
+
+能说的：四精度误差阶与尾数位数的对应、fp32 分块累加的数量级收益、固定 loss scale 的两头不讨好（下溢未全救回 + 溢出出现）、真实 bin 的 EOT/doc 长度与迁移判据贴线、MinHash 曲线单调性。不能说的：真实 7 点拟合的任何参数值（病态诚实降级）；去重曲线的绝对检出率（合成语料、词表采样，仅证单调性与语义正确）；packing 0.944 只对 U[50,150] 分布成立（分布依赖，真实语料需重跑）。
+
 ## 7. 关键结论与限制
 
 1. 3.3M 合成数据实验只证明链路能跑通。架构比较以第 6 节的 OpenWebText 前缀为准。
@@ -429,6 +463,11 @@ python -m pytest tests/ -q
 
 # 9. roofline 微基准（6.8 节）
 python tools/infra/run_roofline.py --quick
+
+# 10. 纯 CPU 三件套（6.10 节；train.bin 缺失时 data_probe 守卫降级，合成实验照跑）
+python tools/infra/precision_probe.py --output-json docs/results/precision_probe.json
+python tools/infra/fit_scaling.py --output-json docs/results/scaling_fit.json
+python tools/infra/data_probe.py --output-json docs/results/data_probe.json
 ```
 
 ---
@@ -458,5 +497,6 @@ python tools/infra/run_roofline.py --quick
 | 推理 | `docs/results/inference.json` |
 | 训练系统 / MoE kernel | `docs/results/system.json`, `docs/results/moe_kernel.json` |
 | roofline | `docs/results/roofline.json` |
+| 精度 / 拟合 / 数据探针（6.10） | `docs/results/precision_probe.json`, `docs/results/scaling_fit.json`, `docs/results/data_probe.json` |
 | 预训练与 SFT 评测 | `docs/results/pretrain_eval.json`, `docs/results/sft_eval.json` |
 | GRPO 曲线 | `docs/results/alignment.json` |
