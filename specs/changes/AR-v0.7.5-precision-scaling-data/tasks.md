@@ -18,10 +18,14 @@
 | T005 | FR4 fit_scaling.py + tests/test_fit_scaling.py（TDD）：真实 7 点 Kaplan 式 L(N)=E+A/N^α 多初值拟合（D 恒定→B/D^β 不可辨识，联合式在合成数据演示）、外推预测、Chinchilla 预算计算器（文献参数默认+本仓拟合对照，6ND 口径对照 infra_math） → docs/results/scaling_fit.json（fit_quality 诚实报告；数据源缺失报错退出 1、不收敛诚实降级） | T002 | passing | 2026-10-14 完成（commit 96c92ed）；design D3：7 组同预算 D 恒定是拟合策略核心依据；多初值策略经原型调参（α 恢复 0.7% 误差）；17 passed；三绿；数据源守卫 ablation-summary.json/budget.json |
 | T006 | FR6 data_probe.py + tests/test_data_probe.py（TDD）：train.bin memmap 抽样（top-K 直方图/EOT 频率/doc 长度/dtype 核验/污染检测演示）+ 合成 corpus（MinHash 去重率曲线/packing 填充率/doc_boundary 统计） → docs/results/data_probe.json（train.bin 缺失守卫降级、测试零大文件依赖） | T003 | passing | 2026-10-14 完成（commit 944f9b6）；EOT 频率对照 MIGRATION §3（1/1128≈8.87e-4 量级）；memmap 零拷贝；dedup 曲线调用生产 MinHashDeduplicator（keep/drop mask 语义核实）；16 passed；三绿 |
 | T007 | FR2/4/6 验收：三工具本机全量实测（各 ≤2 分钟）落 JSON；EXPERIMENTS.md 新增记录节（三工具表格+能说/不能说）；scaling 拟合残差与 data EOT 频率对照判据核验 | T004, T005, T006 | passing | 2026-10-14 完成：full 3s/1s/7s；§6.10 记录节+§8 命令+§10 索引；EOT 9.20e-4 vs 判据 8.87e-4 偏差 4% 同量级；doc 均长 1138.4 vs ~1128 贴线；拟合诚实降级（R²≈0+cond=inf→reliable=false，pinv 虚假小 std 检测，随 fix commit 0e4994d） |
-| T008 | FR7 勘误三件：①主题 6 锚点漂移（ai-infra/README.md:23 → modern_gpt.py/run_inference_suite.py 实际位置 + RUNNING_EXPERIMENTS B 组命令改为实际可执行）；②ADR-006 superseded 注记；③TECH_REPORT 容量规划口径交叉注；quantize_model 待办登记（不修，归 v0.9.0） | T007 | pending | B 组命令勘误须与 run_inference_suite.py argparse 核对（吸取 E-F-4 教训） |
+| T008 | FR7 勘误三件：①主题 6 锚点漂移（ai-infra/README.md:23 → modern_gpt.py/run_inference_suite.py 实际位置 + RUNNING_EXPERIMENTS B 组命令改为实际可执行）；②ADR-006 superseded 注记；③TECH_REPORT 容量规划口径交叉注；quantize_model 待办登记（不修，归 v0.9.0） | T007 | passing | 2026-10-14 完成：①README 主题 6 锚点改 model/modern_gpt.py generate(draft_model/draft_tokens)+_verify 与 run_inference_suite.py（E-B-3），B 组命令改 `run_inference_suite.py --draft_iters/--draft_out`（核 argparse 8 参数+generate.py 15 参数确认原 --speculative/--draft_model/--draft_len 三参不存在，E-F-4 纪律执行）；②ADR-006 决策第 4 条 superseded 注记（现实现 padded grouped-GEMM 无外层循环，§6.6 实测 5.8×，第 1-3 条仍有效）；③TECH_REPORT §10.3 口径交叉注（简化心算 vs 仓内 autocast 16B/param、59.56M 实际口径，锚 memory-flops 手册+计算器）；④quantize_model 待办登记见下方延迟项 |
 | T009 | FR8a 索引更新：ai-infra/README.md 主题地图 7→10（主题 8/9/10 转已交付+挂手册链接）、路线图补 v0.8.5 行（MoE+长上下文）、阅读顺序衔接；链接存在性检查 100% | T008 | pending | 全文引用文件 Test-Path 核验 |
 | T010 | FR8b README.md 文档索引挂三手册 + badge 测试数更新；纯增量不破坏结构 | T009 | pending | badge 现已为 711+（v0.7.0 T006 更新）；本 AR 以 T011 全量实测为准回填（req 门控 W1 修正） |
 | T011 | FR8c 质量收口：全量回归零回归（基线 711 passed / 2 skipped）+ 三绿（black/ruff/mypy 零新增）+ gitee slim-mirror 同步 + 链接终检（含 B 组勘误命令目标核验） | T010 | pending | mypy 遗留 19 处为 db3b7ff 前旧账不新增即可 |
+
+## 延迟项（登记不修）
+
+- **quantize_model 生产调用方缺失**（model/quantization.py L182，导出于 model/__init__.py，仅 tests/test_quantization.py 引用，无训练/推理路径调用）：归 v0.9.0 量化总论（与 numerical-precision.md §8 fp8 展望、ADR-004 KV 量化一并处理）。本 AR 仅登记（srs §4 明确排除）。
 
 ## 状态说明
 
