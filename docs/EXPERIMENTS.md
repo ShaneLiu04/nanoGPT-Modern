@@ -416,6 +416,44 @@ MoE 前向微基准（4096 token，bf16）：专家数 2 / 4 / 8 / 16 时，分�
 
 能说的：四精度误差阶与尾数位数的对应、fp32 分块累加的数量级收益、固定 loss scale 的两头不讨好（下溢未全救回 + 溢出出现）、真实 bin 的 EOT/doc 长度与迁移判据贴线、MinHash 曲线单调性。不能说的：真实 7 点拟合的任何参数值（病态诚实降级）；去重曲线的绝对检出率（合成语料、词表采样，仅证单调性与语义正确）；packing 0.944 只对 U[50,150] 分布成立（分布依赖，真实语料需重跑）。
 
+### 6.11 长上下文四档外推 / needle 网格 / MoE 路由探针（AR-v0.8.5 / T004-T005-T007）
+
+> **本地低算力档，云端 50M 全量档待回填**（E-C-6 除外：纯 CPU 合成探针是原生环境，非降级档）。
+
+环境：本地纯 CPU。E-A-8/E-A-9 用自训 tiny ModernGPT checkpoint（4L/4H/256D、block 256、600 iters、val loss 6.02，`out/tiny-ea8/best_ckpt.pt`，vocab 50257 与 tiktoken gpt2 对齐）。产物：`docs/results/{context_eval_tiny_local,needle_eval_tiny_local,moe_probe}.json`。
+
+**E-A-8 四档 RoPE 外推**（lengths [128,256,512,1024]、train_block=256、batch 4×8 windows、seed 1337+length，factor = max(1, L/train_block)）：
+
+| L | factor | naive | ntk | pi | yarn |
+|---|--------|-------|-----|-----|------|
+| 128 | 1.0 | 393.85 | 393.85 | 393.85 | 393.85 |
+| 256 | 1.0 | 440.99 | 440.99 | 440.99 | 440.99 |
+| 512 | 2.0 | 428.10 | 422.51 | **481.93** | **421.28** |
+| 1024 | 4.0 | 510.01 | 497.98 | **620.98** | **488.13** |
+
+- factor=1 四档全等：retune 恒等健全性（naive 分支即恒等变换），锁定 rope_retune 实现正确性；
+- 同 L 内比较才有意义（同 windows 同 seed；跨 L 窗口 token 数不同，绝对值不可比——弱模型 L=512 甚至低于 L=256）；
+- L=1024（4x 训练长度）：yarn 488.13 < ntk 497.98 < naive 510.01 < pi 620.98。NTK/YaRN 相对 naive 收益 2.2%~4.3%；PI 零样本重标定劣势 -21.7%，与文献一致（PI 需在扩展长度上继续训练才生效，零样本下高频分辨率损失不可逆）——诚实教学点，不是实现 bug；
+- yarn 温度随 factor 增长（1.069 / 1.139 = 1+0.1·ln s），复用 `attn_temperature` 机制不加新路径。
+
+**E-A-9 needle 网格**（[128,256] × depth {0.0,0.5,1.0} × 1 trial，max_new_tokens 8）：overall accuracy **0.0**（6 cells 全 0，by_depth/by_length 全 0）。弱模型预期内（val 6.02 无检索能力）——本档结论仅「管道贯通」：depth/length/trial 遍历、聚合统计、JSON 落盘语义正确。检索能力本身要等 50M 档。
+
+**E-C-6 MoE 路由探针**（纯 CPU 全网格：E=8、T_total=256、合成路由器 seed 0、cf {0.5,1.0,1.25}、skew k {1,2,4}）：
+
+| 实验 | 实测 | 解读 |
+|------|------|------|
+| capacity cf=0.5 | capacity 16/专家，dropped 128（50.0%），dropped_rows_zero ✓ | 名义容量减半，均匀负载也丢一半 |
+| capacity cf=1.0 | capacity 32/专家，dropped 26（**10.2%**），dropped_rows_zero ✓ | 名义"刚好"下不均衡仍溢出——capacity headroom 的存在理由 |
+| capacity cf=1.25 | capacity 40/专家，dropped 0 | 冗余清零：本仓 forward 默认 cf=1.25 的设计依据 |
+| load_distribution | fractions 0.078~0.156，熵 **2.053**（上限 ln8=2.079 的 98.8%），max/min=2.0 | 未训练路由器接近均匀但仍有 2 倍最值差 |
+| skew_injection k=1/2/4 | overflow 10.2% → 12.1% → **16.0%**（单调） | 路由偏斜单调放大溢出；E-A-5 的负载均衡 aux loss 就是压这条曲线的机制 |
+
+mirror 恒等：三档 cf 全部 `dropped_rows_zero=true`——`dispatch_stats` 镜像与真实 forward 的 keep 集合逐 token 一致（契约测试锁定）。
+
+能说的：factor=1 恒等健全性；同 L 内方法排序（yarn<ntk<naive<pi）与 PI 零样本劣势；cf 扫描溢出率单调与 cf=1.25 冗余清零；mirror=forward 恒等；skew 单调放大。不能说的：跨 L 的 PPL 绝对值比较；tiny 600-iter 弱模型的排序幅度外推到 50M（方向与文献一致，幅度不可比）；needle 0.0 只是管道验证非能力结论；合成路由器的负载熵不代表训练后路由器（真实分布见 §6.2 E-A-5）。
+
+云端 50M 回填占位：E-A-8 用 modern-full checkpoint + 默认参（`--lengths 512 1024 2048 4096 --train_block 1024`）；E-A-9 默认 4 长度 × 5 深度 × 3 trials；E-C-6 无需云端（若出现形状兼容的真实 router 再补 checkpoint 来源档）。命令逐参见 RUNNING_EXPERIMENTS.md A/C 组。
+
 ## 7. 关键结论与限制
 
 1. 3.3M 合成数据实验只证明链路能跑通。架构比较以第 6 节的 OpenWebText 前缀为准。
@@ -468,6 +506,18 @@ python tools/infra/run_roofline.py --quick
 python tools/infra/precision_probe.py --output-json docs/results/precision_probe.json
 python tools/infra/fit_scaling.py --output-json docs/results/scaling_fit.json
 python tools/infra/data_probe.py --output-json docs/results/data_probe.json
+
+# 11. 长上下文四档外推 / needle 网格 / MoE 路由探针（6.11 节；本地档用 tiny ckpt，云端档用 modern-full）
+python tools/experiments/run_context_eval.py \
+  --checkpoint out/tiny-ea8/best_ckpt.pt --train_block 256 \
+  --lengths 128 256 512 1024 --num_batches 8 \
+  --output_json docs/results/context_eval_tiny_local.json
+python tools/experiments/run_needle_eval.py \
+  --checkpoint out/tiny-ea8/best_ckpt.pt \
+  --context_lengths 128 256 --depths 0.0 0.5 1.0 --num_trials 1 \
+  --max_new_tokens 8 --max_context_length 256 \
+  --output_json docs/results/needle_eval_tiny_local.json
+python tools/infra/moe_probe.py --output-json docs/results/moe_probe.json
 ```
 
 ---
@@ -498,5 +548,6 @@ python tools/infra/data_probe.py --output-json docs/results/data_probe.json
 | 训练系统 / MoE kernel | `docs/results/system.json`, `docs/results/moe_kernel.json` |
 | roofline | `docs/results/roofline.json` |
 | 精度 / 拟合 / 数据探针（6.10） | `docs/results/precision_probe.json`, `docs/results/scaling_fit.json`, `docs/results/data_probe.json` |
+| 四档外推 / needle / MoE 探针（6.11） | `docs/results/context_eval_tiny_local.json`, `docs/results/needle_eval_tiny_local.json`, `docs/results/moe_probe.json` |
 | 预训练与 SFT 评测 | `docs/results/pretrain_eval.json`, `docs/results/sft_eval.json` |
 | GRPO 曲线 | `docs/results/alignment.json` |

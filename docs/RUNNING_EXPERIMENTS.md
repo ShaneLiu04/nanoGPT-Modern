@@ -8,7 +8,7 @@
 
 ## 1. 实验矩阵总览
 
-四大组、共 14 个实验。编号 `E-<组>-<序>`，与 EXPERIMENTS.md 章节对应。
+五大组（A/B/C/D/F）、共 27 个实验。编号 `E-<组>-<序>`，与 EXPERIMENTS.md 章节对应。
 所有云端实验固定 `seed 1337`、`out_root out/ablations`，保证与既有记录可比。
 
 ### A 组：架构组件消融（预训练收敛对比）
@@ -24,6 +24,8 @@
 | E-A-5 | MoE | modern-full vs moe (top-1, E=4) | 稀疏专家在等计算下损失更低（负载均衡损失可观察） | loss 曲线 + 专家负载分布图 |
 | E-A-6 | QK-Norm | modern-full vs qk-norm | QK-Norm 对小模型损失影响中性，主要收益在训练稳定性 | loss 曲线 + 梯度范数分层曲线 |
 | E-A-7 | NTK 长度外推 | modern-full checkpoint 评测 | NTK-aware RoPE 在 2-4x 训练长度下 PPL 退化显著小于基线 RoPE | PPL-上下文长度曲线（NTK on/off 双线） |
+| E-A-8 | RoPE 外推四档对照 | 同一 checkpoint retune：naive vs ntk vs pi vs yarn | YaRN/NTK 在 2-4x 训练长度下 PPL 退化小于 naive；PI 零样本重标定劣势可观察（文献一致的诚实教学点） | PPL-长度曲线（四线族） |
+| E-A-9 | needle 大海捞针 | depth×context 网格检索准确率（可选 rope retune 复跑） | 训练长度内准确率近深度无关，超训练长度后沿深度先崩（与 E-A-7/E-A-8 口径互证） | 准确率热力图（depth×length） |
 
 执行（云端，50M 规格 18k iters，约 7 组 x 4-6h，详见 MIGRATION.md §5）：
 
@@ -36,6 +38,21 @@ python run_component_ablations.py \
 python tools/experiments/run_ntk_eval.py \
   --checkpoint out/ablations/ablation-modern-full/best_ckpt.pt \
   --output_json out/cloud/ntk_eval.json
+# E-A-8：四档对照（factor = max(1, length/train_block)，窗口采样语义同 E-A-7）
+python tools/experiments/run_context_eval.py \
+  --checkpoint out/ablations/ablation-modern-full/best_ckpt.pt \
+  --output_json docs/results/context_eval.json
+#   可选参数（默认值）：--lengths 512 1024 2048 4096  --methods naive ntk pi yarn
+#   --val_bin data/openwebtext/val.bin  --batch_size 4  --num_batches 12  --seed 1337
+#   --train_block 1024  --quick（低算力档：lengths=[512,1024] x num_batches=4）
+# E-A-9：needle 网格（tiktoken gpt2 分词，需 pip install tiktoken）
+python tools/experiments/run_needle_eval.py \
+  --checkpoint out/ablations/ablation-modern-full/best_ckpt.pt \
+  --output_json docs/results/needle_eval.json
+#   可选参数（默认值）：--context_lengths 512 1024 2048 4096  --depths 0.0 0.25 0.5 0.75 1.0
+#   --num_trials 3  --max_new_tokens 20  --max_context_length 4096
+#   --rope_method {none,ntk,pi,yarn}（none=按训练原样评）  --rope_factor 1.0
+#   --quick（低算力档：[512,1024] x [0.0,0.5,1.0] x 1 trial）
 ```
 
 ### B 组：推理效率对比（上下文长度扫描）
@@ -75,6 +92,18 @@ python tools/experiments/run_inference_suite.py \
 | E-C-3 | MoE 向量化 kernel | 逐专家 for-loop vs grouped GEMM | GPU 上向量化 2-5x（CPU 已测 2x），专家数越多差距越大 | kernel 耗时-专家数曲线 |
 | E-C-4 | 分布式 | 单卡 vs DDP vs FSDP（多卡实例，nccl） | DDP 近线性扩展；FSDP 在 50M 规模下因通信开销不占优（诚实报告分界点） | tok/s-卡数曲线（强扩展）+ 显存对比 |
 | E-C-5 | KV 修复回归 | decode 手写 GQA kernel vs SDPA enable_gqa（修复前后） | 修复后峰值显存平坦（本机已验证 12,335 -> ~0 B/token），云端 flash 后端行为对照 | 显存-上下文长度曲线（修复前后 + 前端差异注解） |
+| E-C-6 | MoE 路由探针 | capacity factor 扫描 / router 负载分布 / 偏斜注入（纯 CPU，合成路由器） | 名义容量 cf=1.0 下不均衡仍有溢出，cf=1.25 冗余清零；偏斜单调放大溢出（溢出率与 forward 零行交叉验证） | dropped 率-cf 曲线 + 负载熵/最值比 + 偏斜-溢出曲线 |
+
+E-C-6 执行（纯 CPU，秒级；探针原生环境是 CPU 合成路由器，不是降级档）：
+
+```bash
+python tools/infra/moe_probe.py --output-json docs/results/moe_probe.json
+#   可选参数（默认值）：--seed 0  --quick（cf {0.5,1.0} x T=64 x skew k {1,2}）
+#   --checkpoint <ckpt>：可选加载形状兼容（E=8, d=32）的真实 router.weight；
+#   缺失/不兼容 -> 记 warning 跳过该来源，合成档照跑，exit 0（守卫降级语义）
+#   判读：cf=0.5 名义丢一半、cf=1.0 仍溢出（不均衡代价）、cf=1.25 冗余清零
+#   ——与 E-A-5 负载均衡 aux loss、moe-systems.md 容量小节互证
+```
 
 ### D 组：对齐流水线质量（复用 A 组 checkpoint）
 
@@ -251,6 +280,9 @@ scp -P <PORT> -r root@<REGION>.autodl.com:/root/autodl-tmp/nanoGPT-Modern/out/ab
 | E-F-2 | part-done | AR-v0.6.0 | 本机 Quadro RTX 5000 已跑 --quick（EXPERIMENTS.md §6.8）；全量 13 点 + MFU 待云卡 | `docs/results/roofline.json`；`roofline_<gpu>.json`（待产出） |
 | E-F-3 | planned | AR-v0.6.0 | 任一 GPU；公式口径 hd=64 fp32 = 12,288 B/token | 斜率表（待产出；本机修复记录 MIGRATION.md §8.2） |
 | E-F-4 | planned | AR-v0.7.0 | 云 Linux + 配套 triton（本机断裂为教学案例）；Triton 三件套本机已测（EXPERIMENTS.md §6.9） | `docs/results/inductor_cloud.json`（待产出） |
+| E-A-8 | part-done | AR-v0.8.5 | 本地 tiny 低算力档已跑（EXPERIMENTS.md §6.11）；云端 50M 全长度档待回填 | `docs/results/context_eval_tiny_local.json`；`docs/results/context_eval.json`（待产出） |
+| E-A-9 | part-done | AR-v0.8.5 | 本地 tiny 管道验证（弱模型 accuracy 0.0 预期内）；云端 50M 档待回填 | `docs/results/needle_eval_tiny_local.json`；`docs/results/needle_eval.json`（待产出） |
+| E-C-6 | reported | AR-v0.8.5 | 纯 CPU 合成路由器全网格（探针原生环境，非降级档）；--checkpoint 来源因仓内无形状兼容 router（E=8,d=32）守卫降级 | `docs/results/moe_probe.json`，EXPERIMENTS.md §6.11 |
 
 ### 更新历史
 
@@ -261,3 +293,4 @@ scp -P <PORT> -r root@<REGION>.autodl.com:/root/autodl-tmp/nanoGPT-Modern/out/ab
 | 2026-10-12 | E-D-3 | 在 RTX PRO 6000 Blackwell 上用冻结的 SFT 采样做 DPO/IPO。奖励上升来自过程分，准确率没有上升 |
 | 2026-10-13 | AR-v0.6.0（T005） | 新增 F 组（E-F-1/2/3）微基准 SOP：通信带宽/多卡 roofline+MFU/KV 物化复测，四要素齐备；E-F-2 本机 --quick 部分完成（§6.8） |
 | 2026-10-14 | AR-v0.7.0（T004） | 新增 E-F-4 inductor 全链路验证 SOP（四要素齐备）；Triton 微实验三件套本机实测完成（EXPERIMENTS.md §6.9，`docs/results/triton_kernels.json`） |
+| 2026-10-15 | AR-v0.8.5（T004/T005/T007/T008） | 新增 E-A-8 四档 RoPE 外推对照、E-A-9 needle 网格、E-C-6 MoE 路由探针（命令逐参核对 argparse）；本地低算力档实测入 EXPERIMENTS.md §6.11，云端 50M 档占位 |
