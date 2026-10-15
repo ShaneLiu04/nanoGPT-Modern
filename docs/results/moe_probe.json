@@ -1,0 +1,89 @@
+{
+  "meta": {
+    "tool": "moe_probe",
+    "timestamp": "2026-10-15T13:37:44.741620",
+    "seed": 0,
+    "torch_version": "2.5.1+cu121"
+  },
+  "config": {
+    "E": 8,
+    "T_total": 256,
+    "capacity_factors": [
+      0.5,
+      1.0,
+      1.25
+    ],
+    "hidden": 32,
+    "source": "synthetic"
+  },
+  "experiments": [
+    {
+      "name": "capacity_sweep",
+      "source": "synthetic",
+      "metrics": {
+        "sweep": [
+          {
+            "cf": 0.5,
+            "capacity": 16,
+            "dropped": 128,
+            "drop_rate": 0.5,
+            "dropped_rows_zero": true
+          },
+          {
+            "cf": 1.0,
+            "capacity": 32,
+            "dropped": 26,
+            "drop_rate": 0.1015625,
+            "dropped_rows_zero": true
+          },
+          {
+            "cf": 1.25,
+            "capacity": 40,
+            "dropped": 0,
+            "drop_rate": 0.0,
+            "dropped_rows_zero": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "load_distribution",
+      "source": "synthetic",
+      "metrics": {
+        "fractions": [
+          0.1015625,
+          0.1328125,
+          0.1171875,
+          0.078125,
+          0.15625,
+          0.1015625,
+          0.15625,
+          0.15625
+        ],
+        "entropy": 2.053250312805176,
+        "max_min_ratio": 2.0
+      }
+    },
+    {
+      "name": "skew_injection",
+      "source": "synthetic",
+      "metrics": {
+        "curve": [
+          {
+            "k": 1,
+            "overflow_rate": 0.1015625
+          },
+          {
+            "k": 2,
+            "overflow_rate": 0.12109375
+          },
+          {
+            "k": 4,
+            "overflow_rate": 0.16015625
+          }
+        ]
+      }
+    }
+  ],
+  "warnings": []
+}
