@@ -10,7 +10,7 @@
 
 | ID | 任务 | 依赖 | 规模估计 | 状态 |
 |----|------|------|----------|------|
-| T001 | compile-stack.md 新增 §0 GPU 执行模型前置章（SM/warp/occupancy/层级/cp.async/TMA，roofline.json 算术闭合，sm75 无 TMA 明标） | 无 | S | Pending |
+| T001 | compile-stack.md 新增 §0 GPU 执行模型前置章（SM/warp/occupancy/层级/cp.async/TMA，roofline.json 算术闭合，sm75 无 TMA 明标） | 无 | S | Done |
 | T002 | RotaryEmbedding rope_scaling 扩展（none/ntk/pi/yarn，TDD：Red 测试先行→实现→config_models 校验→train CLI flag） | 无 | M | Pending |
 | T003 | 手册 long-context.md（NTK 复盘/PI/YaRN 机制与本仓实现对照/滑窗+cache 驱逐/needle 方法论/MLA 理论节含内嵌 MQA/GQA/MLA 对比表/KV 复习） | T002 | M | Pending |
 | T004 | 新建 run_context_eval.py 四档对照入口（naive/ntk/pi/yarn，--quick 低算力档，JSON 落 docs/results/）+ rope_retune.py 共享模块（D4：run_ntk_eval.py 不改，E-A-7 命令字节稳定）+ 本地低算力档实测 | T002 | M | Pending |
