@@ -35,6 +35,14 @@ from utils.lr_scheduler import LRScheduler
 enable_tf32()
 
 
+def _rope_factor_arg(value: str) -> float:
+    """argparse type for --rope_factor: float, must be >= 1.0."""
+    factor = float(value)
+    if factor < 1.0:
+        raise argparse.ArgumentTypeError(f"rope_factor must be >= 1.0, got {factor}")
+    return factor
+
+
 def get_args():
     parser = argparse.ArgumentParser()
     add_common_trainer_args(parser)
@@ -58,6 +66,20 @@ def get_args():
         default="rope",
         choices=["rope", "learned"],
         help="Position encoding: RoPE (default) or learnable absolute embedding",
+    )
+    parser.add_argument(
+        "--rope_scaling_type",
+        type=str,
+        default="none",
+        choices=["none", "ntk", "pi", "yarn"],
+        help="RoPE length scaling: none (default), ntk base retune, "
+        "pi position interpolation, or yarn NTK-by-parts",
+    )
+    parser.add_argument(
+        "--rope_factor",
+        type=_rope_factor_arg,
+        default=1.0,
+        help="RoPE scaling factor (>= 1.0, used when --rope_scaling_type != none)",
     )
     parser.add_argument(
         "--ffn_variant",
@@ -287,6 +309,14 @@ class PretrainTrainer(BaseTrainer):
                     ring_block_size_q=args.ring_block_size_q,
                     ring_block_size_kv=args.ring_block_size_kv,
                     position_encoding=getattr(args, "position_encoding", "rope"),
+                    rope_scaling=(
+                        None
+                        if getattr(args, "rope_scaling_type", "none") == "none"
+                        else {
+                            "type": args.rope_scaling_type,
+                            "factor": getattr(args, "rope_factor", 1.0),
+                        }
+                    ),
                     ffn_variant=getattr(args, "ffn_variant", "swiglu"),
                     qk_norm=getattr(args, "qk_norm", False),
                     num_experts=getattr(args, "num_experts", 1),

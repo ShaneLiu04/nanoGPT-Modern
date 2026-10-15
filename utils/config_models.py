@@ -92,6 +92,35 @@ class ModernGPTModelConfig(ModelConfig):
             return n_head
         return v
 
+    @field_validator("rope_scaling")
+    @classmethod
+    def _validate_rope_scaling(cls, v: dict | None) -> dict | None:
+        """Validate rope_scaling shape: type / factor / optional train_len.
+
+        Empty dict (no scaling) is allowed.  ``factor`` defaults to 1.0
+        downstream when omitted; ``train_len`` is only consumed by yarn.
+        """
+        if not v:
+            return v
+        if v.get("type") not in ("ntk", "pi", "yarn"):
+            raise ValueError(
+                f"rope_scaling.type 必须是 ntk/pi/yarn 之一，got {v.get('type')!r} "
+                f"(rope_scaling.type must be one of ntk/pi/yarn)"
+            )
+        factor = v.get("factor", 1.0)
+        if not isinstance(factor, (int, float)) or factor < 1.0:
+            raise ValueError(
+                f"rope_scaling.factor 必须 >= 1.0，got {factor!r} "
+                f"(rope_scaling.factor must be a number >= 1.0)"
+            )
+        train_len = v.get("train_len")
+        if train_len is not None and (not isinstance(train_len, int) or train_len <= 0):
+            raise ValueError(
+                f"rope_scaling.train_len 必须是正整数，got {train_len!r} "
+                f"(rope_scaling.train_len must be a positive int)"
+            )
+        return v
+
     @model_validator(mode="after")
     def _check_gqa(self) -> ModernGPTModelConfig:
         """Ensure n_head is divisible by n_kv_head.
@@ -115,7 +144,7 @@ class ModernGPTModelConfig(ModelConfig):
         """Reject invalid ablation-switch combinations with readable messages."""
         if self.position_encoding == "learned" and self.rope_scaling is not None:
             raise ValueError(
-                "learned 绝对位置编码不支持 NTK 缩放，请去掉 rope_scaling "
+                "learned 绝对位置编码不支持 rope 缩放 (NTK/PI/YaRN)，请去掉 rope_scaling "
                 "(position_encoding='learned' is incompatible with rope_scaling)"
             )
         if self.ffn_variant == "gelu" and self.num_experts > 1:
