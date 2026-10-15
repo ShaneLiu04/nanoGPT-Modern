@@ -424,7 +424,7 @@ docker-compose up train    # 仅训练
 
 ## 实验与结果
 
-完整记录见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)，实验矩阵与执行手册见 [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md)（17 个深度对比实验的规划、状态与云端 SOP），infra 微基准（roofline/通信带宽/KV 物化）见其 F 组与 [docs/ai-infra/](docs/ai-infra/README.md)。
+完整记录见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)，实验矩阵与执行手册见 [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md)（27 个深度对比实验的规划、状态与云端 SOP），infra 微基准（roofline/通信带宽/KV 物化）见其 F 组与 [docs/ai-infra/](docs/ai-infra/README.md)。
 
 ### 已验证结果
 
@@ -538,7 +538,9 @@ nanogpt-modern/
 | [docs/ai-infra/numerical-precision.md](docs/ai-infra/numerical-precision.md) | 数值精度手册：四精度表示学、AMP autocast 逐行、fp32 分块累加 vs bf16 差 5 个数量级、loss scaling、fp8 展望（precision_probe 互证） |
 | [docs/ai-infra/scaling-laws.md](docs/ai-infra/scaling-laws.md) | Scaling laws 手册：Kaplan vs Chinchilla、B_crit、记账三件套口径、七点拟合三局限与病态诚实降级（fit_scaling 互证） |
 | [docs/ai-infra/data-pipeline.md](docs/ai-infra/data-pipeline.md) | 数据管道手册：语料/去重/打包/污染防御全链路、EOT/doc 统计判据、MIGRATION §3 复盘（data_probe 互证） |
-| [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md) | 实验运行手册：17 个对比实验矩阵（A-F 六组）、云端 SOP、图表与报告规范、状态跟踪（AR 更新联动） |
+| [docs/ai-infra/long-context.md](docs/ai-infra/long-context.md) | 长上下文手册：NTK/PI/YaRN 机制与本仓实现逐行对照、滑窗+cache 驱逐、needle 检索方法论、MLA 理论档、KV 决策树（E-A-7/E-A-8 互证） |
+| [docs/ai-infra/moe-systems.md](docs/ai-infra/moe-systems.md) | MoE 系统工程手册：top-1 路由/aux loss/capacity 机制、容量负载微实验解读、专家并行理论档、E-A-5 未赢四因子归因、grouped GEMM 5.8× 复盘 |
+| [docs/RUNNING_EXPERIMENTS.md](docs/RUNNING_EXPERIMENTS.md) | 实验运行手册：27 个对比实验矩阵（A/B/C/D/F 五组）、云端 SOP、图表与报告规范、状态跟踪（AR 更新联动） |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | v0.2.0 → v0.3.0 变更日志、42 项改进清单、已知限制 |
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | 实验记录、复现命令、关键结论 |
 | [docs/adr/](docs/adr/README.md) | 架构决策记录：GQA grouped-broadcast、GRPO vs PPO、KV 量化、MoE grouped GEMM 等 |

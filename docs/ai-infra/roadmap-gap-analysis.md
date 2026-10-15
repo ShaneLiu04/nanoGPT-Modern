@@ -4,6 +4,8 @@
 > 未利用代码资产清点 + 实验矩阵缺口扫描，三视角交叉），回答「针对学习 AI infra 的
 > 需要，还应添加哪些内容」。本文档是后续 AR（v0.8.5 起）srs 范围的规划输入。
 > 所有「本仓锚点」均经 Glob/Grep 验证存在。
+> **2026-10-15 更新**：AR-v0.8.5 已交付（本表 #2/#6/#7 与缺口①的 MoE capacity、
+> needle 两行），状态见各表标注。
 
 ## 一、现有覆盖盘点（摘要）
 
@@ -26,9 +28,9 @@
 | 项 | 现状 | 处置 |
 |----|------|------|
 | E-B-4 prefix cache 假设失效 | continuous_batching.py docstring 明言 prefix-cache 类已删，但实验行仍写「Prefix Cache 命中时超线性」 | 用 chat_templates.py:54/265（build_kv_cache_prefix / inject_system_prompt_kv_cache——仓内唯一现成 prefix 复用半成品）做 system-prompt KV 前缀复用实验补回；v0.9.0 交付前小 AR |
-| MoE capacity factor 机制完整无实验 | modern_gpt.py:1007-1031（aux loss + Switch 式 capacity 溢出丢 token）+ test_moe_load_balance.py 在位，E-A-5 只看 loss | **v0.8.5 增补**：capacity 0.5/1.0/1.25 溢出率 + router 负载熵微实验（CPU 可跑，E-C-3 本机 2x 先例） |
+| MoE capacity factor 机制完整无实验 | modern_gpt.py:1007-1031（aux loss + Switch 式 capacity 溢出丢 token）+ test_moe_load_balance.py 在位，E-A-5 只看 loss | **已补（v0.8.5）**：E-C-6 `tools/infra/moe_probe.py`（cf 0.5/1.0/1.25 溢出率 + 负载熵 + 偏斜注入，纯 CPU），解读见 moe-systems.md §2 / EXPERIMENTS §6.11 |
 | MTP 被遗漏 | modern_gpt.py:1307-1396（MTP 头+mtp_weight）+ test_mtp.py 在位，主题地图/实验矩阵均未提 | 主题 6（v0.9.0）或提前：draft-model vs MTP 两条自加速路线对照 |
-| needle 网格现成未登记 | evaluation/needle_in_haystack.py（depth×context 网格）183 行闲置 | **v0.8.5 增补**：长上下文 AR 的检索实验锚点 |
+| needle 网格现成未登记 | evaluation/needle_in_haystack.py（depth×context 网格）183 行闲置 | **已登记（v0.8.5）**：E-A-9 `tools/experiments/run_needle_eval.py` 入口（可选 rope retune 交叉），本地低算力档已跑、云端 50M 档待回填 |
 | F 组四项未执行 | E-F-1/2/3/4 均需云端 GPU（NCCL 带宽/全量 roofline/KV 物化/inductor） | 待云端资源；E-F-1 内联脚本先固化为 tools/infra/bench_allreduce.py |
 | 量化实验只有单点 | E-B-2 KV int8 短上下文单点；quantization.py:245/277（estimate_quantized_size/compute_quantization_mse）+ gguf_utils.py Q8_0 闲置 | v0.9.0 前置：新增 E-G 量化组（per-channel vs per-tensor MSE 扫描、GGUF 真实体积 vs 公式闭合——纯 CPU 可跑） |
 
@@ -64,20 +66,22 @@ system-prompt KV 前缀能力移交主题 6 服务化。
 | # | 内容 | 主题/AR | 关键锚点 | 微实验 |
 |---|------|---------|----------|--------|
 | 1 | 评测系统工程 | **新主题 11**，v0.9.0 前 | evaluation/ 四模块 + utils/experiment.py | Judge 一致性、污染-洁净对照 |
-| 2 | GPU 执行模型前置章 | 主题 3，随 v0.8.5 | triton_kernels.py + roofline.json | 峰值算术闭合 |
+| 2 | GPU 执行模型前置章 | 主题 3，随 v0.8.5 | ~~triton_kernels.py + roofline.json~~ **已交付（v0.8.5 T001）**：compile-stack.md §0（SM/warp/occupancy/cp.async-TMA 进化线/roofline 闭合） | 峰值算术闭合 |
 | 3 | prefix 复用 + E-B-4 修复 | 主题 6 前置小 AR | chat_templates.py:54/265 | N 请求 prefill 节省量 |
 | 4 | 量化消融 E-G 组 | v0.9.0 前置 | quantization.py:245/277 + gguf_utils.py | MSE 网格 + 体积闭合 |
 | 5 | 数据构成增补节 | 主题 10 小 AR | multilingual/code/mixer/chat_templates | 采样频率卡方 + resume 一致性 |
-| 6 | KV 显存家族矩阵 | **v0.8.5** | infra_math:280 + needle_in_haystack.py | B/token 全表 + needle 网格 |
-| 7 | MoE 路由容量微实验 | **v0.8.5** | modern_gpt.py:1007-1031 | capacity 扫描 + 负载熵 |
+| 6 | KV 显存家族矩阵 | **v0.8.5 已交付** | ~~infra_math:280 + needle_in_haystack.py~~ long-context.md §6/§7（MHA/GQA/MQA 复算 + MLA 理论档明标 + needle §5） | B/token 全表 + needle 网格 |
+| 7 | MoE 路由容量微实验 | **v0.8.5 已交付** | ~~modern_gpt.py:1007-1031~~ tools/infra/moe_probe.py + moe-systems.md §2 | capacity 扫描 + 负载熵（实测见 EXPERIMENTS §6.11） |
 | 8 | 通信原语 + E-F-1 固化 | 主题 4（v0.8.0） | wrap_distributed + DDP/FSDP 测试 | ZeRO stage 算术表 + gloo 基线 |
 | 9 | checkpoint 心跳深化 | 主题 5（v0.8.0） | utils/checkpoint.py + monitoring.py | RNG 一致性 + 落盘时间对比 |
 | 10 | MTP 与 draft-free 投机 | 主题 6 或提前 | modern_gpt.py:1307-1396 + test_mtp.py | mtp_weight 消融 |
 
 ## 五、对路线图的影响
 
-- **AR-v0.8.5（下一个）**：MoE 系统工程 + 长上下文，范围吸收本表 #6/#7（KV 家族
-  矩阵、MoE 容量微实验）与 #2（GPU 执行模型前置章）；
+- **AR-v0.8.5（已交付，2026-10-15）**：MoE 系统工程 + 长上下文——吸收本表 #6/#7/#2
+  （KV 家族矩阵、MoE 容量微实验、GPU 执行模型前置章），交付 long-context.md /
+  moe-systems.md 两手册、rope_scaling 四档（naive/ntk/pi/yarn）、
+  E-A-8/E-A-9/E-C-6 三实验（本地低算力档已实测，云端 50M 档占位）；
 - v0.8.5 与 v0.8.0 之间可插 **#5（数据构成小 AR）** 与 **#3（prefix 小 AR）**；
 - **主题 11 评测工程** 建议独立 AR，排在 v0.9.0 之前；
 - 主题地图保持 10 主题不扩编（深化并入优于横向铺开），仅新增主题 11。
