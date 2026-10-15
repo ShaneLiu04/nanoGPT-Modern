@@ -125,7 +125,7 @@ elseif (pi) then
   :theta = base;
   :inv_freq ← inv_freq / factor;
 else (yarn)
-  :inv_freq ← ramp(inv_freq, factor, train_len, dim);\nβ_fast=32, β_slow=1;
+  :inv_freq ← ramp(inv_freq, factor, train_len, dim);\nβ_fast=32, β_slow=1;\n(i 小=高频维→保持外推；i 大=低频维→inv/s；区间内线性混合);
   :temperature = 1 + 0.1·ln(factor);
 endif
 :逐 RotaryEmbedding 模块:\n  inv_freq ← 新值; max_seq_len=max_len;\n  base=theta; 清 cos/sin 缓存;

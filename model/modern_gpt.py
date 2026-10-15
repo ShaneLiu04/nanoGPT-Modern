@@ -58,6 +58,31 @@ class RMSNorm(nn.Module):
         return self.weight * x * norm.to(x.dtype)
 
 
+def _yarn_scaled_inv_freq(
+    dim: int, factor: float, train_len: int, base: float = 10000.0
+) -> torch.Tensor:
+    """YaRN NTK-by-parts per-dimension frequency scaling (Peng et al., 2023).
+
+    Dim index i (i = 0..dim/2-1) maps to wavelength ``2*pi*base^(2i/dim)``:
+    small i = high frequency (short wavelength) -> extrapolated unchanged;
+    large i = low frequency (long wavelength) -> interpolated (divided by
+    ``factor``); indices between the beta bounds blend linearly.
+    ``d_corr(r)`` is the dim index whose wavelength completes ``r`` rotations
+    over ``train_len`` (beta_fast=32, beta_slow=1, paper defaults).
+    """
+    inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+
+    def d_corr(rotations: float) -> float:
+        return dim * math.log(train_len / (rotations * 2 * math.pi)) / (2 * math.log(base))
+
+    ramp_lo, ramp_hi = sorted((d_corr(32.0), d_corr(1.0)))
+    # d_corr lives in freq-pair index space (0..dim/2-1), same as inv_freq.
+    idx = torch.arange(dim // 2).float()
+    # t=0 -> keep the original frequency (extrapolate); t=1 -> full interpolation.
+    t = ((idx - ramp_lo) / (ramp_hi - ramp_lo)).clamp(0.0, 1.0)
+    return (1.0 - t) * inv_freq + t * (inv_freq / factor)
+
+
 class RotaryEmbedding(nn.Module):
     """RoPE with lazy-updating cache for inference efficiency.
 
@@ -66,10 +91,13 @@ class RotaryEmbedding(nn.Module):
     pre-compute up to ``max_seq_len`` on the first use and cache the result.
     Subsequent calls with shorter ``seq_len`` are cheap index slices.
 
-    Supports NTK-aware length extrapolation: when ``rope_scaling`` is
-    ``{"type": "ntk", "factor": s}`` the base frequency is adjusted so that
-    the model can attend to positions up to ``s * train_length`` without
-    fine-tuning on those lengths.
+    Supports length extrapolation via ``rope_scaling``:
+    ``{"type": "ntk", "factor": s}`` adjusts the base frequency (existing),
+    ``{"type": "pi", "factor": s}`` divides inv_freq by ``s`` (position
+    interpolation: ``m*inv/s == (m/s)*inv``), and ``{"type": "yarn",
+    "factor": s, ["train_len": L]}`` applies the YaRN NTK-by-parts ramp:
+    high-frequency dims extrapolate unchanged, low-frequency dims are
+    interpolated (divided by ``s``), with a linear blend in between.
     """
 
     def __init__(
@@ -84,20 +112,39 @@ class RotaryEmbedding(nn.Module):
         self.max_seq_len = max_seq_len
         self.rope_scaling: dict = rope_scaling or {}
 
+        rope_type = self.rope_scaling.get("type")
+        if rope_type is not None and rope_type not in ("ntk", "pi", "yarn"):
+            raise ValueError(f"rope_scaling type must be one of ntk/pi/yarn, got {rope_type!r}")
+
         # NTK-aware scaling: increase the RoPE base so that the same set of
         # wavelengths covers a longer interval.
         theta = base
-        if self.rope_scaling.get("type") == "ntk":
+        if rope_type == "ntk":
             factor = self.rope_scaling.get("factor", 1.0)
             if factor != 1.0:
                 theta = base * (factor ** (dim / (dim - 2)))
         self.base = theta
 
         inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
+        if rope_type == "pi":
+            # Position interpolation: linearly compress positions to [0, L/s).
+            inv_freq = inv_freq / self.rope_scaling.get("factor", 1.0)
+        elif rope_type == "yarn":
+            inv_freq = _yarn_scaled_inv_freq(
+                dim,
+                self.rope_scaling.get("factor", 1.0),
+                self.rope_scaling.get("train_len", max_seq_len),
+                base=base,
+            )
         self.register_buffer("inv_freq", inv_freq)
         # Lazily filled on first forward
         self._cos_cached: torch.Tensor | None = None
         self._sin_cached: torch.Tensor | None = None
+
+    @property
+    def rope_type(self) -> str | None:
+        """The rope_scaling type in use (None when no length scaling)."""
+        return self.rope_scaling.get("type") or None
 
     def _ensure_cache(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> None:
         """Build the full cos/sin table up to ``seq_len`` if not already cached."""
@@ -358,14 +405,19 @@ class CausalSelfAttention(nn.Module):
         if self.position_encoding == "rope":
             rope_factor = 1.0
             rope_scaling = getattr(config, "rope_scaling", None) or {}
-            if rope_scaling.get("type") == "ntk":
+            if rope_scaling.get("type") in ("ntk", "pi", "yarn"):
                 rope_factor = rope_scaling.get("factor", 1.0)
             max_seq_len = int(config.block_size * max(2.0, rope_factor))
+            # YaRN's ramp needs the *training* length; inject block_size when
+            # the caller did not specify it (copy, never mutate the original).
+            rope_cfg = rope_scaling
+            if rope_scaling.get("type") == "yarn" and "train_len" not in rope_scaling:
+                rope_cfg = {**rope_scaling, "train_len": int(config.block_size)}
             self.rope = RotaryEmbedding(
                 self.head_dim,
                 max_seq_len=max_seq_len,
                 base=getattr(config, "rope_theta", 10000.0),
-                rope_scaling=rope_scaling,
+                rope_scaling=rope_cfg,
             )
         else:
             self.rope = None
@@ -1418,13 +1470,13 @@ class ModernGPTConfig:
     def effective_block_size(self):
         """Maximum sequence length allowed for forward passes.
 
-        Equals ``block_size`` by default.  With NTK-aware RoPE scaling the
-        model can extrapolate to ``block_size * factor`` without additional
-        training.
+        Equals ``block_size`` by default.  With rope length scaling
+        (``rope_scaling`` of type ntk/pi/yarn) the model can extrapolate to
+        ``block_size * factor`` without additional training.
         """
         factor = 1.0
         rope_scaling = getattr(self, "rope_scaling", None) or {}
-        if rope_scaling.get("type") == "ntk":
+        if rope_scaling.get("type") in ("ntk", "pi", "yarn"):
             factor = rope_scaling.get("factor", 1.0)
         return int(self.block_size * factor)
 
