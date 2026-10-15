@@ -6,6 +6,8 @@ GradScaler, gradient accumulation, LR scheduler, EMA, checkpointing, and
 resumable training.
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import time
