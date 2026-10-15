@@ -322,6 +322,54 @@ def test_it10_rope_yarn_params_recorded(tmp_path, tiny_ckpt):
     assert len(payload["scores"]) == 1
 
 
+def test_it10_retune_actually_applied(tmp_path, tiny_ckpt, monkeypatch):
+    """IT10 (strengthened, review fix): --rope_method yarn must route through
+    ``retune_rope`` before evaluating.  A JSON echo of rope_method alone would
+    pass even if the entry skipped the retune, so this spies the module-level
+    binding and asserts the call (and that the real retune ran on the model)."""
+    pytest.importorskip("tiktoken")
+    import tools.experiments.run_needle_eval as entry
+
+    calls = []
+    real_retune = entry.retune_rope
+
+    def spy(model, method, factor, max_len, train_block):
+        from model.modern_gpt import RotaryEmbedding
+
+        rope = next(m for m in model.modules() if isinstance(m, RotaryEmbedding))
+        before = rope.inv_freq.clone()
+        real_retune(model, method, factor, max_len, train_block)
+        assert not torch.allclose(before, rope.inv_freq), "retune must change inv_freq"
+        calls.append((method, float(factor)))
+
+    monkeypatch.setattr(entry, "retune_rope", spy)
+    out = tmp_path / "needle_eval_yarn_spy.json"
+    rc = entry.main(
+        [
+            "--checkpoint",
+            str(tiny_ckpt),
+            "--output_json",
+            str(out),
+            "--context_lengths",
+            "64",
+            "--depths",
+            "0.0",
+            "--num_trials",
+            "1",
+            "--max_new_tokens",
+            "4",
+            "--max_context_length",
+            "128",
+            "--rope_method",
+            "yarn",
+            "--rope_factor",
+            "2",
+        ]
+    )
+    assert rc == 0
+    assert calls == [("yarn", 2.0)]
+
+
 # ---------------------------------------------------------------------------
 # IT12: invalid CLI inputs are argparse usage errors -> exit 2.
 # ---------------------------------------------------------------------------

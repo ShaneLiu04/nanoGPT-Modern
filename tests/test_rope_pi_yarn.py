@@ -290,11 +290,10 @@ def test_effective_block_size_ntk_and_default_regression():
 # CLI: training/train_pretrain.py get_args  (UT10)
 #
 # CLI parsing lives in the module-level get_args() and is tested directly.
-# The args -> ModernGPTConfig(rope_scaling={"type": ..., "factor": ...})
-# assembly is coupled inside PretrainTrainer._build_model (heavy data/env/DDP
-# setup), so that assertion is deferred:
-# TODO(T002-green): test the args->config.rope_scaling assembly once it is
-# extractable from _build_model.
+# The args -> ModernGPTConfig(rope_scaling=...) assembly is extracted into the
+# module-level pure function build_rope_scaling (review fix for the T002
+# deferral below), so UT10's assembly assertion no longer needs the heavy
+# _build_model path.
 # ---------------------------------------------------------------------------
 
 
@@ -308,6 +307,21 @@ def test_cli_rope_scaling_flags_parse(monkeypatch):
     args = get_args()
     assert args.rope_scaling_type == "pi"
     assert args.rope_factor == 2.0
+
+
+def test_cli_rope_scaling_assembly():
+    """UT10: args -> config.rope_scaling assembly via build_rope_scaling."""
+    from training.train_pretrain import build_rope_scaling
+
+    assert build_rope_scaling("none") is None
+    assert build_rope_scaling("none", 2.0) is None
+    assert build_rope_scaling("pi", 2.0) == {"type": "pi", "factor": 2.0}
+    assert build_rope_scaling("yarn", 4.0) == {"type": "yarn", "factor": 4.0}
+    # The assembled dict passes the config validator end-to-end.
+    cfg = _block_size_cfg(rope_scaling=build_rope_scaling("pi", 2.0))
+    assert cfg.rope_scaling == {"type": "pi", "factor": 2.0}
+    cfg_none = _block_size_cfg(rope_scaling=build_rope_scaling("none"))
+    assert cfg_none.rope_scaling is None
 
 
 def test_cli_rope_scaling_defaults(monkeypatch):

@@ -62,6 +62,16 @@ T007 ──────────┘
 - 修复的问题：第 1 轮 G12（IT11 e2e）/G14（BS7-BS12 溯源+FR-AC 映射）/G15（UT10/UT12/UT13/UT14/UT15）；第 2 轮 3 项 Minor 已顺手修复（§4.4 补 roadmap-gap-analysis.md、映射补 FR4-AC4→IT5/T010、UT10 补 none 缺省分支断言、新增 IT12 needle 非法入参 exit 2）
 - 审查代理：sdd-gate-reviewer
 
+### 2026-10-15 审查记录（sdd-task-review）
+
+- 审查结果：PASS（第 1 轮；独立审查子代理，无 Critical/Important，4 项 Minor 全部当场修复）
+- S 维度：S1/S2/S3/S5 全 YES（FR1-FR8 验收均可溯源到测试/交付物；缺省行为 bit-exact；run_ntk_eval/needle_in_haystack/MoE 前向零改动经 diff 核实）
+- D 维度：D2/D3 YES；D1/D4 Minor——design I8 文本（--config_json、metrics schema）与实现（--output-json、契约 schema）偏离，已补 I8 勘误注记（实现以 tests/test_moe_probe.py TDD 契约为准）；顺手修复 §4.2.2 YaRN ramp 方向括注写反（与「注意」句自相矛盾，UT5 锁定正确方向）
+- C 维度：C1/C2/C3 全 YES（旧签名不变/exit 语义区分清晰/三绿实测复核通过）
+- S4 Minor×2 已修复：UT10 组装断言（train_pretrain 提取纯函数 build_rope_scaling+新测试）、IT10 retune 联动（新 spy 测试断言 retune_rope 真实调用且 inv_freq 改变，不再只看 JSON echo）
+- 修复后验证：三绿（black/ruff/mypy）+ 相邻回归 105 passed（needle/rope_pi_yarn/ablation_switches/common_args/hydra_config）
+- 审查代理：general（独立上下文，只读）
+
 ## 记录
 
 - 2026-10-14 创建（需求阶段产出，Round 1/2 澄清裁定 + 暂停点自动化指令）

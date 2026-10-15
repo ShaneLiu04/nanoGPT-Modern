@@ -43,6 +43,17 @@ def _rope_factor_arg(value: str) -> float:
     return factor
 
 
+def build_rope_scaling(rope_scaling_type: str, rope_factor: float = 1.0) -> dict | None:
+    """Assemble the ``rope_scaling`` dict from CLI args (None when type is none).
+
+    Extracted from ``PretrainTrainer._build_model`` so the args -> config
+    assembly is a testable pure function (UT10).
+    """
+    if rope_scaling_type == "none":
+        return None
+    return {"type": rope_scaling_type, "factor": rope_factor}
+
+
 def get_args():
     parser = argparse.ArgumentParser()
     add_common_trainer_args(parser)
@@ -309,13 +320,9 @@ class PretrainTrainer(BaseTrainer):
                     ring_block_size_q=args.ring_block_size_q,
                     ring_block_size_kv=args.ring_block_size_kv,
                     position_encoding=getattr(args, "position_encoding", "rope"),
-                    rope_scaling=(
-                        None
-                        if getattr(args, "rope_scaling_type", "none") == "none"
-                        else {
-                            "type": args.rope_scaling_type,
-                            "factor": getattr(args, "rope_factor", 1.0),
-                        }
+                    rope_scaling=build_rope_scaling(
+                        getattr(args, "rope_scaling_type", "none"),
+                        getattr(args, "rope_factor", 1.0),
                     ),
                     ffn_variant=getattr(args, "ffn_variant", "swiglu"),
                     qk_norm=getattr(args, "qk_norm", False),
