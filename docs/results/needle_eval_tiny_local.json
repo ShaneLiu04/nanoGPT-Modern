@@ -1,0 +1,101 @@
+{
+  "checkpoint": "out/tiny-ea8/best_ckpt.pt",
+  "rope_method": "none",
+  "rope_factor": 1.0,
+  "grid_params": {
+    "context_lengths": [
+      128,
+      256
+    ],
+    "depths": [
+      0.0,
+      0.5,
+      1.0
+    ],
+    "num_trials": 1,
+    "max_new_tokens": 8,
+    "max_context_length": 256
+  },
+  "summary": {
+    "overall_accuracy": 0.0,
+    "by_depth": {
+      "0.0": 0.0,
+      "0.5": 0.0,
+      "1.0": 0.0
+    },
+    "by_length": {
+      "128": 0.0,
+      "256": 0.0
+    }
+  },
+  "scores": [
+    {
+      "context_length": 128,
+      "depth": 0.0,
+      "correct": false
+    },
+    {
+      "context_length": 128,
+      "depth": 0.5,
+      "correct": false
+    },
+    {
+      "context_length": 128,
+      "depth": 1.0,
+      "correct": false
+    },
+    {
+      "context_length": 256,
+      "depth": 0.0,
+      "correct": false
+    },
+    {
+      "context_length": 256,
+      "depth": 0.5,
+      "correct": false
+    },
+    {
+      "context_length": 256,
+      "depth": 1.0,
+      "correct": false
+    }
+  ],
+  "raw": [
+    {
+      "context_length": 128,
+      "depth": 0.0,
+      "answer": "\n\nThe first time, the most",
+      "correct": false
+    },
+    {
+      "context_length": 128,
+      "depth": 0.5,
+      "answer": "\n\nThe first time is a good",
+      "correct": false
+    },
+    {
+      "context_length": 128,
+      "depth": 1.0,
+      "answer": "\n\nThe first time, the most",
+      "correct": false
+    },
+    {
+      "context_length": 256,
+      "depth": 0.0,
+      "answer": "\n\nThe first time is a good",
+      "correct": false
+    },
+    {
+      "context_length": 256,
+      "depth": 0.5,
+      "answer": "\n\nThe first time, the most",
+      "correct": false
+    },
+    {
+      "context_length": 256,
+      "depth": 1.0,
+      "answer": "\n\nThe first time, the most",
+      "correct": false
+    }
+  ]
+}

@@ -1,0 +1,152 @@
+{
+  "checkpoint": "out/tiny-ea8/best_ckpt.pt",
+  "train_block": 256,
+  "num_batches": 8,
+  "batch_size": 4,
+  "rows": [
+    {
+      "length": 128,
+      "method": "naive",
+      "factor": 1.0,
+      "nll": 5.975971817970276,
+      "ppl": 393.8506663242419,
+      "tokens": 4096,
+      "temperature": 1.0
+    },
+    {
+      "length": 128,
+      "method": "ntk",
+      "factor": 1.0,
+      "nll": 5.975971817970276,
+      "ppl": 393.8506663242419,
+      "tokens": 4096,
+      "temperature": 1.0
+    },
+    {
+      "length": 128,
+      "method": "pi",
+      "factor": 1.0,
+      "nll": 5.975971817970276,
+      "ppl": 393.8506663242419,
+      "tokens": 4096,
+      "temperature": 1.0
+    },
+    {
+      "length": 128,
+      "method": "yarn",
+      "factor": 1.0,
+      "nll": 5.975971817970276,
+      "ppl": 393.8506663242419,
+      "tokens": 4096,
+      "temperature": 1.0
+    },
+    {
+      "length": 256,
+      "method": "naive",
+      "factor": 1.0,
+      "nll": 6.089034199714661,
+      "ppl": 440.9952920272368,
+      "tokens": 8192,
+      "temperature": 1.0
+    },
+    {
+      "length": 256,
+      "method": "ntk",
+      "factor": 1.0,
+      "nll": 6.089034199714661,
+      "ppl": 440.9952920272368,
+      "tokens": 8192,
+      "temperature": 1.0
+    },
+    {
+      "length": 256,
+      "method": "pi",
+      "factor": 1.0,
+      "nll": 6.089034199714661,
+      "ppl": 440.9952920272368,
+      "tokens": 8192,
+      "temperature": 1.0
+    },
+    {
+      "length": 256,
+      "method": "yarn",
+      "factor": 1.0,
+      "nll": 6.089034140110016,
+      "ppl": 440.9952657418699,
+      "tokens": 8192,
+      "temperature": 1.0
+    },
+    {
+      "length": 512,
+      "method": "naive",
+      "factor": 2.0,
+      "nll": 6.0593647956848145,
+      "ppl": 428.1034173364081,
+      "tokens": 16384,
+      "temperature": 1.0
+    },
+    {
+      "length": 512,
+      "method": "ntk",
+      "factor": 2.0,
+      "nll": 6.046202182769775,
+      "ppl": 422.505380982667,
+      "tokens": 16384,
+      "temperature": 1.0
+    },
+    {
+      "length": 512,
+      "method": "pi",
+      "factor": 2.0,
+      "nll": 6.1777889132499695,
+      "ppl": 481.9251990188322,
+      "tokens": 16384,
+      "temperature": 1.0
+    },
+    {
+      "length": 512,
+      "method": "yarn",
+      "factor": 2.0,
+      "nll": 6.043307721614838,
+      "ppl": 421.28422371835484,
+      "tokens": 16384,
+      "temperature": 1.0693147180559945
+    },
+    {
+      "length": 1024,
+      "method": "naive",
+      "factor": 4.0,
+      "nll": 6.234426438808441,
+      "ppl": 510.00801373889567,
+      "tokens": 32768,
+      "temperature": 1.0
+    },
+    {
+      "length": 1024,
+      "method": "ntk",
+      "factor": 4.0,
+      "nll": 6.210569798946381,
+      "ppl": 497.98492174529184,
+      "tokens": 32768,
+      "temperature": 1.0
+    },
+    {
+      "length": 1024,
+      "method": "pi",
+      "factor": 4.0,
+      "nll": 6.431291878223419,
+      "ppl": 620.9756549732638,
+      "tokens": 32768,
+      "temperature": 1.0
+    },
+    {
+      "length": 1024,
+      "method": "yarn",
+      "factor": 4.0,
+      "nll": 6.190575301647186,
+      "ppl": 488.1268456301,
+      "tokens": 32768,
+      "temperature": 1.138629436111989
+    }
+  ]
+}
