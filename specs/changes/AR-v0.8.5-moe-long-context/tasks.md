@@ -15,7 +15,7 @@
 | T003 | 手册 long-context.md（NTK 复盘/PI/YaRN 机制与本仓实现对照/滑窗+cache 驱逐/needle 方法论/MLA 理论节含内嵌 MQA/GQA/MLA 对比表/KV 复习） | T002 | M | Done |
 | T004 | 新建 run_context_eval.py 四档对照入口（naive/ntk/pi/yarn，--quick 低算力档，JSON 落 docs/results/）+ rope_retune.py 共享模块（D4：run_ntk_eval.py 不改，E-A-7 命令字节稳定）+ 本地低算力档实测 | T002 | M | Done |
 | T005 | run_needle_eval.py（包装 needle_in_haystack.py 的 depth×context 网格 CLI，--quick 档）+ 本地低算力档实测 | 无 | M | Done |
-| T006 | 手册 moe-systems.md（机制深化/容量负载微实验解读/专家并行理论节/E-A-5 未赢归因四因子分解/grouped GEMM 5.8× 复盘） | 无 | M | Pending |
+| T006 | 手册 moe-systems.md（机制深化/容量负载微实验解读/专家并行理论节/E-A-5 未赢归因四因子分解/grouped GEMM 5.8× 复盘） | 无 | M | Done |
 | T007 | tools/infra/moe_probe.py（纯 CPU：capacity 扫描溢出率/router 负载分布/偏斜注入，TDD，JSON 原子写+退出码语义+守卫降级） | 无 | M | Done |
 | T008 | RUNNING_EXPERIMENTS 登记 E-A-8/E-A-9/E-C-6（逐参核对 argparse，E-F-4 教训）+ EXPERIMENTS 记录节（本地低算力档实测+云端回填占位） | T004, T005, T007 | S | Done |
 | T009 | 索引收口：ai-infra/README 主题地图挂深化手册+roadmap v0.8.5 状态、根 README 索引 | T003, T006, T008 | S | Pending |
