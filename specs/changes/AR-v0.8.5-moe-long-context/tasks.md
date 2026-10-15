@@ -12,7 +12,7 @@
 |----|------|------|----------|------|
 | T001 | compile-stack.md 新增 §0 GPU 执行模型前置章（SM/warp/occupancy/层级/cp.async/TMA，roofline.json 算术闭合，sm75 无 TMA 明标） | 无 | S | Done |
 | T002 | RotaryEmbedding rope_scaling 扩展（none/ntk/pi/yarn，TDD：Red 测试先行→实现→config_models 校验→train CLI flag） | 无 | M | Done |
-| T003 | 手册 long-context.md（NTK 复盘/PI/YaRN 机制与本仓实现对照/滑窗+cache 驱逐/needle 方法论/MLA 理论节含内嵌 MQA/GQA/MLA 对比表/KV 复习） | T002 | M | Pending |
+| T003 | 手册 long-context.md（NTK 复盘/PI/YaRN 机制与本仓实现对照/滑窗+cache 驱逐/needle 方法论/MLA 理论节含内嵌 MQA/GQA/MLA 对比表/KV 复习） | T002 | M | Done |
 | T004 | 新建 run_context_eval.py 四档对照入口（naive/ntk/pi/yarn，--quick 低算力档，JSON 落 docs/results/）+ rope_retune.py 共享模块（D4：run_ntk_eval.py 不改，E-A-7 命令字节稳定）+ 本地低算力档实测 | T002 | M | Done |
 | T005 | run_needle_eval.py（包装 needle_in_haystack.py 的 depth×context 网格 CLI，--quick 档）+ 本地低算力档实测 | 无 | M | Done |
 | T006 | 手册 moe-systems.md（机制深化/容量负载微实验解读/专家并行理论节/E-A-5 未赢归因四因子分解/grouped GEMM 5.8× 复盘） | 无 | M | Pending |
