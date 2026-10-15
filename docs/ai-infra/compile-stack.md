@@ -8,6 +8,77 @@
 
 ---
 
+## 0. 前置章：GPU 执行模型（读懂 BLOCK/num_warps 的地基）
+
+> 本手册 §2-§5 讲 compile 栈「做什么」，但 Inductor/Triton 的每个决策（tile 多大、几个 warp、哪里用共享内存）都以下面的硬件模型为地基。不先懂这一章，§5 的 fusion 决策和 triton_kernels.py 里的参数就只是「别人的魔法数字」。本章可独立先读。
+
+### 0.1 SM 与 warp：调度的两级单位
+
+GPU 的最小**调度**单位是 warp（32 个线程，锁步执行同一条指令）；最小**执行**单位是 SIMT 通道。本机 Quadro RTX 5000（Turing，sm75）的物理结构：
+
+| 层级 | 数量 | 说明 |
+|------|------|------|
+| SM（Streaming Multiprocessor） | 48 个 | 独立的「小 CPU」，含自己的寄存器堆/共享内存/调度器 |
+| 每 SM FP32 核 | 64 个 | 48 × 64 = 3072 个 FP32 核 |
+| 每 SM 驻留线程上限 | 1024（=32 warps） | occupancy 100% 的含义就是 32/32 |
+| boost 时钟 | ~1815 MHz | 理论 FP32 峰值 = 3072 × 2 FLOP/clk × 1.815 GHz ≈ **11.15 TFLOPS** |
+
+一个 warp 里 32 个线程的地址最好落在同一 DRAM/L2 事务内（合并访问，coalescing）——这就是为什么本仓 `tools/infra/triton_kernels.py` 里 tile 的最内维度总是连续的 `tl.arange(0, BLOCK)`：一个 warp 拿一段连续内存，一次搬完。
+
+### 0.2 内存层级：越近越快、越小、越贵
+
+| 层级 | 本机容量/带宽（数量级） | 备注 |
+|------|------------------------|------|
+| 寄存器 | 64K × 32bit/SM（=256KB），聚合带宽 TB/s 级 | Triton 里 `tl.zeros((BLOCK_M, BLOCK_N))` 的累加器就活在这里（triton_kernels.py:143-144 的 `acc_g/acc_u`） |
+| 共享内存/L1 | 96KB 统一（可划 64KB 做 SMEM），~几十 TB/s 聚合 | tile 循环里反复使用的 A/B 分块先搬进来 |
+| L2 | 4MB，~1-2 TB/s | 48 个 SM 共享 |
+| HBM（GDDR6） | 16GB，**448 GB/s**（roofline.json `spec_bandwidth_gbs`） | 一切数据的源头，最慢的一环 |
+
+数量级记忆法：寄存器:SMEM:L2:HBM ≈ **快 4 个台阶，每台阶约 4-10×**。fusion（§5.2）的全部意义就是别让中间结果掉到 HBM 再捞回来。
+
+### 0.3 occupancy 与延迟隐藏
+
+occupancy = 驻留 warp 数 / 32。它不直接等于性能，而是**延迟隐藏的弹药量**：一个 warp 等 HBM 数据（几百 ns）时，SM 切到另一个 warp 继续算。三资源决定 occupancy：寄存器（每线程占用越少、驻留 warp 越多）、SMEM（每 block 占用越少、驻留 block 越多）、线程槽（1024/SM）。
+
+这直接解释 roofline.json 的两极：
+- 大 GEMM（8192³）：tile 足够多，SM 满载，延迟被并行 warp 隐藏 → 9.83 TFLOPS（接近 §0.6 理论峰值的 88%）；
+- decode 单步（`effective_gbps: 4.81`）：batch=1 时每个 kernel 只有一点点线程，SM 大部分时间空转等 launch——**不是带宽不行，是根本没喂满**（§1 三段式的第一二段主导）。
+
+### 0.4 异步拷贝的进化线（本机明标：sm75 无 cp.async/TMA）
+
+global → SMEM 怎么搬，三代硬件三种答案：
+
+| 架构 | 机制 | 说明 |
+|------|------|------|
+| Turing（sm75，**本机**） | LDG → 寄存器 → STS 两跳 | global 只能先读到寄存器再写 SMEM，寄存器被搬运占用 |
+| Ampere（sm80+） | `cp.async` | global 直达 SMEM，搬运不占寄存器、可与计算重叠 |
+| Hopper（sm90） | TMA | 按**描述符**整块搬运，单条指令驱动，配合 warp 特化（producer/consumer） |
+
+**本机 sm75 两者皆无（明标：无代码可验证，理论档）**——Triton 在本机生成的 tile 循环就是「两跳」形态。这解释了为什么 Triton 的 tile 循环在 Ampere 上收益更大：sm80+ 才有真正的 load/compute 重叠。
+
+### 0.5 BLOCK/num_warps 怎么选：与本仓对照
+
+Triton 把 tile 大小（BLOCK_*）和每 block 的 warp 数（num_warps）交给作者。选择逻辑全是 §0.1-§0.3 的推论：
+
+- **tile 不能太小**：BLOCK=16×16 的 tile 只有 256 元素，一个 block 里 warp 太少，喂不满 SM；太大又让 occupancy 掉下去（SMEM/寄存器超限）或浪费在 padding 上。
+- **本仓 `triton_kernels.py:323-325` 的 swiglu tile 用 BLOCK_M=16/BLOCK_N=16/BLOCK_K=16**：MoE 的 padded buffer 是 `[E, capacity, C]`，capacity 行往往不满——大 tile 会把算力浪费在 padding 行上，小 tile 保住「算的每一行都是真 token」。这是「形状特征优先于吞吐率教条」的实例。
+- **`BLOCK_N=triton.next_power_of_2(N)`（triton_kernels.py:353）**：fused rmsnorm/softmax 一行（或一列）一个 block，BLOCK 覆盖整行避免跨 block 归约；next_power_of_2 是 Triton `tl.arange` 的硬约束（2 的幂）。
+- **num_warps 默认 4**：一个 block 4 warps × 32 线程 = 128 线程，处理 256 元素 tile 时每 warp 拿 64 元素（2 轮×32），是「tile 元素数 / 32」向上取的常用起点；Inductor 自动调优（§2.3）本质上就是帮你扫这些组合。
+
+### 0.6 roofline 算术闭合（本手册的验收口径）
+
+理论峰值与实测的闭合比值定义为**理论/实测 ∈ [0.5, 2]**，超界必须解释：
+
+| 项 | 理论 | 实测（roofline.json） | 比值 | 判定 |
+|----|------|----------------------|------|------|
+| FP32 峰值 | 11.15 TFLOPS（§0.1 推导） | 9.83 TFLOPS（gemm 8192³） | 1.13 | ✓ 闭合（缺的 12% 是 DRAM 供数跟不上，即 §5.2 的带宽墙） |
+| 带宽峰值 | 448 GB/s（GDDR6 规格） | 349.21 GB/s（gemv n=k=4096） | 1.28 | ✓ 闭合（gemv 只读不写、L2 命中不足） |
+| decode 带宽 | 448 GB/s | 4.81 GB/s | 93× | ✗ **超界且已解释**：非带宽瓶颈，launch/Python 开销主导（§1），这正是 compile 三板斧的靶子 |
+
+第三行是本手册存在的理由：当 gap 不是 1.1× 而是 93×，优化对象就不是 kernel 内部而是调度开销——§1 从这里展开。
+
+---
+
 ## 1. 为什么需要 compile
 
 一个朴素 eager 步骤的耗时由三段叠加：
@@ -225,6 +296,7 @@ cannot import name 'triton_key' from 'triton.runtime'
 
 | 验证点 | 位置 |
 |--------|------|
+| GPU 执行模型参数可复算（峰值/occupancy/带宽台阶） | §0.1/§0.2/§0.6，roofline.json |
 | MoE 向量化不触发重编译 | `tests/test_moe_vectorized.py::test_compile_no_recompile_growth` |
 | compile 回退安全（异常→警告→eager） | modern_gpt.py:2090-2098、L2333-2344 |
 | fullgraph 前置条件收紧 | modern_gpt.py:2052-2060（`can_fullgraph`） |
@@ -232,6 +304,7 @@ cannot import name 'triton_key' from 'triton.runtime'
 
 三个思考题：
 
+0. decode 单步有效带宽 4.81 GB/s 距 spec 448 GB/s 有 93×，为什么 §0.6 判定「已解释」而不是「硬件坏了」？（提示：gap 的量级指向哪一段开销，§1 三段式。）
 1. `generate(compile=True)` 用 `fullgraph=False`，`_generate_fullgraph` 用 `fullgraph=True`——同一个模型为什么前者不能整图？（提示：循环体 vs 单步函数，§3.2/§3.3。）
 2. DDP 分支里 `static_graph=True` 对 compile 意味着什么？（提示：桶结构与图形状假设，§3.1。）
 3. 本机 64 token 是负结果，为什么本仓还保留 `_generate_fullgraph`？（提示：固定成本摊平边界随步数移动，§6。）
