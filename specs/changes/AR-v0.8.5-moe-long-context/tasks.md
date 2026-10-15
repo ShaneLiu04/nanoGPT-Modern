@@ -18,7 +18,7 @@
 | T006 | 手册 moe-systems.md（机制深化/容量负载微实验解读/专家并行理论节/E-A-5 未赢归因四因子分解/grouped GEMM 5.8× 复盘） | 无 | M | Done |
 | T007 | tools/infra/moe_probe.py（纯 CPU：capacity 扫描溢出率/router 负载分布/偏斜注入，TDD，JSON 原子写+退出码语义+守卫降级） | 无 | M | Done |
 | T008 | RUNNING_EXPERIMENTS 登记 E-A-8/E-A-9/E-C-6（逐参核对 argparse，E-F-4 教训）+ EXPERIMENTS 记录节（本地低算力档实测+云端回填占位） | T004, T005, T007 | S | Done |
-| T009 | 索引收口：ai-infra/README 主题地图挂深化手册+roadmap v0.8.5 状态、根 README 索引 | T003, T006, T008 | S | Pending |
+| T009 | 索引收口：ai-infra/README 主题地图挂深化手册+roadmap v0.8.5 状态、根 README 索引 | T003, T006, T008 | S | Done |
 | T010 | 质量收口：全量回归（基线 760/3 零回归）、三绿（black 100/ruff E,F,I,B,UP/mypy 零新增）、链接存在性检查、gitee 同步 | T001-T009 | S | Pending |
 
 ## 依赖图
