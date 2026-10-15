@@ -81,6 +81,7 @@ module = [
     "model.quantization",
     "inference.generate_utils",
     "tools.export.export_to_onnx",
+    "tools.experiments.rope_retune",
     "evaluation.needle_in_haystack",
     "evaluation.eval_win_rate",
     "inference.visualize_attention",
