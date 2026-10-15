@@ -157,8 +157,9 @@ stop
    - PI：`inv_freq' = inv_freq / s`，位置 m 的旋转角 `m·inv_freq' = (m/s)·inv_freq`，即位置线性压缩到 [0, train_len)。
    - YaRN（Peng et al. 2023）：对第 i 维（i=0..D/2-1），
      `d_corr(r) = D·ln(train_len/(r·2π)) / (2·ln base)`；
-     ramp 区间 `[min(d_corr(1), d_corr(32)), max(...)]`；
-     i < ramp_lo → `inv' = inv/s`（低频维全插值）；i > ramp_hi → `inv' = inv`（高频维保持外推）；区间内线性混合。
+      ramp 区间 `[min(d_corr(1), d_corr(32)), max(...)]`；
+      i < ramp_lo → `inv' = inv`（高频维保持外推）；i > ramp_hi → `inv' = inv/s`（低频维全插值）；区间内线性混合。
+      （T002 勘误：本行原文方向写反，与下行「注意」句矛盾；以 UT5 数值断言为准——低 i 不动、高 i 除以 s。实现与流程图均已按正确方向交付。）
      注意 i 与波长关系：i 小 ↔ 频率高（inv 大、波长短）→ 保持外推；i 大 ↔ 频率低 → 插值。**实现以等价数值断言测试锁定方向**（低 i 不动、高 i 除以 s）。
    - YaRN 温度：`t = 1 + 0.1·ln(s)`，经 D2 机制作用于 attn logits。
 2. **retune 后缓存失效**：inv_freq 是 buffer，retune 逐模块 `copy_` 并清 `_cos_cached/_sin_cached`，与 run_ntk_eval L48-57 同法。
@@ -210,6 +211,8 @@ stop
 **I7 tools/experiments/run_needle_eval.py（新增 CLI）**：`--checkpoint(必填) --output_json(必填) --context_lengths --depths --num_trials --max_new_tokens --max_context_length --rope_method {none,ntk,pi,yarn} --rope_factor --quick`。tokenizer：`tiktoken.get_encoding("gpt2")`（50257 词表与本仓 ckpt 对齐）；tiktoken 不可用 → exit 1 明确报错。quick：[512,1024]×[0.0,0.5,1.0]×1。产物 schema：`{checkpoint, rope_method, rope_factor, grid_params, summary{overall_accuracy, by_depth, by_length}, scores[], raw[]}`。rope_method != none 时经 I5 retune 后评估。
 
 **I8 tools/infra/moe_probe.py（新增 CLI）**：`--config_json(可选输出路径，缺省 docs/results/moe_probe.json 由 --quick 控制) --quick --checkpoint(可选) --seed`。三实验产物 schema：`{meta{tool,timestamp,seed,torch_version}, config{E, T_total, capacity_factors, hidden}, experiments[{name, source, metrics{...}}], warnings[]}`。metrics：①`{cf, capacity, dropped, drop_rate, kept}`；②`{f_i[], entropy, max_min_ratio}`；③`{k, overflow_rate}`。退出码：0 成功（含守卫降级跳过）/1 运行错误（含中断，不写部分 JSON）/2 入参非法。守卫：`--checkpoint` 文件缺失 → 该 source 跳过、warnings 记录、exit 0。原子写：tmp+rename（v0.7.5 惯例）。
+
+> **I8 实现勘误（T007 审查 D1/D4，2026-10-15）**：实现以 TDD 先行的 `tests/test_moe_probe.py` 契约为准并与 v0.7.5 探针惯例对齐，与本行文本有四处偏离——①CLI 参数名为 `--output-json`（dest=`output_json`），非 `--config_json`；②缺省输出路径恒为 `docs/results/moe_probe.json`，`--quick` 只收缩网格（cf {0.5,1.0}、T=64、skew k {1,2}），不控制缺省路径；③metrics 实际 schema：①`{cf, capacity, dropped, drop_rate, dropped_rows_zero}`（`kept`→布尔交叉验证字段）、②`{fractions[], entropy, max_min_ratio}`（`f_i[]`→`fractions`）、③`{curve: [{k, overflow_rate}]}`（列表嵌套）；④`config` 增 `source` 键（synthetic/checkpoint）。功能自洽，登记命令（RUNNING_EXPERIMENTS E-C-6）与实现一致。
 
 ## 4.4 代码设计
 
